@@ -1,0 +1,403 @@
+//! The bridge between Elden Ring's memory and `gowring-core`: reads the world into a `Frame`
+//! (hooks.player_state / enemy_scan / action_read / hit_observe) and applies `Command`s back
+//! (hooks.enemy_damage / enemy_stagger / action_mask / speed_scale).
+//!
+//! Everything here touches live game memory through the `eldenring` crate and runs on the game's task
+//! thread. Nothing in this file has been run against the real game yet (docs/STATUS.md).
+
+use crate::audio::Audio;
+use eldenring::cs::{CSCamExt, CSCamera, CSFeManImp, CSHavokMan, ChrActions, ChrIns, FieldInsHandle, WorldChrMan};
+use eldenring::position::{HavokPosition, PositionDelta};
+use fromsoftware_shared::FromStatic;
+use gowring_core::sheets::{ErAction, RunicStatus};
+use gowring_core::{ActionBits, Command, DamageEvent, EnemyView, Frame, PlayerView, RayResult, Vec3, VoiceInfo};
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+/// Map collision filter used by the game's own raycasts (field note: CS2 conversion).
+const MAP_RAY_FILTER: u32 = 0x2000058;
+
+pub fn id_of(h: &FieldInsHandle) -> u64 {
+    ((h.block_id.0 as u32 as u64) << 32) | h.selector.0 as u64
+}
+
+/// ER's action bits → ours, via the `ChrActions` accessors (the tuple field is private).
+pub fn bits_from_er(a: &ChrActions) -> ActionBits {
+    let mut b = ActionBits::NONE;
+    macro_rules! m {
+        ($($f:ident => $v:expr),* $(,)?) => { $( if a.$f() { b = b.with($v); } )* };
+    }
+    m!(r1 => ErAction::R1, r2 => ErAction::R2, l1 => ErAction::L1, l2 => ErAction::L2, action => ErAction::Action,
+       sp_move => ErAction::SpMove, jump => ErAction::Jump, use_item => ErAction::UseItem, switch_form => ErAction::SwitchForm,
+       change_weapon_r => ErAction::ChangeWeaponR, change_weapon_l => ErAction::ChangeWeaponL, change_item => ErAction::ChangeItem,
+       r3 => ErAction::R3, l3 => ErAction::L3, guard => ErAction::Guard, change_style_r => ErAction::ChangeStyleR, change_style_l => ErAction::ChangeStyleL);
+    b
+}
+
+fn set_er_bits(a: &mut ChrActions, bits: ActionBits, value: bool) {
+    macro_rules! s {
+        ($($set:ident => $v:expr),* $(,)?) => { $( if bits.has($v) { a.$set(value); } )* };
+    }
+    s!(set_r1 => ErAction::R1, set_r2 => ErAction::R2, set_l1 => ErAction::L1, set_l2 => ErAction::L2, set_action => ErAction::Action,
+       set_sp_move => ErAction::SpMove, set_jump => ErAction::Jump, set_use_item => ErAction::UseItem, set_switch_form => ErAction::SwitchForm,
+       set_change_weapon_r => ErAction::ChangeWeaponR, set_change_weapon_l => ErAction::ChangeWeaponL, set_change_item => ErAction::ChangeItem,
+       set_r3 => ErAction::R3, set_l3 => ErAction::L3, set_guard => ErAction::Guard, set_change_style_r => ErAction::ChangeStyleR, set_change_style_l => ErAction::ChangeStyleL);
+}
+
+struct Frozen {
+    until: f64,
+    saved_speed: f32,
+}
+
+struct Burn {
+    id: u64,
+    until: f64,
+    next_tick: f64,
+    per_tick: i32,
+}
+
+pub struct Bridge {
+    prev_player_hp: Option<i32>,
+    prev_enemy_hp: HashMap<u64, i32>,
+    prev_player_last_hit: u64,
+    handles: HashMap<u64, FieldInsHandle>,
+    hostile_teams: HashSet<u8>,
+    team_report_done: bool,
+    frozen: HashMap<u64, Frozen>,
+    burning: Vec<Burn>,
+    my_mask: ActionBits,
+    pub scan_range: f32,
+    pub max_enemies: usize,
+}
+
+impl Bridge {
+    pub fn new(scan_range: f32) -> Self {
+        Bridge {
+            prev_player_hp: None,
+            prev_enemy_hp: HashMap::new(),
+            prev_player_last_hit: u64::MAX,
+            handles: HashMap::new(),
+            // Seeded guess (see hooks.enemy_scan); extended at run time from who actually hurts the player.
+            hostile_teams: [6u8, 7u8].into_iter().collect(),
+            team_report_done: false,
+            frozen: HashMap::new(),
+            burning: Vec::new(),
+            my_mask: ActionBits::NONE,
+            scan_range,
+            max_enemies: 96,
+        }
+    }
+
+    /// Read the world. `None` when there is no player yet (title screen, loading).
+    pub fn build_frame(&mut self, time: f64, dt: f32, voice: Option<VoiceInfo>) -> Option<Frame> {
+        let wcm = unsafe { WorldChrMan::instance() }.ok()?;
+        let player = wcm.main_player.as_ref()?;
+        let chr: &ChrIns = &player.chr_ins;
+        let data = &chr.modules.data;
+        let phys = &chr.modules.physics;
+        let ar = &chr.modules.action_request;
+
+        let HavokPosition(px, py, pz, _) = phys.position;
+        let ppos = Vec3::new(px, py, pz);
+        let yaw = phys.orientation.to_euler_angles().1;
+        let facing = Vec3::new(yaw.sin(), 0.0, yaw.cos());
+        let (hp, max_hp) = (data.hp, data.max_hp);
+        let alive = hp > 0 && !chr.chr_flags1c5.death_flag();
+        let player_handle = chr.field_ins_handle;
+        let player_id = id_of(&player_handle);
+
+        let mut f = Frame { dt, time, ..Default::default() };
+        f.player = PlayerView {
+            pos: ppos,
+            facing,
+            hp: hp as f32,
+            max_hp: max_hp.max(1) as f32,
+            alive,
+            grounded: phys.standing_on_solid_ground,
+            sprinting: ar.movement_request_flags.dash(),
+            controllable: alive,
+        };
+        f.actions_down = bits_from_er(&ar.action_requests);
+        f.actions_pressed = bits_from_er(&ar.new_action_presses);
+        f.actions_released = bits_from_er(&ar.released_actions);
+        f.area = player.play_region_id;
+
+        // --- equipment: active right slot, and whether the left hand holds a shield ---------------------
+        {
+            let pgd = unsafe { player.player_game_data.as_ref() };
+            let asm = &pgd.equipment.chr_asm;
+            f.right_slot = asm.equipment.selected_slots.right_weapon_slot.min(2) as u8;
+            // ChrAsmSlot order: WeaponLeft1=0, WeaponRight1=1, WeaponLeft2=2, WeaponRight2=3, WeaponLeft3=4, WeaponRight3=5
+            let left_idx = (asm.equipment.selected_slots.left_weapon_slot.min(2) * 2) as usize;
+            f.shield_drawn = asm.equipment_param_ids[left_idx] > 0;
+        }
+
+        // --- camera ----------------------------------------------------------------------------------------
+        if let Ok(cam) = unsafe { CSCamera::instance() } {
+            let pc = &cam.pers_cam_1;
+            let fwd = pc.forward();
+            f.aim_dir = Vec3::new(fwd.0, fwd.1, fwd.2).normalized();
+            let HavokPosition(cx, cy, cz, _) = pc.position();
+            f.camera_pos = Vec3::new(cx, cy, cz);
+        }
+
+        // --- enemies -------------------------------------------------------------------------------------------
+        let boss_handles: HashSet<u64> = unsafe { CSFeManImp::instance() }
+            .map(|fe| fe.boss_health_displays.iter().filter(|b| !b.field_ins_handle.is_empty()).map(|b| id_of(&b.field_ins_handle)).collect())
+            .unwrap_or_default();
+        let mut teams: HashMap<u8, usize> = HashMap::new();
+        self.handles.clear();
+        let mut seen_hp: HashMap<u64, i32> = HashMap::new();
+        let mut damage: Vec<DamageEvent> = Vec::new();
+        for entry in wcm.chr_inses_by_distance.iter().take(512) {
+            let e: &ChrIns = unsafe { entry.chr_ins.as_ref() };
+            if e.field_ins_handle == player_handle {
+                continue;
+            }
+            let Some(edata) = opt(&e.modules.data) else { continue };
+            let id = id_of(&e.field_ins_handle);
+            if id == player_id {
+                continue;
+            }
+            *teams.entry(e.team_type).or_default() += 1;
+            let HavokPosition(ex, ey, ez, _) = e.modules.physics.position;
+            let epos = Vec3::new(ex, ey, ez);
+            let dist = epos.dist(ppos);
+            if dist > self.scan_range {
+                continue;
+            }
+            if !self.hostile_teams.contains(&e.team_type) {
+                continue;
+            }
+            let ehp = edata.hp;
+            let ealive = ehp > 0 && !e.chr_flags1c5.death_flag();
+            // damage the player did since last frame
+            if let Some(prev) = self.prev_enemy_hp.get(&id) {
+                if ehp < *prev && e.last_hit_by == player_handle {
+                    damage.push(DamageEvent::Dealt { enemy: id, amount: (*prev - ehp) as f32 });
+                }
+            }
+            seen_hp.insert(id, ehp);
+            self.handles.insert(id, e.field_ins_handle);
+            if f.enemies.len() < self.max_enemies {
+                f.enemies.push(EnemyView {
+                    id,
+                    pos: epos,
+                    hp: ehp.max(0) as f32,
+                    max_hp: edata.max_hp.max(1) as f32,
+                    alive: ealive,
+                    boss: boss_handles.contains(&id),
+                    engaged: dist <= 35.0,
+                    radius: e.modules.physics.hit_radius.max(0.4),
+                    staggered: false,
+                });
+            }
+        }
+        self.prev_enemy_hp = seen_hp;
+        if !self.team_report_done && !f.enemies.is_empty() {
+            self.team_report_done = true;
+            crate::glog!("enemy_scan", "first hostile list: {} enemies; team histogram near player: {:?}", f.enemies.len(), teams);
+        }
+
+        // --- damage the player took -----------------------------------------------------------------------------
+        let last_hit = id_of(&chr.last_hit_by);
+        let guarding = f.actions_down.has(ErAction::Guard) || f.actions_down.has(ErAction::L1);
+        if let Some(prev) = self.prev_player_hp {
+            if hp < prev {
+                let attacker = (!chr.last_hit_by.is_empty()).then_some(last_hit);
+                if let Some(a) = attacker {
+                    if let Some(h) = wcm.chr_ins_by_handle(&chr.last_hit_by) {
+                        if self.hostile_teams.insert(h.team_type) {
+                            crate::glog!("enemy_scan", "learned hostile team_type {} (hurt the player)", h.team_type);
+                        }
+                    }
+                    let _ = a;
+                }
+                damage.push(DamageEvent::Taken { amount: (prev - hp) as f32, blocked: false, attacker });
+            } else if hp >= prev && last_hit != self.prev_player_last_hit && !chr.last_hit_by.is_empty() && guarding {
+                damage.push(DamageEvent::Taken { amount: 0.0, blocked: true, attacker: Some(last_hit) });
+            }
+        }
+        self.prev_player_hp = Some(hp);
+        self.prev_player_last_hit = last_hit;
+        f.damage = damage;
+        f.voice = voice;
+        Some(f)
+    }
+
+    /// Ray results for the commands of the previous frame.
+    pub fn cast(&self, cmds: &[Command]) -> Vec<RayResult> {
+        let mut out = Vec::new();
+        let (Ok(wcm), Ok(hm)) = (unsafe { WorldChrMan::instance() }, unsafe { CSHavokMan::instance() }) else { return out };
+        let Some(player) = wcm.main_player.as_ref() else { return out };
+        for c in cmds {
+            if let Command::Raycast { tag, from, to } = c {
+                let origin = HavokPosition(from.x, from.y, from.z, 0.0);
+                let d = *to - *from;
+                let hit = hm.phys_world.cast_ray(MAP_RAY_FILTER, &origin, PositionDelta(d.x, d.y, d.z), player).map(|HavokPosition(x, y, z, _)| Vec3::new(x, y, z));
+                out.push(RayResult { tag: *tag, hit });
+            }
+        }
+        out
+    }
+
+    /// Apply the engine's commands to the game.
+    pub fn apply(&mut self, cmds: &[Command], now: f64, audio: Option<&Audio>, cache: &Path) {
+        let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return };
+        let player_handle = match wcm.main_player.as_ref() {
+            Some(p) => p.chr_ins.field_ins_handle,
+            None => return,
+        };
+        let mut new_mask = ActionBits::NONE;
+        let mut anim_speed: Option<f32> = None;
+        let sheets = gowring_core::Data::get();
+        for c in cmds {
+            match c {
+                Command::Damage { target, amount, .. } => {
+                    if let Some(h) = self.handles.get(target).copied() {
+                        if let Some(chr) = wcm.chr_ins_by_handle_mut(&h) {
+                            if let Some(d) = opt_mut(&mut chr.modules.data) {
+                                d.hp = (d.hp - amount.round() as i32).max(0);
+                            }
+                            chr.last_hit_by = player_handle;
+                        }
+                    }
+                }
+                Command::Stagger { target, seconds } => self.freeze(wcm, *target, now, (*seconds).min(6.0)),
+                Command::Status { target, status, seconds } => match status {
+                    RunicStatus::Frozen => self.freeze(wcm, *target, now, (*seconds).min(8.0)),
+                    RunicStatus::Stagger => self.freeze(wcm, *target, now, (*seconds).min(3.0)),
+                    RunicStatus::Burning => {
+                        let max_hp = self.handles.get(target).and_then(|h| wcm.chr_ins_by_handle(h)).map(|c| c.modules.data.max_hp).unwrap_or(1000);
+                        self.burning.retain(|b| b.id != *target);
+                        self.burning.push(Burn { id: *target, until: now + *seconds as f64, next_tick: now + 0.5, per_tick: (max_hp / 120).max(8) });
+                    }
+                    RunicStatus::None => {}
+                },
+                Command::Heal { amount } | Command::Refund { amount } => {
+                    if let Some(p) = wcm.main_player.as_mut() {
+                        if let Some(d) = opt_mut(&mut p.chr_ins.modules.data) {
+                            d.hp = (d.hp + amount.round() as i32).min(d.max_hp);
+                            // keep our own diff from reading a heal as a new hit
+                            self.prev_player_hp = Some(d.hp);
+                        }
+                    }
+                }
+                Command::Mask(bits) => new_mask = new_mask.union(*bits),
+                Command::AnimSpeed(s) => anim_speed = Some(*s),
+                Command::Sfx(id) => {
+                    if let Some(a) = audio {
+                        a.sfx(cache.join(sheets_asset_output(id)), 0.9);
+                    }
+                }
+                Command::Voice { set, no_repeat, interrupt, .. } => {
+                    if let Some(a) = audio {
+                        a.voice(cache.join(sheets_asset_output(set)), set, *no_repeat, *interrupt, sheets.mimir.volume);
+                    }
+                }
+                Command::Finisher { target, .. } => {
+                    crate::log::once("finisher-visual", "enemy_damage", &format!("finisher on {target:#x}: damage applied; no execution animation in this build"));
+                }
+                Command::Cast { runic } => {
+                    crate::log::once("cast-visual", "enemy_damage", &format!("runic `{runic}`: effects applied; no cast animation in this build"));
+                }
+                Command::Raycast { .. } | Command::Fx { .. } | Command::Shake(_) => {}
+            }
+        }
+        // masks: clear what we set last frame that we no longer want, set what we want now
+        if let Some(p) = wcm.main_player.as_mut() {
+            let ar = &mut p.chr_ins.modules.action_request;
+            let stale = ActionBits(self.my_mask.0 & !new_mask.0);
+            set_er_bits(&mut ar.disabled_action_inputs, stale, false);
+            set_er_bits(&mut ar.disabled_action_inputs, new_mask, true);
+            self.my_mask = new_mask;
+            if let Some(s) = anim_speed {
+                p.chr_ins.modules.behavior.animation_speed = s;
+            }
+        }
+        self.tick_statuses(wcm, now, player_handle);
+    }
+
+    fn freeze(&mut self, wcm: &mut WorldChrMan, target: u64, now: f64, seconds: f32) {
+        let Some(h) = self.handles.get(&target).copied() else { return };
+        let Some(chr) = wcm.chr_ins_by_handle_mut(&h) else { return };
+        if let Some(t) = opt_mut(&mut chr.modules.toughness) {
+            t.toughness = 0.0;
+        }
+        let b = &mut chr.modules.behavior;
+        let entry = self.frozen.entry(target).or_insert(Frozen { until: now, saved_speed: if b.animation_speed > 0.05 { b.animation_speed } else { 1.0 } });
+        entry.until = entry.until.max(now + seconds as f64);
+        b.animation_speed = 0.02;
+    }
+
+    fn tick_statuses(&mut self, wcm: &mut WorldChrMan, now: f64, player: FieldInsHandle) {
+        // thaw
+        let done: Vec<u64> = self.frozen.iter().filter(|(_, f)| f.until <= now).map(|(k, _)| *k).collect();
+        for id in done {
+            if let Some(f) = self.frozen.remove(&id) {
+                if let Some(chr) = self.handles.get(&id).and_then(|h| wcm.chr_ins_by_handle_mut(h)) {
+                    chr.modules.behavior.animation_speed = f.saved_speed;
+                }
+            }
+        }
+        for (id, f) in &self.frozen {
+            if let Some(chr) = self.handles.get(id).and_then(|h| wcm.chr_ins_by_handle_mut(h)) {
+                chr.modules.behavior.animation_speed = 0.02;
+                let _ = f;
+            }
+        }
+        // burn
+        for b in &mut self.burning {
+            if now >= b.next_tick {
+                b.next_tick += 0.5;
+                if let Some(chr) = self.handles.get(&b.id).and_then(|h| wcm.chr_ins_by_handle_mut(h)) {
+                    if let Some(d) = opt_mut(&mut chr.modules.data) {
+                        d.hp = (d.hp - b.per_tick).max(0);
+                    }
+                    chr.last_hit_by = player;
+                }
+            }
+        }
+        self.burning.retain(|b| b.until > now);
+    }
+
+    /// Release everything we are holding (frozen enemies, masked actions) — on shutdown or death.
+    pub fn release_all(&mut self) {
+        if let Ok(wcm) = unsafe { WorldChrMan::instance_mut() } {
+            let ids: Vec<u64> = self.frozen.keys().copied().collect();
+            for id in ids {
+                if let Some(f) = self.frozen.remove(&id) {
+                    if let Some(chr) = self.handles.get(&id).and_then(|h| wcm.chr_ins_by_handle_mut(h)) {
+                        chr.modules.behavior.animation_speed = f.saved_speed;
+                    }
+                }
+            }
+        }
+        self.burning.clear();
+    }
+
+    /// Current camera basis for the overlay's projection.
+    pub fn camera_basis() -> Option<(Vec3, Vec3, Vec3, Vec3, f32)> {
+        let cam = unsafe { CSCamera::instance() }.ok()?;
+        let pc = &cam.pers_cam_1;
+        let (r, u, f) = (pc.right(), pc.up(), pc.forward());
+        let HavokPosition(x, y, z, _) = pc.position();
+        Some((Vec3::new(r.0, r.1, r.2), Vec3::new(u.0, u.1, u.2), Vec3::new(f.0, f.1, f.2), Vec3::new(x, y, z), pc.fov))
+    }
+}
+
+/// The cache-relative output of a sheet asset (sound file, or a voice-set directory).
+fn sheets_asset_output(id: &str) -> &'static str {
+    gowring_core::Data::get().asset(id).output
+}
+
+/// `OwnedPtr<T>` is declared non-null, but a character without a module can still hold null there.
+fn opt<T>(p: &fromsoftware_shared::OwnedPtr<T>) -> Option<&T> {
+    let raw = p.as_ptr();
+    if raw.is_null() { None } else { Some(unsafe { &*raw }) }
+}
+
+fn opt_mut<T>(p: &mut fromsoftware_shared::OwnedPtr<T>) -> Option<&mut T> {
+    let raw = p.as_ptr();
+    if raw.is_null() { None } else { Some(unsafe { &mut *raw }) }
+}

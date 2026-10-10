@@ -3,7 +3,7 @@ name = "gowring-launcher"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GowRing.exe: --prepare / --play / --diagnose."
+description = "GowRing.exe: --prepare / --play / --diagnose for the Kratos-in-Elden-Ring mashup."
 
 [[bin]]
 name = "GowRing"
@@ -11,3 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+serde_json.workspace = true
+gowring-core = { path = "../gowring-core" }
+gowring-gow = { path = "../gowring-gow" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }

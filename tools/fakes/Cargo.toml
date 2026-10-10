@@ -1,0 +1,23 @@
+[package]
+name = "fakes"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Stand-ins for ModEngine2's launcher and eldenring.exe, used to test GowRing.exe under Wine. Never packaged."
+
+[workspace]
+
+[[bin]]
+name = "modengine2_launcher"
+path = "src/bin/modengine2_launcher.rs"
+
+[[bin]]
+name = "eldenring"
+path = "src/bin/eldenring.rs"
+
+[[bin]]
+name = "dll_probe"
+path = "src/bin/dll_probe.rs"
+
+[dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_Security", "Win32_System_IO"] }

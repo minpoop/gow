@@ -3,9 +3,11 @@ name = "gowring-gow"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Reader for the player's own God of War Ragnarök folder (archives, textures, Wwise audio)."
+description = "Reader for the player's own God of War Ragnarök folder: inventory, audiopacks, Wwise media, WADs, textures. Reads, never ships."
 
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+png = "0.17"
+texture2ddecoder = "0.1"
