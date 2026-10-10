@@ -1,0 +1,75 @@
+{
+ "schemaVersion": 1,
+ "mode": "installed",
+ "games": [
+  {
+   "role": "primary",
+   "slug": "elden-ring",
+   "version": ">=2.7.1.0 <=2.7.1.1"
+  },
+  {
+   "role": "companion",
+   "slug": "custom-god-of-war-ragnarok"
+  }
+ ],
+ "components": [
+  {
+   "id": "main",
+   "kind": "main",
+   "label": "Kratos in the Lands Between",
+   "fileName": "GowRing-0.1.0.zip",
+   "required": true
+  }
+ ],
+ "requirements": [
+  {
+   "kind": "loader",
+   "id": "modengine2"
+  }
+ ],
+ "mappings": [
+  {
+   "component": "main",
+   "from": "",
+   "to": "{managed}"
+  }
+ ],
+ "launch": {
+  "kind": "exe",
+  "path": "{managed}/GowRing.exe",
+  "args": [
+   "--play"
+  ],
+  "env": {
+   "GOWRING_ER": "{game}",
+   "GOWRING_GOWR": "{game:custom-god-of-war-ragnarok}"
+  }
+ },
+ "setup": {
+  "label": "Ragnar\u00f6k art and sound",
+  "launch": {
+   "kind": "exe",
+   "path": "{managed}/GowRing.exe",
+   "args": [
+    "--prepare"
+   ],
+   "env": {
+    "GOWRING_ER": "{game}",
+    "GOWRING_GOWR": "{game:custom-god-of-war-ragnarok}"
+   }
+  },
+  "done": {
+   "file": "{managed}/.melty-ready",
+   "contains": "gowring-0.1.0-prep-1"
+  },
+  "failure": {
+   "file": "{managed}/.melty-failure.txt"
+  }
+ },
+ "runtimeData": [
+  "{localappdata}/GowRing"
+ ],
+ "notes": {
+  "beforeInstall": "Needs Elden Ring (Steam, PC, 2.7.1.0-2.7.1.1) and your own God of War Ragnar\u00f6k (Steam, PC) installed. Runs offline through ModEngine2 with Easy Anti-Cheat off (Melty starts it): do not go online with this mod. Plays on its own save file, so your Elden Ring saves are not used; a backup of them is kept anyway. Alpha: untested in-game, see STATUS.md. Nothing from either game is shipped; art and sound are read from your own God of War Ragnar\u00f6k when you press Play."
+ }
+}

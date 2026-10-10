@@ -46,3 +46,7 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - 2026-10-10 Research: GoW Ragnarök PC assets — community tools exist for WAD/mesh (GOWTool, PC build),
   textures (DDS) and audio (`.audiopack` RIFF → `.wem`, `gowr_soundtool`). **No PC animation extractor found.**
   => Kratos' *motions* come from Elden Ring's own animation sets for v0.1; GoW rules/HUD/voice/models are read.
+- 2026-10-10 Built all of it (sheets 16, core 51 tests, gow reader 19 tests, launcher + DLL cross-built, Wine checks).
+  Melty draft created: modId `d005edc0-ea0c-4b98-9df5-99ea3834a624` (githubRepo minpoop/gow, remix OFF, licence unset: the
+  author has not chosen). Release 0.1.0 submitted as DRAFT (sha256 5d4d19a1…), one_click_check = yes.
+  Not published: no real gameplay screenshot exists and nothing has run in Elden Ring.

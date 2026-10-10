@@ -2,7 +2,6 @@
 name = "gowring-launcher"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
 description = "GowRing.exe: --prepare / --play / --diagnose for the Kratos-in-Elden-Ring mashup."
 
 [[bin]]

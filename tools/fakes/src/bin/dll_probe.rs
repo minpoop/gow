@@ -2,7 +2,7 @@
 //! game: that it loads, boots, installs the CreateFileW redirect, and logs. Run under Wine.
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_WRITE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::Storage::FileSystem::{CreateFileW, WriteFile, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL};
+use windows_sys::Win32::Storage::FileSystem::{CopyFileW, CreateFileW, DeleteFileW, GetFileAttributesW, MoveFileExW, WriteFile, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, MOVEFILE_REPLACE_EXISTING};
 use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
 
 fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
@@ -29,7 +29,20 @@ fn main() {
             CloseHandle(f);
         }
     }
-    println!("ER0000.sl2 exists: {}", target.exists());
-    println!("ER0000.gowring.sl2 exists: {}", dir.join("ER0000.gowring.sl2").exists());
+    // the game's other ways of reaching a save: rename a temp file onto it, copy it to .bak, ask for attributes, delete
+    let tmp = dir.join("ER0000.tmp");
+    std::fs::write(&tmp, b"temp-save").unwrap();
+    let ok_move = unsafe { MoveFileExW(wide(tmp.as_os_str()).as_ptr(), wide(target.as_os_str()).as_ptr(), MOVEFILE_REPLACE_EXISTING) };
+    let attrs = unsafe { GetFileAttributesW(wide(target.as_os_str()).as_ptr()) };
+    let bak = dir.join("ER0000.sl2.bak");
+    let ok_copy = unsafe { CopyFileW(wide(target.as_os_str()).as_ptr(), wide(bak.as_os_str()).as_ptr(), 0) };
+    println!("move ok={} attrs_valid={} copy ok={}", ok_move != 0, attrs != u32::MAX, ok_copy != 0);
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    println!("files on disk: {names:?}");
+    let ok_del = unsafe { DeleteFileW(wide(bak.as_os_str()).as_ptr()) };
+    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    println!("delete ok={} -> files on disk: {names:?}", ok_del != 0);
     std::thread::sleep(std::time::Duration::from_secs(2));
 }

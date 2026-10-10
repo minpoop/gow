@@ -65,6 +65,8 @@ pub struct Bridge {
     team_report_done: bool,
     frozen: HashMap<u64, Frozen>,
     burning: Vec<Burn>,
+    /// HP we took off enemies ourselves outside the engine's ledger (burn ticks), so it is not read back as melee.
+    own_pending: HashMap<u64, i32>,
     my_mask: ActionBits,
     pub scan_range: f32,
     pub max_enemies: usize,
@@ -82,6 +84,7 @@ impl Bridge {
             team_report_done: false,
             frozen: HashMap::new(),
             burning: Vec::new(),
+            own_pending: HashMap::new(),
             my_mask: ActionBits::NONE,
             scan_range,
             max_enemies: 96,
@@ -174,7 +177,11 @@ impl Bridge {
             // damage the player did since last frame
             if let Some(prev) = self.prev_enemy_hp.get(&id) {
                 if ehp < *prev && e.last_hit_by == player_handle {
-                    damage.push(DamageEvent::Dealt { enemy: id, amount: (*prev - ehp) as f32 });
+                    let own = self.own_pending.remove(&id).unwrap_or(0);
+                    let amount = (*prev - ehp - own).max(0);
+                    if amount > 0 {
+                        damage.push(DamageEvent::Dealt { enemy: id, amount: amount as f32 });
+                    }
                 }
             }
             seen_hp.insert(id, ehp);
@@ -352,7 +359,9 @@ impl Bridge {
                 b.next_tick += 0.5;
                 if let Some(chr) = self.handles.get(&b.id).and_then(|h| wcm.chr_ins_by_handle_mut(h)) {
                     if let Some(d) = opt_mut(&mut chr.modules.data) {
-                        d.hp = (d.hp - b.per_tick).max(0);
+                        let dealt = b.per_tick.min(d.hp.max(0));
+                        d.hp -= dealt;
+                        *self.own_pending.entry(b.id).or_default() += dealt;
                     }
                     chr.last_hit_by = player;
                 }
