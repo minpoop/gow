@@ -1,0 +1,131 @@
+{
+ "sheet": "projectiles",
+ "struct": "ProjectileDef",
+ "about": "Thrown weapons the DLL simulates itself (Leviathan Axe, Draupnir Spear). Metres and seconds.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "weapon": {
+   "type": "ref",
+   "sheet": "weapons"
+  },
+  "throw_move": {
+   "type": "ref",
+   "sheet": "moves"
+  },
+  "recall_move": {
+   "type": "ref",
+   "sheet": "moves"
+  },
+  "speed_mps": {
+   "type": "float",
+   "min": 1,
+   "max": 200
+  },
+  "max_range_m": {
+   "type": "float",
+   "min": 1,
+   "max": 200
+  },
+  "hit_radius_m": {
+   "type": "float",
+   "min": 0.1,
+   "max": 5
+  },
+  "aim_assist_deg": {
+   "type": "float",
+   "min": 0,
+   "max": 30
+  },
+  "return_speed_mps": {
+   "type": "float",
+   "min": 0,
+   "max": 200
+  },
+  "return_accel_mps2": {
+   "type": "float",
+   "min": 0,
+   "max": 500
+  },
+  "catch_dist_m": {
+   "type": "float",
+   "min": 0.2,
+   "max": 5
+  },
+  "hand_height_m": {
+   "type": "float",
+   "min": 0,
+   "max": 3
+  },
+  "max_out": {
+   "type": "int",
+   "min": 1,
+   "max": 8
+  },
+  "blast_radius_m": {
+   "type": "float",
+   "min": 0,
+   "max": 20
+  },
+  "reready_s": {
+   "type": "float",
+   "min": 0,
+   "max": 30
+  },
+  "auto_recall_dist_m": {
+   "type": "float",
+   "min": 5,
+   "max": 500
+  },
+  "fx": {
+   "type": "enum",
+   "values": [
+    "frost",
+    "fire",
+    "blast"
+   ],
+   "name": "FxKind"
+  }
+ },
+ "rows": [
+  {
+   "id": "axe_flight",
+   "weapon": "leviathan_axe",
+   "throw_move": "axe_throw",
+   "recall_move": "axe_recall",
+   "speed_mps": 38,
+   "max_range_m": 42,
+   "hit_radius_m": 0.9,
+   "aim_assist_deg": 6,
+   "return_speed_mps": 24,
+   "return_accel_mps2": 60,
+   "catch_dist_m": 1.3,
+   "hand_height_m": 1.2,
+   "max_out": 1,
+   "blast_radius_m": 0,
+   "reready_s": 0,
+   "auto_recall_dist_m": 90,
+   "fx": "frost"
+  },
+  {
+   "id": "spear_flight",
+   "weapon": "draupnir_spear",
+   "throw_move": "spear_throw",
+   "recall_move": "spear_detonate",
+   "speed_mps": 46,
+   "max_range_m": 50,
+   "hit_radius_m": 0.7,
+   "aim_assist_deg": 5,
+   "return_speed_mps": 0,
+   "return_accel_mps2": 0,
+   "catch_dist_m": 1.0,
+   "hand_height_m": 1.2,
+   "max_out": 3,
+   "blast_radius_m": 3.2,
+   "reready_s": 1.6,
+   "auto_recall_dist_m": 90,
+   "fx": "blast"
+  }
+ ]
+}

@@ -1,0 +1,83 @@
+{
+ "sheet": "er_templates",
+ "struct": "ErTemplateDef",
+ "about": "Vanilla Elden Ring weapon categories each Kratos weapon borrows its moveset from. Resolved by scanning EquipParamWeapon at boot (no hard-coded row ids).",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "name": {
+   "type": "string"
+  },
+  "wep_type": {
+   "type": "int",
+   "min": 1,
+   "max": 120
+  },
+  "hands": {
+   "type": "enum",
+   "values": [
+    "one",
+    "two",
+    "dual_chain"
+   ]
+  },
+  "left_hand": {
+   "type": "enum",
+   "values": [
+    "allowed",
+    "shield_only",
+    "none"
+   ]
+  },
+  "why": {
+   "type": "text"
+  },
+  "status": {
+   "type": "enum",
+   "values": [
+    "unverified",
+    "coded",
+    "verified"
+   ]
+  }
+ },
+ "rows": [
+  {
+   "id": "tpl_axe",
+   "name": "Axe",
+   "wep_type": 17,
+   "hands": "one",
+   "left_hand": "shield_only",
+   "why": "One-handed chopping combos with a shield in the off hand: the closest native moveset to Kratos' axe-and-shield loop.",
+   "status": "unverified"
+  },
+  {
+   "id": "tpl_whip",
+   "name": "Whip",
+   "wep_type": 35,
+   "hands": "dual_chain",
+   "left_hand": "none",
+   "why": "Long lashing arcs with reach: the native moveset nearest to chained blades. Shield is stowed while the Blades are out, as in Ragnarök.",
+   "status": "unverified"
+  },
+  {
+   "id": "tpl_spear",
+   "name": "Spear",
+   "wep_type": 25,
+   "hands": "one",
+   "left_hand": "shield_only",
+   "why": "Thrusts and sweeps with a shield; Draupnir's throw/summon is layered by the DLL.",
+   "status": "unverified"
+  },
+  {
+   "id": "tpl_medium_shield",
+   "name": "Medium Shield",
+   "wep_type": 67,
+   "hands": "one",
+   "left_hand": "allowed",
+   "why": "Block, guard counter and a parry window; used as the Guardian Shield carrier.",
+   "status": "unverified"
+  }
+ ]
+}

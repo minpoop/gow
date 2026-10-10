@@ -1,0 +1,232 @@
+{
+ "sheet": "weapons",
+ "struct": "WeaponDef",
+ "about": "Kratos' kit. slot = the Elden Ring equipment slot that carries it (right 1-3, left 1). template = the vanilla ER category whose moveset it borrows. base_damage is per motion-value 1.0 hit in ER damage terms for a post-game Kratos.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "name": {
+   "type": "string"
+  },
+  "kind": {
+   "type": "enum",
+   "values": [
+    "axe",
+    "blades",
+    "spear",
+    "shield",
+    "hands"
+   ]
+  },
+  "slot": {
+   "type": "enum",
+   "values": [
+    "right1",
+    "right2",
+    "right3",
+    "left1",
+    "none"
+   ]
+  },
+  "template": {
+   "type": "ref?",
+   "sheet": "er_templates"
+  },
+  "icon": {
+   "type": "ref?",
+   "sheet": "assets"
+  },
+  "base_damage": {
+   "type": "int",
+   "min": 0,
+   "max": 5000
+  },
+  "stun_rate": {
+   "type": "float",
+   "min": 0,
+   "max": 5
+  },
+  "reach_m": {
+   "type": "float",
+   "min": 0,
+   "max": 30
+  },
+  "lights": {
+   "type": "list:ref",
+   "sheet": "moves"
+  },
+  "heavies": {
+   "type": "list:ref",
+   "sheet": "moves"
+  },
+  "specials": {
+   "type": "list:ref",
+   "sheet": "moves"
+  },
+  "light_runic": {
+   "type": "ref?",
+   "sheet": "runics"
+  },
+  "heavy_runic": {
+   "type": "ref?",
+   "sheet": "runics"
+  },
+  "swap_sfx": {
+   "type": "ref?",
+   "sheet": "assets"
+  },
+  "post_game": {
+   "type": "enum",
+   "values": [
+    "max"
+   ]
+  },
+  "notes": {
+   "type": "text"
+  }
+ },
+ "rows": [
+  {
+   "id": "leviathan_axe",
+   "name": "Leviathan Axe",
+   "kind": "axe",
+   "slot": "right1",
+   "template": "tpl_axe",
+   "icon": "hud_icon_axe",
+   "base_damage": 420,
+   "stun_rate": 1.0,
+   "reach_m": 2.2,
+   "lights": [
+    "axe_l1",
+    "axe_l2",
+    "axe_l3",
+    "axe_l4",
+    "axe_sprint",
+    "axe_aerial"
+   ],
+   "heavies": [
+    "axe_h1",
+    "axe_h2",
+    "axe_h_finish"
+   ],
+   "specials": [
+    "axe_throw",
+    "axe_recall"
+   ],
+   "light_runic": "axe_runic_light",
+   "heavy_runic": "axe_runic_heavy",
+   "swap_sfx": "sfx_weapon_swap",
+   "post_game": "max",
+   "notes": "Frost axe: balanced, throw-and-recall."
+  },
+  {
+   "id": "blades_of_chaos",
+   "name": "Blades of Chaos",
+   "kind": "blades",
+   "slot": "right2",
+   "template": "tpl_whip",
+   "icon": "hud_icon_blades",
+   "base_damage": 300,
+   "stun_rate": 0.8,
+   "reach_m": 4.5,
+   "lights": [
+    "blades_l1",
+    "blades_l2",
+    "blades_l3",
+    "blades_l4",
+    "blades_sprint",
+    "blades_aerial"
+   ],
+   "heavies": [
+    "blades_h1",
+    "blades_h2",
+    "blades_h_whirl"
+   ],
+   "specials": [],
+   "light_runic": "blades_runic_light",
+   "heavy_runic": "blades_runic_heavy",
+   "swap_sfx": "sfx_weapon_swap",
+   "post_game": "max",
+   "notes": "Chained fire blades: wide, fast, hit many. Shield is stowed while out."
+  },
+  {
+   "id": "draupnir_spear",
+   "name": "Draupnir Spear",
+   "kind": "spear",
+   "slot": "right3",
+   "template": "tpl_spear",
+   "icon": "hud_icon_spear",
+   "base_damage": 360,
+   "stun_rate": 0.9,
+   "reach_m": 3.0,
+   "lights": [
+    "spear_l1",
+    "spear_l2",
+    "spear_l3",
+    "spear_sprint",
+    "spear_aerial"
+   ],
+   "heavies": [
+    "spear_h1",
+    "spear_h2"
+   ],
+   "specials": [
+    "spear_throw",
+    "spear_detonate"
+   ],
+   "light_runic": "spear_runic_light",
+   "heavy_runic": "spear_runic_heavy",
+   "swap_sfx": "sfx_weapon_swap",
+   "post_game": "max",
+   "notes": "Throw up to three spears and detonate them."
+  },
+  {
+   "id": "guardian_shield",
+   "name": "Guardian Shield",
+   "kind": "shield",
+   "slot": "left1",
+   "template": "tpl_medium_shield",
+   "icon": "hud_icon_shield",
+   "base_damage": 0,
+   "stun_rate": 1.0,
+   "reach_m": 1.2,
+   "lights": [],
+   "heavies": [],
+   "specials": [
+    "shield_block",
+    "shield_parry",
+    "shield_bash",
+    "shield_charge"
+   ],
+   "light_runic": null,
+   "heavy_runic": null,
+   "swap_sfx": "sfx_weapon_swap",
+   "post_game": "max",
+   "notes": "Block, parry, bash, charge."
+  },
+  {
+   "id": "kratos_hands",
+   "name": "Bare hands",
+   "kind": "hands",
+   "slot": "none",
+   "template": null,
+   "icon": null,
+   "base_damage": 0,
+   "stun_rate": 1.0,
+   "reach_m": 1.5,
+   "lights": [],
+   "heavies": [],
+   "specials": [
+    "finisher_grab",
+    "rage_burst",
+    "rage_grab"
+   ],
+   "light_runic": null,
+   "heavy_runic": null,
+   "swap_sfx": null,
+   "post_game": "max",
+   "notes": "Finishers and Rage."
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+target/
+dist/
+*.exe
+*.dll
+*.zip
+.melty_token
+*.sl2
+/gow-cache/
+/er-cache/
+*.wem
+*.bnk

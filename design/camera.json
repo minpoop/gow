@@ -1,0 +1,67 @@
+{
+ "sheet": "camera",
+ "struct": "CameraDef",
+ "about": "Over-the-shoulder camera applied on top of ER's follow camera (ChrCam). Metres and degrees.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "shoulder_x_m": {
+   "type": "float",
+   "min": -3,
+   "max": 3
+  },
+  "height_m": {
+   "type": "float",
+   "min": -2,
+   "max": 3
+  },
+  "distance_m": {
+   "type": "float",
+   "min": 0.5,
+   "max": 10
+  },
+  "fov_deg": {
+   "type": "float",
+   "min": 30,
+   "max": 120
+  },
+  "aim_shoulder_x_m": {
+   "type": "float",
+   "min": -3,
+   "max": 3
+  },
+  "aim_distance_m": {
+   "type": "float",
+   "min": 0.5,
+   "max": 10
+  },
+  "aim_fov_deg": {
+   "type": "float",
+   "min": 30,
+   "max": 120
+  },
+  "smooth_s": {
+   "type": "float",
+   "min": 0,
+   "max": 2
+  },
+  "follow_lock_on": {
+   "type": "bool"
+  }
+ },
+ "rows": [
+  {
+   "id": "over_the_shoulder",
+   "shoulder_x_m": 0.65,
+   "height_m": 0.25,
+   "distance_m": 2.9,
+   "fov_deg": 65,
+   "aim_shoulder_x_m": 0.9,
+   "aim_distance_m": 1.9,
+   "aim_fov_deg": 55,
+   "smooth_s": 0.12,
+   "follow_lock_on": true
+  }
+ ]
+}

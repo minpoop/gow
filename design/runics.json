@@ -1,0 +1,224 @@
+{
+ "sheet": "runics",
+ "struct": "RunicDef",
+ "about": "Light and heavy runic attacks (names are this mod's own descriptive names, not canon). Cooldown is time-based and shown as the HUD ring. damage_mult multiplies weapon base_damage.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "weapon": {
+   "type": "ref",
+   "sheet": "weapons"
+  },
+  "tier": {
+   "type": "enum",
+   "values": [
+    "light",
+    "heavy"
+   ]
+  },
+  "name": {
+   "type": "string"
+  },
+  "binding": {
+   "type": "ref",
+   "sheet": "bindings"
+  },
+  "cooldown_s": {
+   "type": "float",
+   "min": 1,
+   "max": 120
+  },
+  "damage_mult": {
+   "type": "float",
+   "min": 0,
+   "max": 20
+  },
+  "stun": {
+   "type": "float",
+   "min": 0,
+   "max": 100
+  },
+  "radius_m": {
+   "type": "float",
+   "min": 0,
+   "max": 40
+  },
+  "shape": {
+   "type": "enum",
+   "values": [
+    "cone",
+    "ring",
+    "line",
+    "column",
+    "lunge"
+   ]
+  },
+  "status": {
+   "type": "enum",
+   "values": [
+    "none",
+    "frozen",
+    "burning",
+    "stagger"
+   ]
+  },
+  "status_s": {
+   "type": "float",
+   "min": 0,
+   "max": 30
+  },
+  "fx": {
+   "type": "enum",
+   "values": [
+    "frost",
+    "fire",
+    "blast"
+   ],
+   "name": "FxKind"
+  },
+  "rage_gain": {
+   "type": "float",
+   "min": 0,
+   "max": 100
+  },
+  "sfx": {
+   "type": "ref?",
+   "sheet": "assets"
+  },
+  "icon": {
+   "type": "ref?",
+   "sheet": "assets"
+  },
+  "effect": {
+   "type": "text"
+  },
+  "windup_s": {
+   "type": "float",
+   "min": 0,
+   "max": 3
+  }
+ },
+ "rows": [
+  {
+   "id": "axe_runic_light",
+   "weapon": "leviathan_axe",
+   "tier": "light",
+   "name": "Frost Shockwave",
+   "binding": "b_runic_light",
+   "cooldown_s": 12,
+   "damage_mult": 2.0,
+   "stun": 22,
+   "radius_m": 6.0,
+   "shape": "cone",
+   "status": "frozen",
+   "status_s": 3.0,
+   "fx": "frost",
+   "rage_gain": 4.0,
+   "sfx": "sfx_runic_ready",
+   "icon": "hud_icon_axe",
+   "effect": "A frost shockwave in front of Kratos that freezes what it hits.",
+   "windup_s": 0.35
+  },
+  {
+   "id": "axe_runic_heavy",
+   "weapon": "leviathan_axe",
+   "tier": "heavy",
+   "name": "Glacial Cleave",
+   "binding": "b_runic_heavy",
+   "cooldown_s": 35,
+   "damage_mult": 4.5,
+   "stun": 45,
+   "radius_m": 8.0,
+   "shape": "line",
+   "status": "frozen",
+   "status_s": 5.0,
+   "fx": "frost",
+   "rage_gain": 8.0,
+   "sfx": "sfx_runic_ready",
+   "icon": "hud_icon_axe",
+   "effect": "A long ice blade that cleaves a line and freezes it.",
+   "windup_s": 0.6
+  },
+  {
+   "id": "blades_runic_light",
+   "weapon": "blades_of_chaos",
+   "tier": "light",
+   "name": "Flame Lash",
+   "binding": "b_runic_light",
+   "cooldown_s": 12,
+   "damage_mult": 2.0,
+   "stun": 18,
+   "radius_m": 7.0,
+   "shape": "ring",
+   "status": "burning",
+   "status_s": 4.0,
+   "fx": "fire",
+   "rage_gain": 4.0,
+   "sfx": "sfx_runic_ready",
+   "icon": "hud_icon_blades",
+   "effect": "A ring of fire that sets surrounding enemies alight.",
+   "windup_s": 0.3
+  },
+  {
+   "id": "blades_runic_heavy",
+   "weapon": "blades_of_chaos",
+   "tier": "heavy",
+   "name": "Inferno Whirl",
+   "binding": "b_runic_heavy",
+   "cooldown_s": 35,
+   "damage_mult": 5.0,
+   "stun": 40,
+   "radius_m": 9.0,
+   "shape": "ring",
+   "status": "burning",
+   "status_s": 6.0,
+   "fx": "fire",
+   "rage_gain": 8.0,
+   "sfx": "sfx_runic_ready",
+   "icon": "hud_icon_blades",
+   "effect": "A spinning wall of fire that keeps burning.",
+   "windup_s": 0.55
+  },
+  {
+   "id": "spear_runic_light",
+   "weapon": "draupnir_spear",
+   "tier": "light",
+   "name": "Spark Volley",
+   "binding": "b_runic_light",
+   "cooldown_s": 12,
+   "damage_mult": 1.8,
+   "stun": 18,
+   "radius_m": 10.0,
+   "shape": "line",
+   "status": "stagger",
+   "status_s": 1.5,
+   "fx": "blast",
+   "rage_gain": 4.0,
+   "sfx": "sfx_runic_ready",
+   "icon": "hud_icon_spear",
+   "effect": "A volley of explosive spears down a line.",
+   "windup_s": 0.35
+  },
+  {
+   "id": "spear_runic_heavy",
+   "weapon": "draupnir_spear",
+   "tier": "heavy",
+   "name": "Spear Storm",
+   "binding": "b_runic_heavy",
+   "cooldown_s": 35,
+   "damage_mult": 5.5,
+   "stun": 50,
+   "radius_m": 10.0,
+   "shape": "column",
+   "status": "stagger",
+   "status_s": 2.5,
+   "fx": "blast",
+   "rage_gain": 8.0,
+   "sfx": "sfx_runic_ready",
+   "icon": "hud_icon_spear",
+   "effect": "A storm of spears that detonate in a column around the target.",
+   "windup_s": 0.6
+  }
+ ]
+}

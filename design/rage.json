@@ -1,0 +1,103 @@
+{
+ "sheet": "rage",
+ "struct": "RageDef",
+ "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "meter_max": {
+   "type": "float",
+   "min": 1,
+   "max": 1000
+  },
+  "gain_per_pct_hp_lost": {
+   "type": "float",
+   "min": 0,
+   "max": 20
+  },
+  "duration_s": {
+   "type": "float",
+   "min": 1,
+   "max": 120
+  },
+  "damage_mult": {
+   "type": "float",
+   "min": 1,
+   "max": 10
+  },
+  "damage_taken_mult": {
+   "type": "float",
+   "min": 0,
+   "max": 1
+  },
+  "stun_mult": {
+   "type": "float",
+   "min": 1,
+   "max": 10
+  },
+  "regen_pct_per_s": {
+   "type": "float",
+   "min": 0,
+   "max": 20
+  },
+  "anim_speed": {
+   "type": "float",
+   "min": 0.5,
+   "max": 2
+  },
+  "binding": {
+   "type": "ref",
+   "sheet": "bindings"
+  },
+  "burst_move": {
+   "type": "ref",
+   "sheet": "moves"
+  },
+  "grab_move": {
+   "type": "ref",
+   "sheet": "moves"
+  },
+  "sfx_on": {
+   "type": "ref",
+   "sheet": "assets"
+  },
+  "sfx_off": {
+   "type": "ref",
+   "sheet": "assets"
+  },
+  "mimir_trigger": {
+   "type": "ref",
+   "sheet": "mimir_triggers"
+  },
+  "tint": {
+   "type": "color"
+  },
+  "tint_strength": {
+   "type": "float",
+   "min": 0,
+   "max": 1
+  }
+ },
+ "rows": [
+  {
+   "id": "spartan_rage",
+   "meter_max": 100,
+   "gain_per_pct_hp_lost": 0.9,
+   "duration_s": 25,
+   "damage_mult": 1.75,
+   "damage_taken_mult": 0.5,
+   "stun_mult": 2.0,
+   "regen_pct_per_s": 1.5,
+   "anim_speed": 1.12,
+   "binding": "b_rage",
+   "burst_move": "rage_burst",
+   "grab_move": "rage_grab",
+   "sfx_on": "sfx_rage_on",
+   "sfx_off": "sfx_rage_off",
+   "mimir_trigger": "mt_rage",
+   "tint": "#8a0b0b",
+   "tint_strength": 0.45
+  }
+ ]
+}

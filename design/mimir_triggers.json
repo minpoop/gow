@@ -1,0 +1,239 @@
+{
+ "sheet": "mimir_triggers",
+ "struct": "MimirTriggerDef",
+ "about": "When Mimir speaks. Lines are Ragnarök's own recordings picked at random from the voice set; subtitles come from Ragnarök's own text. This mod writes no dialogue.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "event": {
+   "type": "enum",
+   "values": [
+    "game_start",
+    "combat_start",
+    "kill",
+    "kill_streak",
+    "rage_on",
+    "hp_low",
+    "parry",
+    "boss_sight",
+    "boss_down",
+    "player_death",
+    "new_area",
+    "idle",
+    "axe_throw",
+    "runic_hit"
+   ]
+  },
+  "voice": {
+   "type": "ref",
+   "sheet": "assets"
+  },
+  "cooldown_s": {
+   "type": "float",
+   "min": 0,
+   "max": 3600
+  },
+  "chance_pct": {
+   "type": "float",
+   "min": 0,
+   "max": 100
+  },
+  "priority": {
+   "type": "int",
+   "min": 0,
+   "max": 10
+  },
+  "requires": {
+   "type": "enum",
+   "values": [
+    "none",
+    "in_combat",
+    "out_of_combat"
+   ]
+  },
+  "interrupts": {
+   "type": "bool"
+  },
+  "subtitle": {
+   "type": "enum",
+   "values": [
+    "gow_text",
+    "none"
+   ]
+  },
+  "notes": {
+   "type": "text"
+  }
+ },
+ "rows": [
+  {
+   "id": "mt_greeting",
+   "event": "game_start",
+   "voice": "mimir_greeting",
+   "cooldown_s": 3600,
+   "chance_pct": 100,
+   "priority": 5,
+   "requires": "none",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "Once per session, a few seconds after control starts"
+  },
+  {
+   "id": "mt_combat_start",
+   "event": "combat_start",
+   "voice": "mimir_combat_start",
+   "cooldown_s": 45,
+   "chance_pct": 35,
+   "priority": 3,
+   "requires": "none",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "First hostile aggro after quiet"
+  },
+  {
+   "id": "mt_kill",
+   "event": "kill",
+   "voice": "mimir_kill",
+   "cooldown_s": 30,
+   "chance_pct": 25,
+   "priority": 2,
+   "requires": "none",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "A normal kill, rarely"
+  },
+  {
+   "id": "mt_kill_streak",
+   "event": "kill_streak",
+   "voice": "mimir_kill_streak",
+   "cooldown_s": 90,
+   "chance_pct": 60,
+   "priority": 4,
+   "requires": "in_combat",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "5 kills inside 20 s"
+  },
+  {
+   "id": "mt_rage",
+   "event": "rage_on",
+   "voice": "mimir_rage",
+   "cooldown_s": 60,
+   "chance_pct": 70,
+   "priority": 6,
+   "requires": "none",
+   "interrupts": true,
+   "subtitle": "gow_text",
+   "notes": "Spartan Rage begins"
+  },
+  {
+   "id": "mt_hp_low",
+   "event": "hp_low",
+   "voice": "mimir_low_health",
+   "cooldown_s": 60,
+   "chance_pct": 60,
+   "priority": 7,
+   "requires": "in_combat",
+   "interrupts": true,
+   "subtitle": "gow_text",
+   "notes": "Health under 25%"
+  },
+  {
+   "id": "mt_parry",
+   "event": "parry",
+   "voice": "mimir_parry",
+   "cooldown_s": 40,
+   "chance_pct": 40,
+   "priority": 3,
+   "requires": "none",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "Perfect parry"
+  },
+  {
+   "id": "mt_boss_sight",
+   "event": "boss_sight",
+   "voice": "mimir_boss_sight",
+   "cooldown_s": 300,
+   "chance_pct": 100,
+   "priority": 6,
+   "requires": "none",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "A boss health bar appears"
+  },
+  {
+   "id": "mt_boss_down",
+   "event": "boss_down",
+   "voice": "mimir_boss_down",
+   "cooldown_s": 300,
+   "chance_pct": 100,
+   "priority": 6,
+   "requires": "none",
+   "interrupts": true,
+   "subtitle": "gow_text",
+   "notes": "A boss dies"
+  },
+  {
+   "id": "mt_player_death",
+   "event": "player_death",
+   "voice": "mimir_death",
+   "cooldown_s": 120,
+   "chance_pct": 80,
+   "priority": 8,
+   "requires": "none",
+   "interrupts": true,
+   "subtitle": "gow_text",
+   "notes": "Kratos dies"
+  },
+  {
+   "id": "mt_new_area",
+   "event": "new_area",
+   "voice": "mimir_new_area",
+   "cooldown_s": 240,
+   "chance_pct": 50,
+   "priority": 2,
+   "requires": "out_of_combat",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "New named region"
+  },
+  {
+   "id": "mt_idle",
+   "event": "idle",
+   "voice": "mimir_idle",
+   "cooldown_s": 150,
+   "chance_pct": 60,
+   "priority": 1,
+   "requires": "out_of_combat",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "No combat for 90 s"
+  },
+  {
+   "id": "mt_axe_throw",
+   "event": "axe_throw",
+   "voice": "mimir_axe_throw",
+   "cooldown_s": 90,
+   "chance_pct": 20,
+   "priority": 2,
+   "requires": "in_combat",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "Axe thrown in combat"
+  },
+  {
+   "id": "mt_runic_hit",
+   "event": "runic_hit",
+   "voice": "mimir_runic",
+   "cooldown_s": 90,
+   "chance_pct": 25,
+   "priority": 2,
+   "requires": "in_combat",
+   "interrupts": false,
+   "subtitle": "gow_text",
+   "notes": "A runic attack hits 3+ enemies"
+  }
+ ]
+}

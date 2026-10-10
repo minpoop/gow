@@ -1,0 +1,222 @@
+{
+ "sheet": "bindings",
+ "struct": "BindingDef",
+ "about": "Kratos' controls expressed as Elden Ring action bits (CSChrActionRequestModule), so keyboard, XInput and DualSense all work without us touching device drivers. 'blocks' are ER actions masked (disabled_action_inputs) while the binding fires.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "label": {
+   "type": "string"
+  },
+  "chord": {
+   "type": "list:enum",
+   "values": [
+    "r1",
+    "r2",
+    "l1",
+    "l2",
+    "action",
+    "sp_move",
+    "jump",
+    "use_item",
+    "switch_form",
+    "change_weapon_r",
+    "change_weapon_l",
+    "change_item",
+    "r3",
+    "l3",
+    "guard",
+    "change_style_r",
+    "change_style_l"
+   ],
+   "name": "ErAction"
+  },
+  "mode": {
+   "type": "enum",
+   "values": [
+    "native",
+    "press",
+    "hold",
+    "chord_press",
+    "chord_hold"
+   ]
+  },
+  "blocks": {
+   "type": "list:enum",
+   "values": [
+    "r1",
+    "r2",
+    "l1",
+    "l2",
+    "action",
+    "sp_move",
+    "jump",
+    "use_item",
+    "switch_form",
+    "change_weapon_r",
+    "change_weapon_l",
+    "change_item",
+    "r3",
+    "l3",
+    "guard",
+    "change_style_r",
+    "change_style_l"
+   ],
+   "name": "ErAction"
+  },
+  "purpose": {
+   "type": "text"
+  }
+ },
+ "rows": [
+  {
+   "id": "b_light",
+   "label": "Light attack",
+   "chord": [
+    "r1"
+   ],
+   "mode": "native",
+   "blocks": [],
+   "purpose": "ER plays the weapon's own light chain; we observe the swing to run Ragnarök's rules (rage, stun, sfx)."
+  },
+  {
+   "id": "b_heavy",
+   "label": "Heavy attack",
+   "chord": [
+    "r2"
+   ],
+   "mode": "native",
+   "blocks": [],
+   "purpose": "ER plays the heavy; observed."
+  },
+  {
+   "id": "b_block",
+   "label": "Block / parry window",
+   "chord": [
+    "guard"
+   ],
+   "mode": "native",
+   "blocks": [],
+   "purpose": "Guardian Shield. A guard that starts just before a hit is a perfect parry (rules layer)."
+  },
+  {
+   "id": "b_dodge",
+   "label": "Dodge",
+   "chord": [
+    "sp_move"
+   ],
+   "mode": "native",
+   "blocks": [],
+   "purpose": "ER's roll / backstep as Kratos' dodge."
+  },
+  {
+   "id": "b_aim",
+   "label": "Aim (axe / spear)",
+   "chord": [
+    "l2"
+   ],
+   "mode": "hold",
+   "blocks": [
+    "l2"
+   ],
+   "purpose": "Hold to aim the throw reticle; masks the weapon-art action."
+  },
+  {
+   "id": "b_throw",
+   "label": "Throw",
+   "chord": [
+    "l2",
+    "r1"
+   ],
+   "mode": "chord_press",
+   "blocks": [
+    "l2",
+    "r1"
+   ],
+   "purpose": "While aiming: throw the Leviathan Axe or Draupnir Spear."
+  },
+  {
+   "id": "b_recall",
+   "label": "Recall / detonate",
+   "chord": [
+    "change_style_r"
+   ],
+   "mode": "press",
+   "blocks": [
+    "change_style_r"
+   ],
+   "purpose": "Recall the thrown axe; detonate thrown spears. Masks two-hand."
+  },
+  {
+   "id": "b_swap_r",
+   "label": "Swap weapon",
+   "chord": [
+    "change_weapon_r"
+   ],
+   "mode": "native",
+   "blocks": [],
+   "purpose": "ER cycles right-hand slots 1-3: Axe, Blades, Spear."
+  },
+  {
+   "id": "b_swap_l",
+   "label": "Stow / draw shield",
+   "chord": [
+    "change_weapon_l"
+   ],
+   "mode": "native",
+   "blocks": [],
+   "purpose": "ER cycles the left-hand slot: Guardian Shield or empty."
+  },
+  {
+   "id": "b_rage",
+   "label": "Spartan Rage",
+   "chord": [
+    "l3",
+    "r3"
+   ],
+   "mode": "chord_press",
+   "blocks": [
+    "l3",
+    "r3"
+   ],
+   "purpose": "Activate Rage when the meter is full."
+  },
+  {
+   "id": "b_finisher",
+   "label": "Finisher",
+   "chord": [
+    "r3"
+   ],
+   "mode": "press",
+   "blocks": [
+    "r3"
+   ],
+   "purpose": "When a stunned enemy is in reach, R3 executes it; otherwise R3 stays ER lock-on."
+  },
+  {
+   "id": "b_runic_light",
+   "label": "Light runic attack",
+   "chord": [
+    "switch_form"
+   ],
+   "mode": "press",
+   "blocks": [
+    "switch_form"
+   ],
+   "purpose": "D-pad up on pad. Masks ER spell switching."
+  },
+  {
+   "id": "b_runic_heavy",
+   "label": "Heavy runic attack",
+   "chord": [
+    "change_item"
+   ],
+   "mode": "press",
+   "blocks": [
+    "change_item"
+   ],
+   "purpose": "D-pad down on pad. Masks ER item switching."
+  }
+ ]
+}

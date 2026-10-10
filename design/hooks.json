@@ -1,0 +1,511 @@
+{
+ "sheet": "hooks",
+ "struct": "HookDef",
+ "about": "Every Elden Ring / OS system the mashup touches, as one row each. 'covers' names the sheets whose rows depend on the hook. status = how far it has been proven: unverified (written, not run in the real game), coded, verified. on_failure: degrade = log and continue without it; abort = stop the mod cleanly.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "system": {
+   "type": "string"
+  },
+  "kind": {
+   "type": "enum",
+   "values": [
+    "read",
+    "write",
+    "call",
+    "render",
+    "os",
+    "file"
+   ]
+  },
+  "er_type": {
+   "type": "string"
+  },
+  "needs": {
+   "type": "list:ref",
+   "sheet": "hooks"
+  },
+  "on_failure": {
+   "type": "enum",
+   "values": [
+    "degrade",
+    "abort"
+   ]
+  },
+  "covers": {
+   "type": "list:enum",
+   "values": [
+    "weapons",
+    "moves",
+    "runics",
+    "rage",
+    "enemy_classes",
+    "camera",
+    "loadout",
+    "hud",
+    "mimir_triggers",
+    "mimir_settings",
+    "bindings",
+    "assets",
+    "er_templates",
+    "projectiles",
+    "tuning"
+   ]
+  },
+  "status": {
+   "type": "enum",
+   "values": [
+    "unverified",
+    "coded",
+    "verified"
+   ]
+  },
+  "notes": {
+   "type": "text"
+  }
+ },
+ "rows": [
+  {
+   "id": "log",
+   "system": "Rolling log file in %LOCALAPPDATA%/GowRing/logs",
+   "kind": "os",
+   "er_type": "std::fs",
+   "needs": [],
+   "on_failure": "degrade",
+   "covers": [],
+   "status": "unverified",
+   "notes": "Every hook logs its first success/failure; the log is the oracle."
+  },
+  {
+   "id": "boot_guard",
+   "system": "Refuse to run unless ER was started by ModEngine2 offline",
+   "kind": "os",
+   "er_type": "process env + module list",
+   "needs": [
+    "log"
+   ],
+   "on_failure": "abort",
+   "covers": [],
+   "status": "unverified",
+   "notes": "Aborts if EasyAntiCheat's module is loaded or no ME2 marker; never works around anti-cheat."
+  },
+  {
+   "id": "boot_gate",
+   "system": "Wait for CSTask + WorldChrMan + window before touching anything",
+   "kind": "read",
+   "er_type": "CSTaskImp, WorldChrMan",
+   "needs": [
+    "log",
+    "boot_guard"
+   ],
+   "on_failure": "abort",
+   "covers": [],
+   "status": "unverified",
+   "notes": "Singleton scans cached too early give InvalidRva (see field note)."
+  },
+  {
+   "id": "save_redirect",
+   "system": "Redirect ER0000.sl2 to the mashup's own save file",
+   "kind": "file",
+   "er_type": "kernel32!CreateFileW detour",
+   "needs": [
+    "log",
+    "boot_guard"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "loadout"
+   ],
+   "status": "unverified",
+   "notes": "Players' normal saves are never opened; abort if the detour fails so the real save is not touched."
+  },
+  {
+   "id": "player_state",
+   "system": "Read main player HP, position, facing, block",
+   "kind": "read",
+   "er_type": "WorldChrMan.main_player / ChrIns",
+   "needs": [
+    "boot_gate"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "rage",
+    "loadout"
+   ],
+   "status": "unverified",
+   "notes": "Position in block-local Havok space plus the block id (map re-basing happens)."
+  },
+  {
+   "id": "hp_scale",
+   "system": "Set Kratos' max HP",
+   "kind": "write",
+   "er_type": "PlayerGameData / ChrIns data module",
+   "needs": [
+    "player_state"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "loadout"
+   ],
+   "status": "unverified",
+   "notes": "Write max HP and heal to full on first entry."
+  },
+  {
+   "id": "stamina_free",
+   "system": "Keep stamina full (Kratos does not tire)",
+   "kind": "write",
+   "er_type": "ChrIns data module stamina",
+   "needs": [
+    "player_state"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "loadout"
+   ],
+   "status": "unverified",
+   "notes": "Stamina written to max every frame."
+  },
+  {
+   "id": "fp_hide",
+   "system": "Hide ER's FP bar",
+   "kind": "write",
+   "er_type": "CSFeManImp hud flags",
+   "needs": [
+    "boot_gate"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "loadout",
+    "hud"
+   ],
+   "status": "unverified",
+   "notes": "FP is unused by Kratos: runics run on cooldowns, not FP."
+  },
+  {
+   "id": "er_hud_hide",
+   "system": "Hide ER's own HUD (HP/FP/stamina bars, boss bar, item slots)",
+   "kind": "write",
+   "er_type": "CSFeManImp / CSMenuManImp hud visibility",
+   "needs": [
+    "boot_gate"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "hud"
+   ],
+   "status": "unverified",
+   "notes": "Our overlay replaces them."
+  },
+  {
+   "id": "action_read",
+   "system": "Read ER action bits and timers for the player",
+   "kind": "read",
+   "er_type": "CSChrActionRequestModule.action_requests/new_action_presses",
+   "needs": [
+    "player_state"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "bindings",
+    "moves"
+   ],
+   "status": "unverified",
+   "notes": "All bindings are in ER action terms."
+  },
+  {
+   "id": "action_mask",
+   "system": "Mask ER actions while our chords fire",
+   "kind": "write",
+   "er_type": "CSChrActionRequestModule.disabled_action_inputs",
+   "needs": [
+    "action_read"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "bindings"
+   ],
+   "status": "unverified",
+   "notes": "Cleared again every frame so a masked action never leaks into the next one."
+  },
+  {
+   "id": "template_scan",
+   "system": "Find vanilla weapon rows by wep_type",
+   "kind": "read",
+   "er_type": "SoloParamRepository EquipParamWeapon",
+   "needs": [
+    "boot_gate"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "er_templates",
+    "weapons"
+   ],
+   "status": "unverified",
+   "notes": "No hard-coded row ids; logs which row each template picked."
+  },
+  {
+   "id": "param_weapon",
+   "system": "Rewrite carrier weapon rows (damage, scaling off, weight 0, model)",
+   "kind": "write",
+   "er_type": "EQUIP_PARAM_WEAPON_ST",
+   "needs": [
+    "template_scan"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "weapons"
+   ],
+   "status": "unverified",
+   "notes": "Weight 0, no stat scaling, fixed damage from weapons.base_damage, model id of the template."
+  },
+  {
+   "id": "param_atk",
+   "system": "Scale carrier attack rows by motion value",
+   "kind": "write",
+   "er_type": "ATK_PARAM_ST (AtkParam_Pc)",
+   "needs": [
+    "param_weapon"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "moves"
+   ],
+   "status": "unverified",
+   "notes": "Only the carrier weapons' own attack rows are touched."
+  },
+  {
+   "id": "loadout_award",
+   "system": "Give the four carrier items on first entry",
+   "kind": "call",
+   "er_type": "TalkScript ESD AwardItemLot / EquipInventoryData",
+   "needs": [
+    "param_weapon",
+    "player_state"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "loadout",
+    "weapons"
+   ],
+   "status": "unverified",
+   "notes": "Marker event flag so it runs once per save."
+  },
+  {
+   "id": "equip_slots",
+   "system": "Equip Axe/Blades/Spear in right slots 1-3 and the shield in left 1",
+   "kind": "write",
+   "er_type": "PlayerGameData.equipment",
+   "needs": [
+    "loadout_award"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "loadout",
+    "weapons"
+   ],
+   "status": "unverified",
+   "notes": "Only when the equipment differs from the loadout, so the player's later swaps are respected."
+  },
+  {
+   "id": "hit_observe",
+   "system": "Observe hits dealt and taken (HP deltas, chr hit events)",
+   "kind": "read",
+   "er_type": "ChrIns data/HP, last_hit_by",
+   "needs": [
+    "player_state",
+    "enemy_scan"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "moves",
+    "rage"
+   ],
+   "status": "unverified",
+   "notes": "Drives rage gain, stun meter and parry detection."
+  },
+  {
+   "id": "enemy_scan",
+   "system": "List hostile characters near the player with HP/max HP/position",
+   "kind": "read",
+   "er_type": "WorldChrMan.chr_inses_by_distance",
+   "needs": [
+    "player_state"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "enemy_classes",
+    "hud"
+   ],
+   "status": "unverified",
+   "notes": "Hostile = different team than the player, alive, within 40 m; sorted by distance."
+  },
+  {
+   "id": "enemy_stagger",
+   "system": "Stagger a stunned enemy",
+   "kind": "write",
+   "er_type": "CSChrToughnessModule / behavior event",
+   "needs": [
+    "enemy_scan"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "enemy_classes",
+    "moves"
+   ],
+   "status": "unverified",
+   "notes": "Poise to zero + hit-reaction request."
+  },
+  {
+   "id": "enemy_damage",
+   "system": "Deal damage to enemies for throws, runics and finishers",
+   "kind": "call",
+   "er_type": "CSBulletManager::spawn_bullet / BULLET_PARAM_ST",
+   "needs": [
+    "enemy_scan"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "moves",
+    "runics"
+   ],
+   "status": "unverified",
+   "notes": "Real engine bullets so ER does hits, resistances and kill credit."
+  },
+  {
+   "id": "projectiles",
+   "system": "Move the thrown axe/spears and draw them",
+   "kind": "render",
+   "er_type": "own state + overlay marker",
+   "needs": [
+    "enemy_damage",
+    "overlay"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "moves"
+   ],
+   "status": "unverified",
+   "notes": "Axe has no model in v0.1; drawn as a streak/marker (see STATUS.md)."
+  },
+  {
+   "id": "speed_scale",
+   "system": "Animation speed during Rage",
+   "kind": "write",
+   "er_type": "CSChrBehaviorModule.animation_speed",
+   "needs": [
+    "player_state"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "rage"
+   ],
+   "status": "unverified",
+   "notes": "Restored the frame Rage ends."
+  },
+  {
+   "id": "camera_offset",
+   "system": "Over-the-shoulder offset and aim FOV",
+   "kind": "write",
+   "er_type": "CSCamera / ChrCam / CSPersCam",
+   "needs": [
+    "boot_gate"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "camera"
+   ],
+   "status": "unverified",
+   "notes": "Eased with camera.smooth_s; skipped while ER shows a cutscene or menu."
+  },
+  {
+   "id": "overlay",
+   "system": "Draw the HUD over the game",
+   "kind": "render",
+   "er_type": "D3D12 Present hook via hudhook + ImGui",
+   "needs": [
+    "boot_gate"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "hud"
+   ],
+   "status": "unverified",
+   "notes": "hudhook DX12 hook with ImGui; draws from gowring-core's HUD draw list."
+  },
+  {
+   "id": "gow_cache",
+   "system": "Load converted GoW textures/audio from the cache",
+   "kind": "file",
+   "er_type": "%LOCALAPPDATA%/GowRing/cache",
+   "needs": [
+    "log"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "assets"
+   ],
+   "status": "unverified",
+   "notes": "Missing cache = prepare did not finish; the mod stops and says so (no look-alike art)."
+  },
+  {
+   "id": "audio_out",
+   "system": "Play Mimir and sound effects",
+   "kind": "os",
+   "er_type": "WASAPI via a small mixer",
+   "needs": [
+    "gow_cache"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "mimir_triggers",
+    "mimir_settings",
+    "assets"
+   ],
+   "status": "unverified",
+   "notes": "Mixes decoded WAVs on a worker thread; a failure here must never block the game thread."
+  },
+  {
+   "id": "hud_text",
+   "system": "Mimir subtitles from GoW text",
+   "kind": "file",
+   "er_type": "cache/text/subtitles.json",
+   "needs": [
+    "gow_cache"
+   ],
+   "on_failure": "degrade",
+   "covers": [
+    "mimir_triggers",
+    "hud"
+   ],
+   "status": "unverified",
+   "notes": "Subtitle text is converted from Ragnarök's own strings; absent text just means no subtitle."
+  },
+  {
+   "id": "rules_tick",
+   "system": "Run the rules engine every frame",
+   "kind": "call",
+   "er_type": "CSTaskGroupIndex::FrameBegin task",
+   "needs": [
+    "boot_gate",
+    "player_state",
+    "action_read"
+   ],
+   "on_failure": "abort",
+   "covers": [
+    "weapons",
+    "moves",
+    "runics",
+    "rage",
+    "enemy_classes",
+    "bindings",
+    "mimir_triggers",
+    "projectiles",
+    "tuning"
+   ],
+   "status": "unverified",
+   "notes": "gowring-core is driven from here through the Host trait."
+  }
+ ]
+}

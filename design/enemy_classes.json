@@ -1,0 +1,88 @@
+{
+ "sheet": "enemy_classes",
+ "struct": "EnemyClassDef",
+ "about": "How enemies are classed by max HP and how their stun meter behaves. The DLL classes each hostile character by max HP ceilings (first class whose ceiling >= max HP) or as boss when ER shows it a boss bar.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "hp_ceiling": {
+   "type": "int",
+   "min": 1,
+   "max": 100000000
+  },
+  "stun_threshold": {
+   "type": "float",
+   "min": 1,
+   "max": 1000
+  },
+  "decay_per_s": {
+   "type": "float",
+   "min": 0,
+   "max": 100
+  },
+  "stunned_s": {
+   "type": "float",
+   "min": 0.5,
+   "max": 30
+  },
+  "finisher_pct_max_hp": {
+   "type": "float",
+   "min": 0,
+   "max": 1
+  },
+  "health_bar": {
+   "type": "enum",
+   "values": [
+    "floating",
+    "boss"
+   ]
+  },
+  "stun_sfx": {
+   "type": "ref",
+   "sheet": "assets"
+  }
+ },
+ "rows": [
+  {
+   "id": "fodder",
+   "hp_ceiling": 450,
+   "stun_threshold": 30,
+   "decay_per_s": 6,
+   "stunned_s": 6,
+   "finisher_pct_max_hp": 1.0,
+   "health_bar": "floating",
+   "stun_sfx": "sfx_stun_full"
+  },
+  {
+   "id": "soldier",
+   "hp_ceiling": 1800,
+   "stun_threshold": 60,
+   "decay_per_s": 5,
+   "stunned_s": 6,
+   "finisher_pct_max_hp": 1.0,
+   "health_bar": "floating",
+   "stun_sfx": "sfx_stun_full"
+  },
+  {
+   "id": "elite",
+   "hp_ceiling": 7000,
+   "stun_threshold": 100,
+   "decay_per_s": 4,
+   "stunned_s": 5,
+   "finisher_pct_max_hp": 0.35,
+   "health_bar": "floating",
+   "stun_sfx": "sfx_stun_full"
+  },
+  {
+   "id": "boss",
+   "hp_ceiling": 100000000,
+   "stun_threshold": 160,
+   "decay_per_s": 3,
+   "stunned_s": 4,
+   "finisher_pct_max_hp": 0.18,
+   "health_bar": "boss",
+   "stun_sfx": "sfx_stun_full"
+  }
+ ]
+}

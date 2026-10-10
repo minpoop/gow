@@ -1,0 +1,117 @@
+{
+ "sheet": "tuning",
+ "struct": "TuningDef",
+ "about": "Every remaining constant of the rules layer (detection ranges, timers, thresholds).",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "engage_range_m": {
+   "type": "float",
+   "min": 1,
+   "max": 200
+  },
+  "scan_range_m": {
+   "type": "float",
+   "min": 5,
+   "max": 200
+  },
+  "finisher_reach_m": {
+   "type": "float",
+   "min": 0.5,
+   "max": 20
+  },
+  "finisher_arc_deg": {
+   "type": "float",
+   "min": 10,
+   "max": 360
+  },
+  "melee_assist_reach_m": {
+   "type": "float",
+   "min": 0.5,
+   "max": 20
+  },
+  "hp_low_pct": {
+   "type": "float",
+   "min": 1,
+   "max": 90
+  },
+  "hp_low_clear_pct": {
+   "type": "float",
+   "min": 1,
+   "max": 100
+  },
+  "kill_streak_count": {
+   "type": "int",
+   "min": 2,
+   "max": 50
+  },
+  "kill_streak_window_s": {
+   "type": "float",
+   "min": 1,
+   "max": 120
+  },
+  "combat_quiet_s": {
+   "type": "float",
+   "min": 1,
+   "max": 120
+  },
+  "idle_after_s": {
+   "type": "float",
+   "min": 5,
+   "max": 600
+  },
+  "greeting_delay_s": {
+   "type": "float",
+   "min": 0,
+   "max": 60
+  },
+  "stun_hold_s": {
+   "type": "float",
+   "min": 0,
+   "max": 10
+  },
+  "hp_trail_s": {
+   "type": "float",
+   "min": 0,
+   "max": 5
+  },
+  "runic_min_targets_voice": {
+   "type": "int",
+   "min": 1,
+   "max": 20
+  },
+  "boss_sight_range_m": {
+   "type": "float",
+   "min": 5,
+   "max": 300
+  },
+  "rng_seed": {
+   "type": "int",
+   "min": 0,
+   "max": 2147483647
+  }
+ },
+ "rows": [
+  {
+   "id": "defaults",
+   "engage_range_m": 35,
+   "scan_range_m": 60,
+   "finisher_reach_m": 3.2,
+   "finisher_arc_deg": 140,
+   "melee_assist_reach_m": 4.0,
+   "hp_low_pct": 25,
+   "hp_low_clear_pct": 40,
+   "kill_streak_count": 5,
+   "kill_streak_window_s": 20,
+   "combat_quiet_s": 8,
+   "idle_after_s": 90,
+   "greeting_delay_s": 4,
+   "stun_hold_s": 1.0,
+   "hp_trail_s": 0.6,
+   "runic_min_targets_voice": 3,
+   "boss_sight_range_m": 80,
+   "rng_seed": 7031
+  }
+ ]
+}

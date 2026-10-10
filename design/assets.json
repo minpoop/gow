@@ -1,0 +1,522 @@
+{
+ "sheet": "assets",
+ "struct": "AssetDef",
+ "about": "Everything read from the player's own God of War Ragnarök folder at --prepare. 'search' is a list of alternative term-sets (| between alternatives, , within one) matched against the names the reader can recover from the player's archives; --diagnose proves each one on a real install. Nothing here is shipped.",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "kind": {
+   "type": "enum",
+   "values": [
+    "texture",
+    "audio"
+   ]
+  },
+  "role": {
+   "type": "enum",
+   "values": [
+    "hud",
+    "sfx",
+    "mimir"
+   ]
+  },
+  "search": {
+   "type": "string"
+  },
+  "converter": {
+   "type": "enum",
+   "values": [
+    "dds_to_png",
+    "wem_to_wav",
+    "wem_to_wav_set"
+   ]
+  },
+  "output": {
+   "type": "string"
+  },
+  "describes": {
+   "type": "string"
+  },
+  "status": {
+   "type": "enum",
+   "values": [
+    "unverified",
+    "coded",
+    "verified"
+   ]
+  }
+ },
+ "rows": [
+  {
+   "id": "hud_health_frame",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,health,frame|ui,kratos,health",
+   "converter": "dds_to_png",
+   "output": "hud/health_frame.png",
+   "describes": "Kratos' health bar frame (top-left)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_health_fill",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,health,fill|ui,health,bar",
+   "converter": "dds_to_png",
+   "output": "hud/health_fill.png",
+   "describes": "Health bar fill gradient",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_rage_frame",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,rage,frame|ui,rage",
+   "converter": "dds_to_png",
+   "output": "hud/rage_frame.png",
+   "describes": "Spartan Rage bar frame",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_rage_fill",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,rage,fill|ui,rage,bar",
+   "converter": "dds_to_png",
+   "output": "hud/rage_fill.png",
+   "describes": "Spartan Rage fill",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_rage_ready",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,rage,ready|ui,rage,full",
+   "converter": "dds_to_png",
+   "output": "hud/rage_ready.png",
+   "describes": "Rage-ready glow / L3+R3 prompt",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_runic_ring",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,runic,ring|ui,runic,cooldown",
+   "converter": "dds_to_png",
+   "output": "hud/runic_ring.png",
+   "describes": "Runic cooldown ring",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_runic_ready",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,runic,ready|ui,runic,glow",
+   "converter": "dds_to_png",
+   "output": "hud/runic_ready.png",
+   "describes": "Runic-ready pulse",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_axe",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,leviathan|icon,axe",
+   "converter": "dds_to_png",
+   "output": "hud/icon_axe.png",
+   "describes": "Leviathan Axe icon",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_blades",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,blades|icon,chaos",
+   "converter": "dds_to_png",
+   "output": "hud/icon_blades.png",
+   "describes": "Blades of Chaos icon",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_spear",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,draupnir|icon,spear",
+   "converter": "dds_to_png",
+   "output": "hud/icon_spear.png",
+   "describes": "Draupnir Spear icon",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_shield",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,shield|icon,guardian",
+   "converter": "dds_to_png",
+   "output": "hud/icon_shield.png",
+   "describes": "Guardian Shield icon",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_crosshair_throw",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,reticle|hud,crosshair,axe",
+   "converter": "dds_to_png",
+   "output": "hud/crosshair_throw.png",
+   "describes": "Throw aim reticle",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_enemy_health",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,enemy,health|ui,enemy,bar",
+   "converter": "dds_to_png",
+   "output": "hud/enemy_health.png",
+   "describes": "Enemy health bar",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_enemy_stun",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,enemy,stun|ui,stun,bar",
+   "converter": "dds_to_png",
+   "output": "hud/enemy_stun.png",
+   "describes": "Enemy stun bar",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_enemy_stunned",
+   "kind": "texture",
+   "role": "hud",
+   "search": "hud,stunned|ui,stun,full",
+   "converter": "dds_to_png",
+   "output": "hud/enemy_stunned.png",
+   "describes": "Stunned (R3) marker",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_btn_r3",
+   "kind": "texture",
+   "role": "hud",
+   "search": "btn,r3|button,r3",
+   "converter": "dds_to_png",
+   "output": "hud/btn_r3.png",
+   "describes": "R3 finisher prompt glyph",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_btn_l3r3",
+   "kind": "texture",
+   "role": "hud",
+   "search": "btn,l3,r3|button,l3r3",
+   "converter": "dds_to_png",
+   "output": "hud/btn_l3r3.png",
+   "describes": "L3+R3 rage prompt glyph",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_subtitle_plate",
+   "kind": "texture",
+   "role": "hud",
+   "search": "subtitle,plate|hud,subtitle",
+   "converter": "dds_to_png",
+   "output": "hud/subtitle_plate.png",
+   "describes": "Mimir subtitle backing plate",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_mimir_portrait",
+   "kind": "texture",
+   "role": "hud",
+   "search": "mimir,portrait|mimir,icon",
+   "converter": "dds_to_png",
+   "output": "hud/mimir_portrait.png",
+   "describes": "Mimir portrait beside subtitles",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_axe_throw",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "axe,throw",
+   "converter": "wem_to_wav",
+   "output": "sfx/axe_throw.wav",
+   "describes": "Axe thrown",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_axe_recall",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "axe,recall|axe,return",
+   "converter": "wem_to_wav",
+   "output": "sfx/axe_recall.wav",
+   "describes": "Axe recalled",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_axe_catch",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "axe,catch",
+   "converter": "wem_to_wav",
+   "output": "sfx/axe_catch.wav",
+   "describes": "Axe caught",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_rage_on",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "rage,activate|rage,start",
+   "converter": "wem_to_wav",
+   "output": "sfx/rage_on.wav",
+   "describes": "Spartan Rage activates",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_rage_off",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "rage,end|rage,stop",
+   "converter": "wem_to_wav",
+   "output": "sfx/rage_off.wav",
+   "describes": "Spartan Rage ends",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_parry",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "shield,parry",
+   "converter": "wem_to_wav",
+   "output": "sfx/parry.wav",
+   "describes": "Perfect parry",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_block",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "shield,block",
+   "converter": "wem_to_wav",
+   "output": "sfx/block.wav",
+   "describes": "Shield block",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_runic_ready",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "runic,ready",
+   "converter": "wem_to_wav",
+   "output": "sfx/runic_ready.wav",
+   "describes": "Runic ready chime",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_stun_full",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "stun,full|stun,max",
+   "converter": "wem_to_wav",
+   "output": "sfx/stun_full.wav",
+   "describes": "Enemy stunned",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_finisher",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "execution|finisher",
+   "converter": "wem_to_wav",
+   "output": "sfx/finisher.wav",
+   "describes": "Finisher hit",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_weapon_swap",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "weapon,swap|weapon,switch",
+   "converter": "wem_to_wav",
+   "output": "sfx/weapon_swap.wav",
+   "describes": "Weapon swapped",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_blades_swing",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "blades,swing|chaos,swing",
+   "converter": "wem_to_wav",
+   "output": "sfx/blades_swing.wav",
+   "describes": "Blades of Chaos swing",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_spear_throw",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "spear,throw",
+   "converter": "wem_to_wav",
+   "output": "sfx/spear_throw.wav",
+   "describes": "Draupnir thrown",
+   "status": "unverified"
+  },
+  {
+   "id": "sfx_spear_blast",
+   "kind": "audio",
+   "role": "sfx",
+   "search": "spear,explode|spear,detonate",
+   "converter": "wem_to_wav",
+   "output": "sfx/spear_blast.wav",
+   "describes": "Draupnir detonation",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_greeting",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,greet|mimir,intro",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/greeting/",
+   "describes": "Mimir greets / first minute in the world",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_combat_start",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,combat,start|mimir,enemies",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/combat_start/",
+   "describes": "Fight starts",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_kill",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,kill|mimir,praise",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/kill/",
+   "describes": "After a kill",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_kill_streak",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,streak|mimir,combo",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/kill_streak/",
+   "describes": "Many kills in a row",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_rage",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,rage",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/rage/",
+   "describes": "Spartan Rage",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_low_health",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,health,low|mimir,careful",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/low_health/",
+   "describes": "Kratos is badly hurt",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_parry",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,parry",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/parry/",
+   "describes": "A perfect parry",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_boss_sight",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,boss",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/boss_sight/",
+   "describes": "A boss comes into view",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_boss_down",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,victory|mimir,boss,dead",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/boss_down/",
+   "describes": "A boss falls",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_death",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,death|mimir,fall",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/death/",
+   "describes": "Kratos falls in battle",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_new_area",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,area|mimir,world",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/new_area/",
+   "describes": "Entering a new region",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_idle",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,idle|mimir,banter",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/idle/",
+   "describes": "Quiet moments",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_axe_throw",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,axe",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/axe_throw/",
+   "describes": "Axe thrown and recalled",
+   "status": "unverified"
+  },
+  {
+   "id": "mimir_runic",
+   "kind": "audio",
+   "role": "mimir",
+   "search": "mimir,runic",
+   "converter": "wem_to_wav_set",
+   "output": "mimir/runic/",
+   "describes": "A runic attack lands",
+   "status": "unverified"
+  }
+ ]
+}

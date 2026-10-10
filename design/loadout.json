@@ -1,0 +1,99 @@
+{
+ "sheet": "loadout",
+ "struct": "LoadoutDef",
+ "about": "Post-game Kratos: everything unlocked and maxed, applied to the mashup's own save on first entry (a fresh Elden Ring character from the Chapel of Anticipation, then open sandbox).",
+ "columns": {
+  "id": {
+   "type": "id"
+  },
+  "max_hp": {
+   "type": "int",
+   "min": 100,
+   "max": 100000
+  },
+  "free_stamina": {
+   "type": "bool"
+  },
+  "hide_fp": {
+   "type": "bool"
+  },
+  "start_weapon": {
+   "type": "ref",
+   "sheet": "weapons"
+  },
+  "start_shield": {
+   "type": "ref",
+   "sheet": "weapons"
+  },
+  "weapons": {
+   "type": "list:ref",
+   "sheet": "weapons"
+  },
+  "runics_unlocked": {
+   "type": "bool"
+  },
+  "rage_unlocked": {
+   "type": "bool"
+  },
+  "rage_start": {
+   "type": "float",
+   "min": 0,
+   "max": 100
+  },
+  "mimir_attached": {
+   "type": "bool"
+  },
+  "grant_method": {
+   "type": "enum",
+   "values": [
+    "esd_award_lot",
+    "inventory_write"
+   ]
+  },
+  "save_file": {
+   "type": "string"
+  },
+  "aim_binding": {
+   "type": "ref",
+   "sheet": "bindings"
+  },
+  "dodge_binding": {
+   "type": "ref",
+   "sheet": "bindings"
+  },
+  "swap_weapon_binding": {
+   "type": "ref",
+   "sheet": "bindings"
+  },
+  "swap_shield_binding": {
+   "type": "ref",
+   "sheet": "bindings"
+  }
+ },
+ "rows": [
+  {
+   "id": "post_game_kratos",
+   "max_hp": 2500,
+   "free_stamina": true,
+   "hide_fp": true,
+   "start_weapon": "leviathan_axe",
+   "start_shield": "guardian_shield",
+   "weapons": [
+    "leviathan_axe",
+    "blades_of_chaos",
+    "draupnir_spear",
+    "guardian_shield"
+   ],
+   "runics_unlocked": true,
+   "rage_unlocked": true,
+   "rage_start": 0,
+   "mimir_attached": true,
+   "grant_method": "esd_award_lot",
+   "save_file": "ER0000.gowring.sl2",
+   "aim_binding": "b_aim",
+   "dodge_binding": "b_dodge",
+   "swap_weapon_binding": "b_swap_r",
+   "swap_shield_binding": "b_swap_l"
+  }
+ ]
+}
