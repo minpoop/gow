@@ -8,6 +8,20 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 static LOG: Mutex<Option<(File, Instant)>> = Mutex::new(None);
+/// The last few lines, kept in memory so a failing self-check can say what the mod was doing.
+static RECENT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The most recent lines, oldest first, joined for a one-line message (kept short on purpose).
+pub fn recent(n: usize, max_chars: usize) -> String {
+    let g = RECENT.lock().map(|g| g.clone()).unwrap_or_default();
+    let mut s = g.iter().rev().take(n).rev().cloned().collect::<Vec<_>>().join(" | ");
+    if s.len() > max_chars {
+        let cut = s.len() - max_chars;
+        let cut = (cut..s.len()).find(|i| s.is_char_boundary(*i)).unwrap_or(s.len());
+        s = format!("…{}", &s[cut..]);
+    }
+    s
+}
 
 pub fn init(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
@@ -21,6 +35,12 @@ pub fn init(dir: &std::path::Path) {
 }
 
 pub fn write(tag: &str, msg: &str) {
+    if let Ok(mut r) = RECENT.lock() {
+        r.push(format!("{tag}: {}", msg.replace('\n', " ")));
+        if r.len() > 24 {
+            r.remove(0);
+        }
+    }
     if let Ok(mut g) = LOG.lock() {
         if let Some((f, t0)) = g.as_mut() {
             let _ = writeln!(f, "[{:9.3}] {tag:<12} {msg}", t0.elapsed().as_secs_f64());

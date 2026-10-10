@@ -14,6 +14,34 @@ static CHECKS_FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
 static DONE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 pub static PARAMS_OK: AtomicBool = AtomicBool::new(false);
+/// How far start-up got and how often the param patch was attempted: shown when a check fails.
+pub static TASKS_REGISTERED: AtomicBool = AtomicBool::new(false);
+pub static H0_CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub static PARAM_TRIES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static STAGE: Mutex<String> = Mutex::new(String::new());
+static PARAM_ERR: Mutex<String> = Mutex::new(String::new());
+
+pub fn stage(s: &str) {
+    *STAGE.lock().unwrap() = s.to_string();
+}
+
+pub fn param_error(e: &str) {
+    *PARAM_ERR.lock().unwrap() = e.chars().take(300).collect();
+}
+
+/// One line describing the mod's state, for failing checks (the harness shows it to the developer).
+fn state() -> String {
+    format!(
+        "v{} stage={} tasks_registered={} frame_calls={} param_tries={} param_error=[{}] recent=[{}]",
+        env!("CARGO_PKG_VERSION"),
+        STAGE.lock().unwrap(),
+        TASKS_REGISTERED.load(Ordering::SeqCst),
+        H0_CALLS.load(Ordering::SeqCst),
+        PARAM_TRIES.load(Ordering::SeqCst),
+        PARAM_ERR.lock().unwrap(),
+        crate::log::recent(8, 700),
+    )
+}
 pub static OVERLAY_OK: AtomicBool = AtomicBool::new(false);
 static OVERLAY_ERR: Mutex<Option<String>> = Mutex::new(None);
 
@@ -77,7 +105,7 @@ pub fn spawn_watcher() {
             }
             if start.elapsed().as_secs() > 150 {
                 report("save-redirected", false, "Elden Ring never opened its save within 150 s");
-                report("params-patched", false, "the param tables were not patched within 150 s (see gowring.log)");
+                report("params-patched", false, &format!("the param tables were not patched within 150 s: {}", state()));
                 report("overlay-hooked", false, "the HUD overlay never reported ready within 150 s");
                 break;
             }

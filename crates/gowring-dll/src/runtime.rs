@@ -79,11 +79,16 @@ impl Runtime {
             return true;
         }
         self.params_tried += 1;
+        crate::testmode::PARAM_TRIES.store(self.params_tried, std::sync::atomic::Ordering::SeqCst);
         // After many failures (e.g. the param table is never ready) slow down to one try a second.
         if self.params_tried > 600 && self.params_tried % 60 != 0 {
             return false;
         }
-        match crate::params::apply() {
+        let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(crate::params::apply)).unwrap_or_else(|p| {
+            let why = p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
+            Err(format!("panicked: {why}"))
+        });
+        match attempt {
             Ok(c) => {
                 for n in &c.notes {
                     crate::glog!("params", "{n}");
@@ -93,6 +98,7 @@ impl Runtime {
                 true
             }
             Err(e) => {
+                crate::testmode::param_error(&e);
                 if self.params_tried % 600 == 1 {
                     crate::glog!("params", "not ready yet / failed: {e}");
                 }

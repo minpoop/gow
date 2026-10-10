@@ -52,6 +52,7 @@ pub fn run(hmodule: usize) {
     }));
     crate::glog!("boot", "GowRing {} ({}) loading; home={} cache={}", env!("CARGO_PKG_VERSION"), p.channel, p.home.display(), p.cache.display());
 
+    crate::testmode::stage("boot");
     crate::testmode::init();
     crate::testmode::spawn_watcher();
 
@@ -65,12 +66,14 @@ pub fn run(hmodule: usize) {
         return;
     }
 
+    crate::testmode::stage("guard-passed");
     // ---- save_redirect (must be in place before Elden Ring touches its save) ---------------------------------
     if let Err(e) = savehook::install(&p.save_file) {
         crate::glog!("save", "ABORT: could not redirect the save file ({e}). Your own save will not be used by this mod.");
         return;
     }
     crate::glog!("save", "CreateFileW redirect installed -> {}", p.save_file);
+    crate::testmode::stage("save-hooked");
 
     // ---- assets, overlay ---------------------------------------------------------------------------------------
     let store = Arc::new(assets::load(&p.cache, &p.channel));
@@ -94,14 +97,24 @@ pub fn run(hmodule: usize) {
         }
     }
 
+    crate::testmode::stage("overlay-done");
     // ---- boot_gate: wait for the task system, then register the per-frame tasks ---------------------------------------
-    let cs_task = match CSTaskImp::wait_for_instance(Duration::from_secs(600)) {
-        Ok(t) => t,
-        Err(e) => {
+    crate::testmode::stage("waiting-for-task-system");
+    crate::glog!("boot_gate", "waiting for the game's task system (eldenring.exe build must be one the eldenring crate knows)");
+    let cs_task = match catch_unwind(|| CSTaskImp::wait_for_instance(Duration::from_secs(600))) {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => {
             crate::glog!("boot_gate", "ABORT: game task system never came up: {e}");
+            crate::testmode::stage(&format!("task-system-error: {e}"));
+            return;
+        }
+        Err(_) => {
+            crate::glog!("boot_gate", "ABORT: the task system lookup panicked (see the panic line above)");
+            crate::testmode::stage("task-system-panicked");
             return;
         }
     };
+    crate::testmode::stage("task-system-ready");
     crate::glog!("boot_gate", "task system ready");
     let camera_req = Arc::new(Mutex::new(gowring_core::CameraRequest::default()));
     let rt = Arc::new(Mutex::new(Runtime::new(shared, store, p.cache.clone(), camera_req.clone())));
@@ -110,6 +123,9 @@ pub fn run(hmodule: usize) {
     let rt0 = rt.clone();
     let h0 = cs_task.run_recurring(
         move |_: &FD4TaskData| {
+            if crate::testmode::H0_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
+                crate::glog!("boot", "first frame task ran");
+            }
             if let Ok(mut r) = rt0.try_lock() {
                 if !r.carriers_ready() {
                     let _ = catch_unwind(AssertUnwindSafe(|| r.ensure_params()));
@@ -143,6 +159,8 @@ pub fn run(hmodule: usize) {
     std::mem::forget(h0);
     std::mem::forget(h1);
     std::mem::forget(h2);
+    crate::testmode::TASKS_REGISTERED.store(true, std::sync::atomic::Ordering::SeqCst);
+    crate::testmode::stage("tasks-registered");
     crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, camera @ Draw_Pre)");
 }
 

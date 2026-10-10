@@ -12,6 +12,55 @@ fn mb(b: u64) -> String {
     format!("{:.1} MB", b as f64 / 1_048_576.0)
 }
 
+
+/// One 0x90-byte record of the decompressed WAD table (`WTOC`), as far as it is understood: the 0xaa-filled
+/// id block at +8, a name at +0x18, and a tail of numbers at +0x68 whose meaning is still being worked out.
+#[derive(Clone, Debug)]
+struct WtocRec {
+    a: u16,
+    b: u16,
+    c: u32,
+    name: String,
+    tail: Vec<u8>,
+}
+
+const WTOC_FIRST: usize = 0x40;
+const WTOC_REC: usize = 0x90;
+
+fn wtoc_records(buf: &[u8]) -> Vec<WtocRec> {
+    let mut v = Vec::new();
+    let mut at = WTOC_FIRST;
+    while at + WTOC_REC <= buf.len() {
+        let r = &buf[at..at + WTOC_REC];
+        if !(r[8] == 0xaa && r[11] == 0xba) {
+            break;
+        }
+        let name_raw = &r[0x18..0x68];
+        let end = name_raw.iter().position(|b| *b == 0).unwrap_or(name_raw.len());
+        v.push(WtocRec {
+            a: u16::from_le_bytes([r[0], r[1]]),
+            b: u16::from_le_bytes([r[2], r[3]]),
+            c: u32::from_le_bytes([r[4], r[5], r[6], r[7]]),
+            name: String::from_utf8_lossy(&name_raw[..end]).into_owned(),
+            tail: r[0x68..].to_vec(),
+        });
+        at += WTOC_REC;
+    }
+    v
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join("")
+}
+
+fn hexdump(b: &[u8], max: usize) -> String {
+    let mut o = String::new();
+    for (i, row) in b.chunks(16).take(max / 16).enumerate() {
+        let _ = writeln!(o, "    {:05x}  {:<47}  {}", i * 16, row.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" "), row.iter().map(|x| if (32..127).contains(x) { *x as char } else { '.' }).collect::<String>());
+    }
+    o
+}
+
 pub fn report(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream: Option<&Path>) -> String {
     report_until(gow, er, reqs, vgmstream, None)
 }
@@ -167,11 +216,65 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
         }
     }
 
+
+    // ---- the LZ4-framed WADs: decompress the table and list what it names ---------------------------------------------------
+    {
+        let lz: Vec<&&scan::FileInfo> = wads.iter().filter(|w| crate::lz4::is_frame(&gow.join(&w.path))).collect();
+        let _ = writeln!(o, "\n== LZ4-framed WADs: {} of {}", lz.len(), wads.len());
+        let mut tiny: Vec<&&&scan::FileInfo> = lz.iter().collect();
+        tiny.sort_by_key(|w| w.size);
+        for w in tiny.iter().take(3) {
+            if let Ok((buf, info)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 6144) {
+                let _ = writeln!(o, "  {} ({} bytes on disk) first {} decompressed bytes of {:?}:\n{}", w.path, w.size, buf.len().min(3072), info.content_size, hexdump(&buf, 3072));
+            }
+        }
+        for key in ["r_ui.wad", "r_mimir00.wad"] {
+            let Some(w) = lz.iter().find(|w| w.path.to_lowercase().ends_with(key)) else { continue };
+            if late() {
+                break;
+            }
+            match crate::lz4::read_file_prefix(&gow.join(&w.path), 1 << 20) {
+                Ok((buf, info)) => {
+                    let recs = wtoc_records(&buf);
+                    let _ = writeln!(o, "\n  {} content {:?} bytes; header {}; {} records in the first {} bytes", w.path, info.content_size, hex(&buf[..buf.len().min(0x40)]), recs.len(), buf.len());
+                    for (i, r) in recs.iter().take(400).enumerate() {
+                        let _ = writeln!(o, "    #{i:<4} a={:04x} b={:04x} c={:08x} {:<40} tail {}", r.a, r.b, r.c, r.name, hex(&r.tail));
+                    }
+                }
+                Err(e) => {
+                    let _ = writeln!(o, "  {}: {e:#}", w.path);
+                }
+            }
+        }
+        // Which WAD names the things the design sheets need? Search every table for the sheet's words.
+        let words = ["hud", "health", "rage", "runic", "stun", "reticle", "crosshair", "btn", "button", "mimir", "leviathan", "chaos", "draupnir", "guardian", "shield", "axe", "spear", "blades", "portrait", "subtitle"];
+        let mut shown = 0usize;
+        let mut scanned = 0usize;
+        let _ = writeln!(o, "\n  records whose names contain a word the design sheets look for (first 8 per WAD):");
+        for w in &lz {
+            if late() || shown > 2500 {
+                let _ = writeln!(o, "  (stopped after {scanned} of {} WADs)", lz.len());
+                break;
+            }
+            scanned += 1;
+            let Ok((buf, _)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 512 << 10) else { continue };
+            let recs = wtoc_records(&buf);
+            let hits: Vec<&WtocRec> = recs.iter().filter(|r| { let n = r.name.to_lowercase(); words.iter().any(|k| n.contains(k)) }).take(8).collect();
+            if !hits.is_empty() {
+                shown += hits.len();
+                let _ = writeln!(o, "  {} ({} records): {}", w.path, recs.len(), hits.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", "));
+            }
+        }
+    }
+
     // ---- what the design sheets want ------------------------------------------------------------------------
     let catalog = crate::catalog::build_until(gow, &files, deadline);
     let _ = writeln!(o, "\n== Asset search against the catalog ({} named entries, {} notes)", catalog.entries.len(), catalog.notes.len());
-    for n in catalog.notes.iter().take(20) {
+    for n in catalog.notes.iter().take(5) {
         let _ = writeln!(o, "  note: {n}");
+    }
+    if catalog.notes.len() > 5 {
+        let _ = writeln!(o, "  ... and {} more notes of the same kind", catalog.notes.len() - 5);
     }
     for r in reqs {
         let hits: Vec<_> = catalog.search(&r.search).take(3).collect();
@@ -204,6 +307,29 @@ mod tests {
         for needle in ["== Inventory", "== Audio packs: 1", "pcm", "== Wwise banks: 1", "events 1", "== WAD files: 2", "PARSED a/ui.wad", "== WAD heads", "cdcdcdcd", "hud_health_frame", "1 match"] {
             assert!(text.contains(needle), "missing `{needle}` in:\n{text}");
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lz4_wads_are_listed_by_record_name() {
+        let root = std::env::temp_dir().join(format!("gowring-diag-lz4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("exec")).unwrap();
+        let mut content = b"WTOC".to_vec();
+        content.resize(WTOC_FIRST, 0);
+        for name in ["WAD_R_UI", "TXRX_HUD_HEALTHBAR"] {
+            let mut rec = vec![0u8; WTOC_REC];
+            rec[0] = 1;
+            rec[8] = 0xaa;
+            rec[11] = 0xba;
+            rec[0x18..0x18 + name.len()].copy_from_slice(name.as_bytes());
+            content.extend(rec);
+        }
+        std::fs::write(root.join("exec/r_ui.wad"), crate::lz4::frame_for_tests(&content, &[0x00], content.len() as u64)).unwrap();
+        let text = report(&root, None, &[], None);
+        assert!(text.contains("== LZ4-framed WADs: 1 of 1"), "{text}");
+        assert!(text.contains("TXRX_HUD_HEALTHBAR"), "{text}");
+        assert!(text.contains("2 records"), "{text}");
         let _ = std::fs::remove_dir_all(&root);
     }
 

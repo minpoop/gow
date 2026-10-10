@@ -59,3 +59,10 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - Fix: ship the official ModEngine2 2.1.0 (MIT) in `GowRing/modengine2/` (no ScyllaHide, no debug assets), plus the Microsoft VC++ runtime DLLs beside it (Melty's package check flagged msvcp140_atomic_wait.dll etc.; taken from Microsoft's vc_redist.x64.exe, sha256 in THIRD-PARTY.txt). The launcher also puts the ModEngine2 folders on the game's PATH.
 - Also: setup notes capped at 40 lines; `diagnose.txt` is written in the background while the game loads, now including hex heads of the Ragnarök WADs (the PC layout is not the 2018 one: `exec/wad/pc_le/` holds 1654 WADs, e.g. `r_ui.wad`, `r_mimir00.wad`).
 - Next: read `%LOCALAPPDATA%\GowRing\diagnose.txt` + `logs\launcher.log` + `logs\me2-launcher.log` from the next test; decode the WAD container from the hex heads.
+
+## 0.1.3 — Elden Ring 2.7.1.0 (2026-10-10)
+- Melty test of 0.1.2 (fa63c337, game 2.7.1.0): game started, dll-loaded / save-redirected / overlay-hooked passed, no crash for 5:00; `params-patched` failed.
+- Cause: the `eldenring` 0.14.0 crate on crates.io only has RVA tables for 2.6.2.0 (WW) / 2.6.2.1 (JP); `rva::get()` panics on 2.7.1.0, which killed the boot thread before any task was registered. Upstream fromsoftware-rs main (59fbd3b, 2026-09-20) has Ww2710 / Jp2711. Switched gowring-dll to that rev (git dependency); no source changes needed to compile.
+- Failing self-checks now carry the mod's stage, retry count, last param error and last log lines, so a test result alone says what happened.
+- The Ragnarök PC `.wad` files are LZ4 frames (magic 04 22 4d 18, 64 KiB independent blocks, content size set); the decompressed stream starts `WTOC` v2 and a table of 0x90-byte records from 0x40 (0xaa-filled id at +8, name at +0x18: WAD_R_UI, TXRX_R_UI, WPTX_R_UI, DLGX_R_UI ...). `lz4.rs` reads the frame; `--diagnose` now dumps the table of r_ui / r_mimir00 and searches every WAD for the sheets' words. Next: read that output and map HUD textures / Mimir.
+- Audio: 38 audiopack TOCs, all `wwise-vorbis`, english(us) has 27297 media; no .bnk files on disk (banks live inside the WADs).

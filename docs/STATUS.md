@@ -11,7 +11,8 @@ a Linux container that has neither game. This page says exactly what was checked
 | God of War file reader on *synthetic* fixtures (audiopack+TOC, WAD, Wwise bank, DDS→PNG, conversion, diagnose report) | 19 tests (`cargo test -p gowring-gow`) — fixtures are written by the tests, no game files |
 | Launcher `--diagnose` / `--prepare` / `--play`, ModEngine2 config, env passing, game-wait | `tools/wine-e2e.sh` under Wine with stand-ins for ModEngine2's launcher and `eldenring.exe` |
 | `gowring.dll` loads, boots, logs, and redirects the save (CreateFileW, GetFileAttributes(Ex)W, MoveFileExW, CopyFileW, DeleteFileW) | `dll_probe.exe` under Wine: only `ER0000.gowring.sl2[.bak]` ever appears on disk |
-| Everything compiles for `x86_64-pc-windows-msvc` against `eldenring` 0.14.0 (exe 2.7.1.0 table) | `cargo xwin build --release` |
+| Everything compiles for `x86_64-pc-windows-msvc` against `eldenring` from upstream fromsoftware-rs commit 59fbd3b (the crates.io 0.14.0 release only knows exe 2.6.2.0; 2.7.1.0 — the current Steam build — is in the upstream source) | `cargo xwin build --release` |
+| Real Melty test of 0.1.2 on a player's PC (Elden Ring 2.7.1.0): the game starts through the bundled ModEngine2, gowring.dll loads, the save is redirected, the overlay hooks, no crash over 5:00; the param patch did not run (the library had no 2.7.1.0 table) | Melty `test_result` fa63c337 |
 
 ## Not proven (every row is `unverified` in `design/hooks.json`)
 | Piece | Why it is unproven |
