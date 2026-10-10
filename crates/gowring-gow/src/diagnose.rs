@@ -13,6 +13,21 @@ fn mb(b: u64) -> String {
 }
 
 pub fn report(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream: Option<&Path>) -> String {
+    report_until(gow, er, reqs, vgmstream, None)
+}
+
+fn hex_head(path: &Path, n: usize) -> String {
+    use std::io::Read;
+    let mut buf = vec![0u8; n];
+    let got = std::fs::File::open(path).and_then(|mut f| f.read(&mut buf)).unwrap_or(0);
+    buf.truncate(got);
+    buf.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join("")
+}
+
+/// The same report, but each section stops reading at `deadline` (and says so), so it can run while the
+/// game is loading without competing with it for long.
+pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream: Option<&Path>, deadline: Option<std::time::Instant>) -> String {
+    let late = || deadline.map(|d| std::time::Instant::now() >= d).unwrap_or(false);
     let mut o = String::new();
     let _ = writeln!(o, "GowRing diagnose — {}", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(o, "God of War Ragnarök folder: {}", gow.display());
@@ -46,6 +61,10 @@ pub fn report(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream: Optio
     let mut codecs: BTreeMap<&str, usize> = BTreeMap::new();
     let mut total_ms: u64 = 0;
     for (i, t) in tocs.iter().enumerate() {
+        if late() {
+            let _ = writeln!(o, "  (time budget reached; {} more TOC files not read)", tocs.len() - i);
+            break;
+        }
         let Ok(bytes) = std::fs::read(gow.join(&t.path)) else { continue };
         match audiopack::parse_toc(&bytes) {
             Ok(toc) => {
@@ -93,31 +112,63 @@ pub fn report(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream: Optio
     }
 
     // ---- WADs / textures ------------------------------------------------------------------------------
+    // The Ragnarök PC WADs are not the 2018 layout. Until the container is decoded, the first bytes of the
+    // WADs that matter (HUD, Mimir, the player) are the evidence the next version is written from.
     let wads: Vec<_> = files.iter().filter(|f| f.kind == scan::FileKind::Wad).collect();
     let _ = writeln!(o, "\n== WAD files: {}", wads.len());
-    for w in wads.iter().take(30) {
-        match wad::parse_file(&gow.join(&w.path)) {
-            Ok(p) => {
-                let mut types: BTreeMap<u16, usize> = BTreeMap::new();
-                for e in &p.entries {
-                    *types.entry(e.kind).or_default() += 1;
-                }
-                let names: Vec<_> = p.entries.iter().take(6).map(|e| e.name.as_str()).collect();
-                let _ = writeln!(o, "  {} {} entries{} types {:?} e.g. {:?}", w.path, p.entries.len(), if p.truncated { " (stopped early)" } else { "" }, types, names);
+    let mut parsed = 0usize;
+    for w in wads.iter().take(60) {
+        if late() {
+            break;
+        }
+        if let Ok(p) = wad::parse_file(&gow.join(&w.path)) {
+            parsed += 1;
+            let mut types: BTreeMap<u16, usize> = BTreeMap::new();
+            for e in &p.entries {
+                *types.entry(e.kind).or_default() += 1;
             }
-            Err(e) => {
-                let mut head = [0u8; 32];
-                if let Ok(mut f) = std::fs::File::open(gow.join(&w.path)) {
-                    use std::io::Read;
-                    let _ = f.read(&mut head);
-                }
-                let _ = writeln!(o, "  {} NOT PARSED as a GoW WAD: {e}; head {:02x?}", w.path, head);
+            let names: Vec<_> = p.entries.iter().take(6).map(|e| e.name.as_str()).collect();
+            let _ = writeln!(o, "  PARSED {} {} entries{} types {:?} e.g. {:?}", w.path, p.entries.len(), if p.truncated { " (stopped early)" } else { "" }, types, names);
+        }
+    }
+    let _ = writeln!(o, "  parsed as a 2018-layout WAD: {parsed} of the first {}", wads.len().min(60));
+    let interesting = ["r_ui", "hud", "mimir", "kratos", "player", "atreus", "weapon", "axe", "blades", "spear", "shield", "menu", "rune", "rage"];
+    let mut picked: Vec<&&scan::FileInfo> = wads
+        .iter()
+        .filter(|w| {
+            let n = w.path.to_lowercase();
+            interesting.iter().any(|k| n.contains(k))
+        })
+        .collect();
+    picked.truncate(40);
+    let _ = writeln!(o, "\n== WAD heads (first 96 bytes, hex) of {} likely WADs", picked.len());
+    for w in &picked {
+        if late() {
+            let _ = writeln!(o, "  (time budget reached)");
+            break;
+        }
+        let _ = writeln!(o, "  {} size {} head {}", w.path, w.size, hex_head(&gow.join(&w.path), 96));
+    }
+    let mut by_size: Vec<&&scan::FileInfo> = wads.iter().collect();
+    by_size.sort_by_key(|w| w.size);
+    let _ = writeln!(o, "\n== WAD heads of the 8 smallest and 4 largest");
+    for w in by_size.iter().take(8).chain(by_size.iter().rev().take(4)) {
+        if late() {
+            break;
+        }
+        let _ = writeln!(o, "  {} size {} head {}", w.path, w.size, hex_head(&gow.join(&w.path), 96));
+    }
+    // A second look inside one UI and one Mimir WAD: where the 4-byte values that look like counts and offsets sit.
+    for key in ["r_ui.wad", "r_mimir00.wad"] {
+        if let Some(w) = wads.iter().find(|w| w.path.to_lowercase().ends_with(key)) {
+            if !late() {
+                let _ = writeln!(o, "\n== {} first 512 bytes\n  {}", w.path, hex_head(&gow.join(&w.path), 512));
             }
         }
     }
 
     // ---- what the design sheets want ------------------------------------------------------------------------
-    let catalog = crate::catalog::build(gow, &files);
+    let catalog = crate::catalog::build_until(gow, &files, deadline);
     let _ = writeln!(o, "\n== Asset search against the catalog ({} named entries, {} notes)", catalog.entries.len(), catalog.notes.len());
     for n in catalog.notes.iter().take(20) {
         let _ = writeln!(o, "  note: {n}");
@@ -150,7 +201,7 @@ mod tests {
         std::fs::write(root.join("a/broken.wad"), vec![0xCDu8; 300]).unwrap();
         let reqs = vec![AssetReq { id: "hud_health_frame".into(), search: "hud,health".into(), converter: Converter::DdsToPng, output: "x.png".into() }];
         let text = report(&root, None, &reqs, None);
-        for needle in ["== Inventory", "== Audio packs: 1", "pcm", "== Wwise banks: 1", "events 1", "== WAD files: 2", "NOT PARSED", "hud_health_frame", "1 match"] {
+        for needle in ["== Inventory", "== Audio packs: 1", "pcm", "== Wwise banks: 1", "events 1", "== WAD files: 2", "PARSED a/ui.wad", "== WAD heads", "cdcdcdcd", "hud_health_frame", "1 match"] {
             assert!(text.contains(needle), "missing `{needle}` in:\n{text}");
         }
         let _ = std::fs::remove_dir_all(&root);

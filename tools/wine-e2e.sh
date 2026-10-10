@@ -8,11 +8,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SB="${SANDBOX:-/tmp/gowring-e2e}"
 WINE="${WINE:-/usr/lib/wine/wine64}"
 export WINEPREFIX="${WINEPREFIX:-/home/user/tools/wineprefix}" WINEDEBUG=-all
-rm -rf "$SB"; mkdir -p "$SB"/{managed/GowRing,managed/modengine2/modengine2/bin,er/Game,local}
+rm -rf "$SB"; mkdir -p "$SB"/{managed/GowRing/modengine2/modengine2/bin,er/Game,local}
 cp "$ROOT/target/x86_64-pc-windows-msvc/release/GowRing.exe" "$SB/managed/GowRing/"
-cp "$ROOT/tools/fakes/target/x86_64-pc-windows-msvc/release/modengine2_launcher.exe" "$SB/managed/modengine2/"
+cp "$ROOT/tools/fakes/target/x86_64-pc-windows-msvc/release/modengine2_launcher.exe" "$SB/managed/GowRing/modengine2/"
 cp "$ROOT/tools/fakes/target/x86_64-pc-windows-msvc/release/eldenring.exe" "$SB/er/Game/"
-echo "fake dll" > "$SB/managed/GowRing/gowring.dll"; echo "fake me2 dll" > "$SB/managed/modengine2/modengine2/bin/modengine2.dll"
+echo "fake dll" > "$SB/managed/GowRing/gowring.dll"; echo "fake me2 dll" > "$SB/managed/GowRing/modengine2/modengine2/bin/modengine2.dll"
 "$ROOT/target/debug/gow-fixture" "$SB/gow" >/dev/null
 W() { printf 'Z:%s' "$(echo "$1" | tr / '\\')"; }
 export GOWRING_ER="$(W $SB/er)" GOWRING_GOWR="$(W $SB/gow)" GOWRING_LOCAL="$(W $SB/local)" FAKE_LOG="$(W $SB/fake.log)"

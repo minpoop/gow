@@ -45,14 +45,13 @@ impl Ctx {
         })
     }
 
-    /// Folder holding `modengine2_launcher.exe`: Melty installs ModEngine2 beside the mashup folders
-    /// (`{managed}/modengine2`), but accept it next to us too.
+    /// Folder holding `modengine2_launcher.exe`. The package ships its own copy (Melty does not put a loader
+    /// in the mashup's folder when a mashup starts through its own launcher); fall back to one beside it.
     pub fn me2_dir(&self) -> Option<PathBuf> {
-        let mut candidates = Vec::new();
+        let mut candidates = vec![self.managed.join("modengine2")];
         if let Some(parent) = self.managed.parent() {
             candidates.push(parent.join("modengine2"));
         }
-        candidates.push(self.managed.join("modengine2"));
         candidates.into_iter().find(|d| d.join("modengine2_launcher.exe").exists())
     }
 

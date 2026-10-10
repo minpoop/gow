@@ -129,6 +129,16 @@ fn prepared(ctx: &Ctx) -> bool {
     std::fs::read_to_string(ctx.managed.join(".melty-ready")).map(|t| t.contains(config::READY_TOKEN)).unwrap_or(false)
 }
 
+/// PATH with `front` ahead of it: the game process inherits it, so the Visual C++ DLLs shipped next to
+/// ModEngine2 are found when modengine2.dll loads.
+fn path_with(front: &[std::path::PathBuf]) -> std::ffi::OsString {
+    let mut parts: Vec<std::path::PathBuf> = front.to_vec();
+    if let Some(old) = std::env::var_os("PATH") {
+        parts.extend(std::env::split_paths(&old));
+    }
+    std::env::join_paths(parts).unwrap_or_default()
+}
+
 fn play(ctx: &Ctx) -> Result<()> {
     let er = ctx.er.as_ref().context("Elden Ring was not found (GOWRING_ER is not set)")?;
     let exe = er.join("Game").join("eldenring.exe");
@@ -170,7 +180,8 @@ fn play(ctx: &Ctx) -> Result<()> {
         .env("GOWRING_CACHE", &ctx.cache)
         .env("GOWRING_LOCAL", &ctx.local)
         .env("GOWRING_CHANNEL", CHANNEL)
-        .env("GOWRING_SAVE", config::SAVE_FILE);
+        .env("GOWRING_SAVE", config::SAVE_FILE)
+        .env("PATH", path_with(&[me2.join("modengine2").join("bin"), me2.clone()]));
     ctx.log(&format!("play: starting {} -t er -p {} -c {}", launcher.display(), exe.display(), cfg.display()));
     // ModEngine2's launcher returns as soon as it has created the game process. Its output goes to a file
     // (never a pipe: a game that inherited a pipe would keep us waiting until it exits).
@@ -185,6 +196,7 @@ fn play(ctx: &Ctx) -> Result<()> {
     if !status.success() {
         bail!("ModEngine2 launcher exited with {status} ({})", launcher_output.trim());
     }
+    background_diagnose(ctx);
     // Stay alive while the game runs so Melty can show it as playing.
     let exe_name = "eldenring.exe";
     let appeared = proc::wait_for(exe_name, std::time::Duration::from_secs(90));
@@ -196,6 +208,35 @@ fn play(ctx: &Ctx) -> Result<()> {
         bail!("Elden Ring did not start. See {}", ctx.local.join("logs").display());
     }
     Ok(())
+}
+
+/// While the game loads, write the same report `--diagnose` writes (once per version) so a tester only has to
+/// send a file. It stops reading after two minutes and can never affect the game.
+fn background_diagnose(ctx: &Ctx) {
+    let Some(gow) = ctx.gow.clone() else { return };
+    let path = ctx.local.join("diagnose.txt");
+    let mark = format!("GowRing diagnose — {}", config::VERSION);
+    if std::fs::read_to_string(&path).map(|t| t.starts_with(&mark) && t.contains("== WAD heads")).unwrap_or(false) {
+        return;
+    }
+    let c = ctx.clone();
+    let _ = std::thread::Builder::new().name("diagnose".into()).spawn(move || {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let vg = tools(&c, 60).vgmstream;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            gowring_gow::diagnose::report_until(&gow, c.er.as_deref(), &requests(), vg.as_deref(), Some(deadline))
+        }));
+        match r {
+            Ok(text) => {
+                let _ = std::fs::create_dir_all(&c.local);
+                match std::fs::write(c.local.join("diagnose.txt"), text) {
+                    Ok(()) => c.log("diagnose: wrote diagnose.txt"),
+                    Err(e) => c.log(&format!("diagnose: could not write the report: {e}")),
+                }
+            }
+            Err(_) => c.log("diagnose: the report panicked"),
+        }
+    });
 }
 
 fn diagnose(ctx: &Ctx) -> Result<()> {

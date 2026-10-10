@@ -17,16 +17,11 @@
    "id": "main",
    "kind": "main",
    "label": "Kratos in the Lands Between",
-   "fileName": "GowRing-0.1.1.zip",
+   "fileName": "GowRing-0.1.2.zip",
    "required": true
   }
  ],
- "requirements": [
-  {
-   "kind": "loader",
-   "id": "modengine2"
-  }
- ],
+ "requirements": [],
  "mappings": [
   {
    "component": "main",
@@ -60,7 +55,7 @@
   },
   "done": {
    "file": "{managed}/GowRing/.melty-ready",
-   "contains": "gowring-0.1.1-prep-1"
+   "contains": "gowring-0.1.2-prep-1"
   },
   "failure": {
    "file": "{managed}/GowRing/.melty-failure.txt"

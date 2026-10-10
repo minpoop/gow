@@ -1,13 +1,15 @@
 """Assemble dist/GowRing-<version>.zip (what Melty installs into {managed}) and dist/package.json.
 
 Contents: GowRing.exe, gowring.dll, tools/ (vgmstream-cli + its DLLs, ISC), assets_map.json, mod/.keep, README + third-party notices.
-ModEngine2 is NOT included: Melty installs it. No game files are included, ever.
+ModEngine2 (official release, MIT) is bundled. No game files are included, ever.
 """
-import hashlib, json, os, shutil, sys, tempfile, urllib.request, zipfile
+import hashlib, json, os, shutil, subprocess, sys, tempfile, urllib.request, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGET = "x86_64-pc-windows-msvc"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
+ME2_URL = "https://github.com/soulsmods/ModEngine2/releases/download/release-2.1.0/ModEngine-2.1.0.0-win64.zip"
+ME2_LICENSE_URL = "https://raw.githubusercontent.com/soulsmods/ModEngine2/main/LICENSE-MIT"
 VGM_URL = "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-win64.zip"
 CACHE = os.path.join(ROOT, "target", "package-cache")
 DIST = os.path.join(ROOT, "dist")
@@ -23,6 +25,58 @@ def vgmstream():
     with zipfile.ZipFile(z) as f:
         f.extractall(out)
     return out
+
+def modengine2():
+    """The official ModEngine2 release (MIT). Only what starting Elden Ring needs: no debug-menu assets, no headers,
+    and not the bundled ScyllaHide anti-debug tool (this mod never touches anti-cheat or anti-debug)."""
+    os.makedirs(CACHE, exist_ok=True)
+    z = os.path.join(CACHE, "ModEngine-2.1.0.0-win64.zip")
+    if not os.path.exists(z):
+        print("downloading ModEngine2 from its official release page...")
+        urllib.request.urlretrieve(ME2_URL, z)
+    out = os.path.join(CACHE, "me2")
+    shutil.rmtree(out, ignore_errors=True)
+    with zipfile.ZipFile(z) as f:
+        f.extractall(out)
+    root = os.path.join(out, "ModEngine-2.1.0.0-win64")
+    lic = os.path.join(CACHE, "ModEngine2-LICENSE-MIT.txt")
+    if not os.path.exists(lic):
+        try:
+            urllib.request.urlretrieve(ME2_LICENSE_URL, lic)
+        except Exception:
+            with open(lic, "w") as f:
+                f.write("ModEngine2 is MIT licensed. See https://github.com/soulsmods/ModEngine2/blob/main/LICENSE-MIT\n")
+    return root, lic
+
+VCR_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+VCR_DLLS = ["concrt140", "msvcp140", "msvcp140_1", "msvcp140_2", "msvcp140_atomic_wait", "msvcp140_codecvt_ids", "vcruntime140", "vcruntime140_1"]
+
+def vc_runtime():
+    """The Visual C++ runtime DLLs ModEngine2 is built against, taken from Microsoft's own redistributable
+    (app-local deployment is allowed). Not every PC has the newest runtime, and without these ModEngine2 does not start."""
+    os.makedirs(CACHE, exist_ok=True)
+    exe = os.path.join(CACHE, "vc_redist.x64.exe")
+    if not os.path.exists(exe):
+        print("downloading the Visual C++ redistributable from Microsoft...")
+        urllib.request.urlretrieve(VCR_URL, exe)
+    out = os.path.join(CACHE, "vcr")
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(out)
+    subprocess.run(["cabextract", "-s", "-q", "-d", out, exe], check=True)
+    found = {}
+    for cab in sorted(os.listdir(out)):
+        p = os.path.join(out, cab)
+        r = subprocess.run(["cabextract", "-q", "-d", os.path.join(out, "dll_" + cab), p], capture_output=True)
+        d = os.path.join(out, "dll_" + cab)
+        if os.path.isdir(d):
+            for f in os.listdir(d):
+                if f.endswith(".dll_amd64"):
+                    found[f[: -len("_amd64")]] = os.path.join(d, f)
+    missing = [n for n in VCR_DLLS if n + ".dll" not in found]
+    if missing:
+        sys.exit(f"the redistributable did not contain {missing}")
+    sha = hashlib.sha256(open(exe, "rb").read()).hexdigest()
+    return {n + ".dll": found[n + ".dll"] for n in VCR_DLLS}, sha
 
 def main():
     launcher = os.path.join(ROOT, "target", TARGET, "release", "GowRing.exe")
@@ -45,6 +99,18 @@ def main():
         if name.lower().endswith(".dll") or name == "vgmstream-cli.exe":
             put(os.path.join(vg, name), f"tools/{name}")
     put(os.path.join(vg, "COPYING"), "tools/vgmstream-COPYING.txt")
+    me2, me2_lic = modengine2()
+    vcr, vcr_sha = vc_runtime()
+    for name, src in sorted(vcr.items()):
+        # Beside the launcher, and beside modengine2.dll (the game process also gets this folder on its PATH).
+        put(src, f"modengine2/{name}")
+        put(src, f"modengine2/modengine2/bin/{name}")
+    put(os.path.join(me2, "modengine2_launcher.exe"), "modengine2/modengine2_launcher.exe")
+    put(os.path.join(me2, "README.txt"), "modengine2/README.txt")
+    put(me2_lic, "modengine2/LICENSE-MIT.txt")
+    for sub in ("bin", "crashpad"):
+        for name in sorted(os.listdir(os.path.join(me2, "modengine2", sub))):
+            put(os.path.join(me2, "modengine2", sub, name), f"modengine2/modengine2/{sub}/{name}")
     put(os.path.join(ROOT, "README.md"), "README.md")
     put(os.path.join(ROOT, "docs", "STATUS.md"), "STATUS.md")
     with open(os.path.join(stage, "assets_map.json"), "w") as f:
@@ -56,13 +122,15 @@ def main():
         f.write("""Third-party software in this package
 =====================================
 * vgmstream (tools/) - ISC licence, see tools/vgmstream-COPYING.txt. Converts Wwise audio from your own God of War Ragnarok install. https://github.com/vgmstream/vgmstream
+* ModEngine2 (modengine2/) - MIT licence, see modengine2/LICENSE-MIT.txt. Loads gowring.dll into Elden Ring offline. https://github.com/soulsmods/ModEngine2
+* Microsoft Visual C++ runtime (modengine2/*.dll) - redistributable DLLs from Microsoft's vc_redist.x64.exe (sha256 %s), shipped app-local because ModEngine2 needs them and not every PC has the current version. https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files
 * eldenring / fromsoftware-rs (compiled into gowring.dll) - MIT OR Apache-2.0. https://github.com/vswarte/eldenring-rs
 * hudhook, imgui-rs, retour, rodio, png, serde - MIT/Apache-2.0 (compiled into gowring.dll / GowRing.exe)
 * The Ragnarok audio-pack layout follows gowr_soundtool by iArtorias (MIT). https://github.com/iArtorias/gowr_soundtool
 
-This package contains no files from Elden Ring or God of War Ragnarok. ModEngine2 (MIT) is installed separately by Melty.
+This package contains no files from Elden Ring or God of War Ragnarok. ModEngine2 (MIT) is bundled unmodified from its official release.
 Built with AI (Claude).
-""")
+""".replace("%s", vcr_sha))
     os.makedirs(DIST, exist_ok=True)
     zname = f"GowRing-{VERSION}.zip"
     zpath = os.path.join(DIST, zname)

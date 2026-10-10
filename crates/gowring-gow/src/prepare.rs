@@ -120,6 +120,11 @@ pub fn prepare(gow: &Path, reqs: &[AssetReq], overrides: &serde_json::Value, cac
         catalog_entries: catalog.entries.len(),
         notes: {
             let mut n = catalog.notes.clone();
+            if n.len() > 40 {
+                let more = n.len() - 40;
+                n.truncate(40);
+                n.push(format!("... and {more} more like these"));
+            }
             n.push(format!("scanned {} files in {:.1}s{}", files.len(), started.elapsed().as_secs_f32(), if cut { " (stopped at the time budget)" } else { "" }));
             n
         },

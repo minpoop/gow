@@ -53,3 +53,9 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - 2026-10-10 Resubmitted release 0.1.0 (draft, replaces the earlier upload): sha256 8ae77c00…; listing text updated.
   Open: real gameplay screenshot (needs the player to run the Melty Test build), real GoW asset mapping (needs
   `--diagnose` from a real install), first in-game run of every `unverified` hook. See docs/STATUS.md.
+
+## 0.1.2 — why the game never appeared (2026-10-10)
+- Evidence: the player's `launcher.log` from test ad1f7313 showed `ModEngine2 is not installed` — no `modengine2_launcher.exe` in `{managed}` or its parent. Melty installs ModEngine2 itself only for a mod that uses Melty's own game launch; a mod with an exe launcher must carry its loader (ER Mario and Minecraft Ring bundle me3).
+- Fix: ship the official ModEngine2 2.1.0 (MIT) in `GowRing/modengine2/` (no ScyllaHide, no debug assets), plus the Microsoft VC++ runtime DLLs beside it (Melty's package check flagged msvcp140_atomic_wait.dll etc.; taken from Microsoft's vc_redist.x64.exe, sha256 in THIRD-PARTY.txt). The launcher also puts the ModEngine2 folders on the game's PATH.
+- Also: setup notes capped at 40 lines; `diagnose.txt` is written in the background while the game loads, now including hex heads of the Ragnarök WADs (the PC layout is not the 2018 one: `exec/wad/pc_le/` holds 1654 WADs, e.g. `r_ui.wad`, `r_mimir00.wad`).
+- Next: read `%LOCALAPPDATA%\GowRing\diagnose.txt` + `logs\launcher.log` + `logs\me2-launcher.log` from the next test; decode the WAD container from the hex heads.
