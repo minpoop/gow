@@ -7,7 +7,7 @@ import hashlib, json, os, shutil, sys, tempfile, urllib.request, zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGET = "x86_64-pc-windows-msvc"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 VGM_URL = "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-win64.zip"
 CACHE = os.path.join(ROOT, "target", "package-cache")
 DIST = os.path.join(ROOT, "dist")
@@ -30,7 +30,10 @@ def main():
     for p in (launcher, dll):
         if not os.path.exists(p):
             sys.exit(f"missing build output: {p}")
-    stage = tempfile.mkdtemp(prefix="gowring-stage-")
+    stage_root = tempfile.mkdtemp(prefix="gowring-stage-")
+    # Everything lives in GowRing/ so it cannot collide with other Elden Ring mashups that share {managed}.
+    stage = os.path.join(stage_root, "GowRing")
+    os.makedirs(stage)
     def put(src, dst):
         d = os.path.join(stage, dst)
         os.makedirs(os.path.dirname(d), exist_ok=True)
@@ -67,11 +70,11 @@ Built with AI (Claude).
         os.remove(zpath)
     entries = []
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-        for base, dirs, files in os.walk(stage):
+        for base, dirs, files in os.walk(stage_root):
             dirs.sort()
             for fn in sorted(files):
                 full = os.path.join(base, fn)
-                rel = os.path.relpath(full, stage).replace(os.sep, "/")
+                rel = os.path.relpath(full, stage_root).replace(os.sep, "/")
                 info = zipfile.ZipInfo(rel, date_time=(2026, 10, 10, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.external_attr = 0o644 << 16
@@ -81,7 +84,7 @@ Built with AI (Claude).
     sha = hashlib.sha256(open(zpath, "rb").read()).hexdigest()
     meta = {"fileName": zname, "size": os.path.getsize(zpath), "sha256": sha, "entries": entries}
     json.dump(meta, open(os.path.join(DIST, "package.json"), "w"), indent=1)
-    shutil.rmtree(stage, ignore_errors=True)
+    shutil.rmtree(stage_root, ignore_errors=True)
     print(f"{zname}: {meta['size']} bytes, sha256 {sha}")
     for e in entries:
         print(f"  {e['size']:>10}  {e['path']}")

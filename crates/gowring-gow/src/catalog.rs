@@ -43,9 +43,18 @@ pub struct Catalog {
 const MAX_WEM_ENTRIES: usize = 300_000;
 
 pub fn build(root: &Path, files: &[FileInfo]) -> Catalog {
+    build_until(root, files, None)
+}
+
+/// Like [`build`] but stops reading containers at `deadline` (noted in `Catalog::notes`).
+pub fn build_until(root: &Path, files: &[FileInfo], deadline: Option<std::time::Instant>) -> Catalog {
     let mut c = Catalog::default();
     let mut wem_count = 0usize;
     for f in files {
+        if deadline.map(|d| std::time::Instant::now() > d).unwrap_or(false) {
+            c.notes.push("time budget reached: the remaining containers were not read".into());
+            break;
+        }
         let full = root.join(&f.path);
         match f.kind {
             FileKind::Wad => match wad::parse_file(&full) {

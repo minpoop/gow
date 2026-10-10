@@ -52,6 +52,9 @@ pub fn run(hmodule: usize) {
     }));
     crate::glog!("boot", "GowRing {} ({}) loading; home={} cache={}", env!("CARGO_PKG_VERSION"), p.channel, p.home.display(), p.cache.display());
 
+    crate::testmode::init();
+    crate::testmode::spawn_watcher();
+
     // ---- boot_guard ---------------------------------------------------------------------------------
     if !p.from_launcher {
         crate::glog!("boot_guard", "ABORT: not started by GowRing.exe (GOWRING_HOME missing). Use Play in Melty.");
@@ -77,9 +80,18 @@ pub fn run(hmodule: usize) {
     // overlay must never take the rules layer down with it.
     let hooks = catch_unwind(AssertUnwindSafe(|| Hudhook::build(hmodule, shared.clone(), store.clone())));
     match hooks {
-        Ok(Ok(())) => crate::glog!("overlay", "D3D12 hook applied"),
-        Ok(Err(e)) => crate::glog!("overlay", "FAILED to hook D3D12: {e} (no HUD this session)"),
-        Err(_) => crate::glog!("overlay", "FAILED to hook D3D12 (hudhook panicked; no HUD this session)"),
+        Ok(Ok(())) => {
+            crate::glog!("overlay", "D3D12 hook applied");
+            crate::testmode::OVERLAY_OK.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(Err(e)) => {
+            crate::glog!("overlay", "FAILED to hook D3D12: {e} (no HUD this session)");
+            crate::testmode::overlay_failed(&format!("hudhook could not hook D3D12: {e}"));
+        }
+        Err(_) => {
+            crate::glog!("overlay", "FAILED to hook D3D12 (hudhook panicked; no HUD this session)");
+            crate::testmode::overlay_failed("hudhook panicked while hooking D3D12");
+        }
     }
 
     // ---- boot_gate: wait for the task system, then register the per-frame tasks ---------------------------------------

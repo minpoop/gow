@@ -13,6 +13,7 @@ mod params;
 mod paths;
 mod runtime;
 mod savehook;
+mod testmode;
 
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::DisableThreadLibraryCalls;

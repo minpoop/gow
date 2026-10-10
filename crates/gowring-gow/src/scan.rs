@@ -59,9 +59,18 @@ pub fn classify(path: &Path, head: &[u8]) -> FileKind {
 const MAX_FILES: usize = 400_000;
 
 pub fn walk(root: &Path, max_depth: usize) -> Vec<FileInfo> {
-    let mut out = Vec::new();
+    walk_until(root, max_depth, None).0
+}
+
+/// Like [`walk`] but gives up at `deadline`; the bool is true when it stopped early.
+pub fn walk_until(root: &Path, max_depth: usize, deadline: Option<std::time::Instant>) -> (Vec<FileInfo>, bool) {
+    let mut out: Vec<FileInfo> = Vec::new();
     let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
     while let Some((dir, depth)) = stack.pop() {
+        if deadline.map(|d| std::time::Instant::now() > d).unwrap_or(false) {
+            out.sort_by(|a, b| a.path.cmp(&b.path));
+            return (out, true);
+        }
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         let mut entries: Vec<_> = rd.filter_map(|e| e.ok()).collect();
         entries.sort_by_key(|e| e.file_name());
@@ -81,12 +90,13 @@ pub fn walk(root: &Path, max_depth: usize) -> Vec<FileInfo> {
             let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().replace('\\', "/");
             out.push(FileInfo { path: rel, size: md.len(), kind: classify(&path, &head) });
             if out.len() >= MAX_FILES {
-                return out;
+                out.sort_by(|a, b| a.path.cmp(&b.path));
+                return (out, true);
             }
         }
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
-    out
+    (out, false)
 }
 
 #[derive(Debug, Default, Serialize)]

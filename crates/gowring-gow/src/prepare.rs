@@ -54,6 +54,8 @@ impl PrepareReport {
 #[derive(Default, Clone)]
 pub struct Tools {
     pub vgmstream: Option<PathBuf>,
+    /// Wall-clock budget for scanning and cataloguing the install (None = unlimited).
+    pub budget: Option<std::time::Duration>,
 }
 
 fn read_range(path: &Path, offset: u64, size: u64) -> Result<Vec<u8>> {
@@ -110,11 +112,17 @@ pub fn prepare(gow: &Path, reqs: &[AssetReq], overrides: &serde_json::Value, cac
         bail!("God of War Ragnarök folder not found: {}", gow.display());
     }
     std::fs::create_dir_all(cache)?;
-    let files = scan::walk(gow, 8);
-    let catalog: Catalog = crate::catalog::build(gow, &files);
+    let started = std::time::Instant::now();
+    let deadline = tools.budget.map(|b| started + b);
+    let (files, cut) = scan::walk_until(gow, 8, deadline.map(|d| started + (d - started) / 2));
+    let catalog: Catalog = crate::catalog::build_until(gow, &files, deadline);
     let mut report = PrepareReport {
         catalog_entries: catalog.entries.len(),
-        notes: catalog.notes.clone(),
+        notes: {
+            let mut n = catalog.notes.clone();
+            n.push(format!("scanned {} files in {:.1}s{}", files.len(), started.elapsed().as_secs_f32(), if cut { " (stopped at the time budget)" } else { "" }));
+            n
+        },
         oodle: crate::oodle::find(gow).map(|p| p.to_string_lossy().into_owned()),
         vgmstream: tools.vgmstream.as_ref().map(|p| p.to_string_lossy().into_owned()),
         ..Default::default()

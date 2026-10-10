@@ -89,6 +89,7 @@ impl Runtime {
                     crate::glog!("params", "{n}");
                 }
                 self.carriers = Some(c);
+                crate::testmode::PARAMS_OK.store(true, std::sync::atomic::Ordering::SeqCst);
                 true
             }
             Err(e) => {

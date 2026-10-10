@@ -1,5 +1,8 @@
-First alpha (not yet played in the real games — see STATUS.md in the mod folder).
+Second alpha. Fixes the first test run, where the game never appeared:
 
-- Rules layer: Leviathan Axe (throw, stick, recall), Guardian Shield (block, perfect parry), Blades of Chaos, Draupnir Spear (three spears, detonate), light/heavy runic attacks with cooldowns, Spartan Rage, stun meters and finishers.
-- Ragnarök-style HUD layout, over-the-shoulder camera, Mimir's timing and subtitles, a separate save file (your own saves are never opened; a backup is kept).
-- Converter that reads HUD art and sound from your own God of War Ragnarök install, plus `GowRing.exe --diagnose` to report what it finds.
+- The launcher now logs every step (and ModEngine2's own output) to `%LOCALAPPDATA%\GowRing\logs\launcher.log`, finds ModEngine2 wherever Melty put it, and can no longer be held up by a slow scan of your God of War Ragnarök folder (the setup step is time-boxed).
+- The launcher and mod no longer need the Visual C++ runtime installed.
+- The package now lives in its own `GowRing/` folder so it cannot clash with other Elden Ring mashups.
+- The mod reports its own start-up checks to Melty's test harness (loaded, save redirected, params patched, overlay hooked).
+
+Still an alpha that has never run inside the real games — see STATUS.md.

@@ -9,6 +9,7 @@ pub const READY_TOKEN: &str = concat!("gowring-", env!("CARGO_PKG_VERSION"), "-p
 /// The mashup's own save file; the DLL redirects Elden Ring to it.
 pub const SAVE_FILE: &str = "ER0000.gowring.sl2";
 
+#[derive(Clone)]
 pub struct Ctx {
     /// Folder GowRing.exe lives in (Melty's `{managed}`).
     pub managed: PathBuf,
@@ -42,6 +43,36 @@ impl Ctx {
             er: arg_value(args, "--er").or_else(|| env_path("GOWRING_ER")),
             gow: arg_value(args, "--gow").or_else(|| env_path("GOWRING_GOWR")),
         })
+    }
+
+    /// Folder holding `modengine2_launcher.exe`: Melty installs ModEngine2 beside the mashup folders
+    /// (`{managed}/modengine2`), but accept it next to us too.
+    pub fn me2_dir(&self) -> Option<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Some(parent) = self.managed.parent() {
+            candidates.push(parent.join("modengine2"));
+        }
+        candidates.push(self.managed.join("modengine2"));
+        candidates.into_iter().find(|d| d.join("modengine2_launcher.exe").exists())
+    }
+
+    /// File names directly inside `dir` (for the log: what is actually installed where).
+    pub fn listing(dir: &std::path::Path) -> String {
+        match std::fs::read_dir(dir) {
+            Ok(rd) => {
+                let mut names: Vec<String> = rd
+                    .filter_map(|e| e.ok())
+                    .map(|e| {
+                        let n = e.file_name().to_string_lossy().into_owned();
+                        if e.path().is_dir() { format!("{n}/") } else { n }
+                    })
+                    .collect();
+                names.sort();
+                names.truncate(60);
+                names.join(", ")
+            }
+            Err(e) => format!("(cannot read: {e})"),
+        }
     }
 
     pub fn log(&self, line: &str) {
