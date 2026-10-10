@@ -79,6 +79,10 @@ impl Runtime {
             return true;
         }
         self.params_tried += 1;
+        // After many failures (e.g. the param table is never ready) slow down to one try a second.
+        if self.params_tried > 600 && self.params_tried % 60 != 0 {
+            return false;
+        }
         match crate::params::apply() {
             Ok(c) => {
                 for n in &c.notes {

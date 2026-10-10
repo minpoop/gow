@@ -40,7 +40,16 @@ pub fn run(hmodule: usize) {
     let p = paths::init(module_dir(hmodule));
     crate::log::init(&p.local.join("logs"));
     // Every panic (ours or a dependency's) lands in the log with its location.
-    std::panic::set_hook(Box::new(|info| crate::glog!("panic", "{info}")));
+    std::panic::set_hook(Box::new(|info| {
+        // a per-frame panic must not flood the log
+        static COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if n < 60 {
+            crate::glog!("panic", "{info}");
+        } else if n == 60 {
+            crate::glog!("panic", "(further panics are not logged)");
+        }
+    }));
     crate::glog!("boot", "GowRing {} ({}) loading; home={} cache={}", env!("CARGO_PKG_VERSION"), p.channel, p.home.display(), p.cache.display());
 
     // ---- boot_guard ---------------------------------------------------------------------------------

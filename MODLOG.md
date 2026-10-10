@@ -50,3 +50,6 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
   Melty draft created: modId `d005edc0-ea0c-4b98-9df5-99ea3834a624` (githubRepo minpoop/gow, remix OFF, licence unset: the
   author has not chosen). Release 0.1.0 submitted as DRAFT (sha256 5d4d19a1…), one_click_check = yes.
   Not published: no real gameplay screenshot exists and nothing has run in Elden Ring.
+- 2026-10-10 Resubmitted release 0.1.0 (draft, replaces the earlier upload): sha256 8ae77c00…; listing text updated.
+  Open: real gameplay screenshot (needs the player to run the Melty Test build), real GoW asset mapping (needs
+  `--diagnose` from a real install), first in-game run of every `unverified` hook. See docs/STATUS.md.
