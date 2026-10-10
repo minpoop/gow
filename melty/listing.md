@@ -30,6 +30,7 @@ Step into the Lands Between as post-game Kratos. A new character on this mashup'
 ## Good to know (alpha)
 - It plays on its **own save file** — your Elden Ring saves are not used, and a backup of them is kept anyway.
 - Kratos' *moves* are Elden Ring's own animations for now, and his weapons and body use Elden Ring's models: Ragnarök's PC animation and model formats are not readable yet. Runics and finishers do their damage and effects without a dedicated animation.
+- The HUD *layout* and Mimir's timing are in; Ragnarök's own HUD art and Mimir's recorded lines appear only where the converter can find them in your install, and flat stand-in shapes are drawn (with an "ALPHA" note on screen) where it cannot yet.
 - This first build has not yet been played in the real games; if something is missing or wrong, `STATUS.md` in the mod folder lists exactly what, and `%LOCALAPPDATA%\GowRing\logs\gowring.log` says what happened.
 
 *Built with AI (Claude). Unofficial fan project; Elden Ring and God of War Ragnarök belong to their owners.*

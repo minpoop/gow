@@ -29,6 +29,19 @@ pub struct Runtime {
     healed_on_entry: bool,
     pub camera_req: Arc<Mutex<gowring_core::CameraRequest>>,
     banner: String,
+    stats: Stats,
+}
+
+#[derive(Default, Debug)]
+struct Stats {
+    frames: u64,
+    commands: u64,
+    damage_orders: u64,
+    sfx: u64,
+    voices: u64,
+    masks: u64,
+    dealt: u64,
+    taken: u64,
 }
 
 impl Runtime {
@@ -51,6 +64,7 @@ impl Runtime {
             healed_on_entry: false,
             camera_req,
             banner,
+            stats: Stats::default(),
         }
     }
 
@@ -58,8 +72,9 @@ impl Runtime {
         self.carriers.is_some()
     }
 
-    /// Patch the params as soon as the repository exists. Returns false while still waiting.
-    fn ensure_params(&mut self) -> bool {
+    /// Patch the params as soon as the repository exists (called every frame from an early task, so the
+    /// ten starting classes are already Kratos when the player reaches character creation).
+    pub fn ensure_params(&mut self) -> bool {
         if self.carriers.is_some() {
             return true;
         }
@@ -87,7 +102,8 @@ impl Runtime {
             crate::log::once("gate", "boot_gate", "waiting: no redirected save open seen yet; the mod is inert");
             return;
         }
-        if !self.ensure_params() {
+        if self.carriers.is_none() {
+            crate::log::once("params-wait", "params", "waiting for the param patch before running the rules");
             return;
         }
         let now = self.start.elapsed().as_secs_f64();
@@ -109,15 +125,39 @@ impl Runtime {
         for l in &out.logs {
             crate::glog!("rules", "{l}");
         }
+        let out_len = out.commands.len() as u64;
+        for c in &out.commands {
+            match c {
+                Command::Damage { .. } => self.stats.damage_orders += 1,
+                Command::Sfx(_) => self.stats.sfx += 1,
+                Command::Voice { .. } => self.stats.voices += 1,
+                Command::Mask(_) => self.stats.masks += 1,
+                _ => {}
+            }
+        }
+        self.stats.dealt += frame.damage.iter().filter(|d| matches!(d, gowring_core::DamageEvent::Dealt { .. })).count() as u64;
+        self.stats.taken += frame.damage.iter().filter(|d| matches!(d, gowring_core::DamageEvent::Taken { .. })).count() as u64;
         self.bridge.apply(&out.commands, now, self.audio.as_ref(), &self.cache);
         self.ray_results = self.bridge.cast(&out.commands);
         self.publish(&frame, out.hud, out.camera, out.projectiles);
         self.ticks += 1;
+        self.stats.frames += 1;
+        self.stats.commands += out_len;
         if self.ticks == 1 {
             crate::glog!("rules_tick", "first tick: player hp {}/{} at ({:.1},{:.1},{:.1}); {} hostile characters", frame.player.hp, frame.player.max_hp, frame.player.pos.x, frame.player.pos.y, frame.player.pos.z, frame.enemies.len());
         }
         if self.ticks % 1800 == 0 {
-            crate::glog!("rules_tick", "alive: {} ticks, {} hostiles, hp {}/{}", self.ticks, frame.enemies.len(), frame.player.hp, frame.player.max_hp);
+            crate::glog!("rules_tick", "alive: {} ticks, {} hostiles, hp {}/{} | {:?}", self.ticks, frame.enemies.len(), frame.player.hp, frame.player.max_hp, self.stats);
+        }
+        // one line of evidence per kind of input/damage the first time it is seen
+        if !frame.actions_pressed.is_empty() {
+            crate::log::once_u64("act", frame.actions_pressed.0, "action_read", &format!("ER action bits pressed: {:#x} (down {:#x})", frame.actions_pressed.0, frame.actions_down.0));
+        }
+        for d in &frame.damage {
+            match d {
+                gowring_core::DamageEvent::Dealt { enemy, amount } => crate::log::once("first-dealt", "hit_observe", &format!("first damage dealt: {amount} to {enemy:#x}")),
+                gowring_core::DamageEvent::Taken { amount, blocked, attacker } => crate::log::once("first-taken", "hit_observe", &format!("first damage taken: {amount} blocked={blocked} attacker={attacker:?}")),
+            }
         }
     }
 
@@ -146,6 +186,7 @@ impl Runtime {
         }
         if let Ok(fe) = unsafe { CSFeManImp::instance_mut() } {
             fe.hud_state = CSFeManHudState::HideAll;
+            crate::log::once("hud-hidden", "er_hud_hide", "Elden Ring's own HUD hidden (hud_state = HideAll)");
         }
     }
 

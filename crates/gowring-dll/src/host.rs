@@ -44,6 +44,22 @@ fn set_er_bits(a: &mut ChrActions, bits: ActionBits, value: bool) {
        set_r3 => ErAction::R3, set_l3 => ErAction::L3, set_guard => ErAction::Guard, set_change_style_r => ErAction::ChangeStyleR, set_change_style_l => ErAction::ChangeStyleL);
 }
 
+/// The eight ways a yaw angle might map to a ground direction; the right one is picked at run time
+/// by watching which mapping agrees with where the character actually walks.
+fn facing_candidate(mode: usize, yaw: f32) -> Vec3 {
+    let (s, c) = (yaw.sin(), yaw.cos());
+    match mode {
+        0 => Vec3::new(s, 0.0, c),
+        1 => Vec3::new(-s, 0.0, c),
+        2 => Vec3::new(s, 0.0, -c),
+        3 => Vec3::new(-s, 0.0, -c),
+        4 => Vec3::new(c, 0.0, s),
+        5 => Vec3::new(-c, 0.0, s),
+        6 => Vec3::new(c, 0.0, -s),
+        _ => Vec3::new(-c, 0.0, -s),
+    }
+}
+
 struct Frozen {
     until: f64,
     saved_speed: f32,
@@ -68,6 +84,12 @@ pub struct Bridge {
     /// HP we took off enemies ourselves outside the engine's ledger (burn ticks), so it is not read back as melee.
     own_pending: HashMap<u64, i32>,
     my_mask: ActionBits,
+    /// Facing calibration: candidate yaw→direction mappings scored against real movement.
+    prev_pos: Option<Vec3>,
+    face_score: [f32; 8],
+    face_samples: u32,
+    face_mode: usize,
+    last_team_report: f64,
     pub scan_range: f32,
     pub max_enemies: usize,
 }
@@ -86,6 +108,11 @@ impl Bridge {
             burning: Vec::new(),
             own_pending: HashMap::new(),
             my_mask: ActionBits::NONE,
+            prev_pos: None,
+            face_score: [0.0; 8],
+            face_samples: 0,
+            face_mode: 0,
+            last_team_report: f64::NEG_INFINITY,
             scan_range,
             max_enemies: 96,
         }
@@ -103,7 +130,28 @@ impl Bridge {
         let HavokPosition(px, py, pz, _) = phys.position;
         let ppos = Vec3::new(px, py, pz);
         let yaw = phys.orientation.to_euler_angles().1;
-        let facing = Vec3::new(yaw.sin(), 0.0, yaw.cos());
+        if let Some(prev) = self.prev_pos {
+            let step = (ppos - prev).flat();
+            let speed = step.len() / dt.max(0.001);
+            if speed > 1.8 && speed < 12.0 && self.face_samples < 400 {
+                let dir = step.normalized();
+                for m in 0..8 {
+                    self.face_score[m] += facing_candidate(m, yaw).dot(dir);
+                }
+                self.face_samples += 1;
+                if self.face_samples == 40 || self.face_samples == 400 {
+                    let best = (0..8).max_by(|a, b| self.face_score[*a].partial_cmp(&self.face_score[*b]).unwrap()).unwrap_or(0);
+                    if best != self.face_mode {
+                        crate::glog!("player_state", "facing mapping changed {} -> {best} after {} samples (scores {:?})", self.face_mode, self.face_samples, self.face_score.map(|v| (v / self.face_samples as f32 * 100.0).round() / 100.0));
+                    } else {
+                        crate::glog!("player_state", "facing mapping {best} confirmed after {} samples", self.face_samples);
+                    }
+                    self.face_mode = best;
+                }
+            }
+        }
+        self.prev_pos = Some(ppos);
+        let facing = facing_candidate(self.face_mode, yaw);
         let (hp, max_hp) = (data.hp, data.max_hp);
         let alive = hp > 0 && !chr.chr_flags1c5.death_flag();
         let player_handle = chr.field_ins_handle;
@@ -149,6 +197,15 @@ impl Bridge {
             .map(|fe| fe.boss_health_displays.iter().filter(|b| !b.field_ins_handle.is_empty()).map(|b| id_of(&b.field_ins_handle)).collect())
             .unwrap_or_default();
         let mut teams: HashMap<u8, usize> = HashMap::new();
+        // Whatever the player locks on to is an enemy: learn its team.
+        let locked = player.locked_on_enemy;
+        if !locked.is_empty() {
+            if let Some(h) = wcm.chr_ins_by_handle(&locked) {
+                if h.team_type != chr.team_type && self.hostile_teams.insert(h.team_type) {
+                    crate::glog!("enemy_scan", "learned hostile team_type {} (locked on)", h.team_type);
+                }
+            }
+        }
         self.handles.clear();
         let mut seen_hp: HashMap<u64, i32> = HashMap::new();
         let mut damage: Vec<DamageEvent> = Vec::new();
@@ -201,9 +258,10 @@ impl Bridge {
             }
         }
         self.prev_enemy_hp = seen_hp;
-        if !self.team_report_done && !f.enemies.is_empty() {
-            self.team_report_done = true;
-            crate::glog!("enemy_scan", "first hostile list: {} enemies; team histogram near player: {:?}", f.enemies.len(), teams);
+        if !self.team_report_done && time - self.last_team_report > 20.0 && teams.values().sum::<usize>() > 4 {
+            self.last_team_report = time;
+            self.team_report_done = !f.enemies.is_empty();
+            crate::glog!("enemy_scan", "{} hostile in range; team_type histogram of everything near the player: {:?}; hostile set {:?}", f.enemies.len(), teams, self.hostile_teams);
         }
 
         // --- damage the player took -----------------------------------------------------------------------------
@@ -317,6 +375,18 @@ impl Bridge {
             let stale = ActionBits(self.my_mask.0 & !new_mask.0);
             set_er_bits(&mut ar.disabled_action_inputs, stale, false);
             set_er_bits(&mut ar.disabled_action_inputs, new_mask, true);
+            // Our task runs after the game has worked out this frame's requests and before the behaviour
+            // graph reads them, so a masked action must also be removed from what is already queued.
+            if !new_mask.is_empty() {
+                set_er_bits(&mut ar.action_requests, new_mask, false);
+                set_er_bits(&mut ar.new_action_presses, new_mask, false);
+                set_er_bits(&mut ar.queued_action_inputs, new_mask, false);
+                set_er_bits(&mut ar.cancel_ready_actions, new_mask, false);
+                set_er_bits(&mut ar.readback_new_presses, new_mask, false);
+                set_er_bits(&mut ar.readback_queued_inputs, new_mask, false);
+                set_er_bits(&mut ar.readback_cancel_ready, new_mask, false);
+                crate::log::once_u64("mask", new_mask.0, "action_mask", &format!("masked ER action bits {:#x}", new_mask.0));
+            }
             self.my_mask = new_mask;
             if let Some(s) = anim_speed {
                 p.chr_ins.modules.behavior.animation_speed = s;

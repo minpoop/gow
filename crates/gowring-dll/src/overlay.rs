@@ -163,6 +163,11 @@ impl ImguiRenderLoop for Overlay {
                         Some(t) => image(t, rect, *alpha, *color),
                         None => {
                             dl.add_rect([rect.x, rect.y], [rect.x + rect.w, rect.y + rect.h], col(*color, 0.5 * alpha)).thickness(2.0).build();
+                            if let Some(id) = asset {
+                                // stand-in label until the Ragnarök art is converted (alpha channel only)
+                                let label = id.rsplit('_').next().unwrap_or(id).to_ascii_uppercase();
+                                dl.add_text([rect.x + 4.0, rect.y + 4.0], col(*color, 0.7 * alpha), &label);
+                            }
                         }
                     },
                     DrawCmd::Prompt { rect, text, glyph, backing, color, alpha } => {

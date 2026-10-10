@@ -85,6 +85,19 @@ pub fn run(hmodule: usize) {
     let camera_req = Arc::new(Mutex::new(gowring_core::CameraRequest::default()));
     let rt = Arc::new(Mutex::new(Runtime::new(shared, store, p.cache.clone(), camera_req.clone())));
 
+    // character creation happens at the title screen, so the param patch gets its own always-running task
+    let rt0 = rt.clone();
+    let h0 = cs_task.run_recurring(
+        move |_: &FD4TaskData| {
+            if let Ok(mut r) = rt0.try_lock() {
+                if !r.carriers_ready() {
+                    let _ = catch_unwind(AssertUnwindSafe(|| r.ensure_params()));
+                }
+            }
+        },
+        CSTaskGroupIndex::FrameBegin,
+    );
+
     let rt2 = rt.clone();
     let h1 = cs_task.run_recurring(
         move |_: &FD4TaskData| {
@@ -106,9 +119,10 @@ pub fn run(hmodule: usize) {
         CSTaskGroupIndex::Draw_Pre,
     );
     // The handles cancel their tasks on drop; the mod lives as long as the process.
+    std::mem::forget(h0);
     std::mem::forget(h1);
     std::mem::forget(h2);
-    crate::glog!("boot", "per-frame tasks registered (rules @ ChrIns_PreBehaviorSafe, camera @ Draw_Pre)");
+    crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, camera @ Draw_Pre)");
 }
 
 struct Hudhook;

@@ -44,3 +44,14 @@ pub fn once(key: &'static str, tag: &str, msg: &str) {
         write(tag, msg);
     }
 }
+
+/// Like [`once`] but keyed by a number as well (first time each value is seen, up to 64 values).
+pub fn once_u64(group: &'static str, value: u64, tag: &str, msg: &str) {
+    use std::collections::HashSet;
+    static SEEN: Mutex<Option<HashSet<(&'static str, u64)>>> = Mutex::new(None);
+    let mut g = SEEN.lock().unwrap();
+    let set = g.get_or_insert_with(HashSet::new);
+    if set.len() < 64 && set.insert((group, value)) {
+        write(tag, msg);
+    }
+}
