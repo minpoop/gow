@@ -513,4 +513,44 @@ fn a_fight_with_a_toughened_enemy_ends_in_a_stagger_and_a_finisher() {
     assert!(w.enemy(1).alive());
     w.step(&[R3], &[]);
     assert!(w.finishers.contains(&1), "the finisher is on offer (hp fraction {frac})");
+    // the finisher lands with a camera punch-in that eases back out
+    let normal = gowring_core::Data::get().camera.fov_deg;
+    let cam = w.idle(0.1).camera;
+    assert!(cam.fov_deg < normal - 3.0, "punch-in: fov {} vs {normal}", cam.fov_deg);
+    let cam = w.idle(1.5).camera;
+    assert!((cam.fov_deg - normal).abs() < 0.5, "eased back: fov {}", cam.fov_deg);
+}
+
+#[test]
+fn rage_turns_a_fight_it_heals_knocks_down_and_kills_buy_time() {
+    let d = gowring_core::Data::get();
+    let mut w = SimWorld::new();
+    w.engine.set_tuning(gowring_core::Tuning { rage_gain: 10.0, ..Default::default() });
+    w.add_enemy(SimEnemy::new(1, 0.0, 2.0, 1.0e6));
+    w.add_enemy(SimEnemy::new(2, 6.0, 6.0, 1.0e6)); // 8.5 m away: inside the 10 m burst
+    w.add_enemy(SimEnemy::new(3, 0.0, 14.0, 1.0e6)); // outside it
+    let mut t = 0;
+    while !w.engine.rage().ready() && t < 200 {
+        w.step(&[R1], &[]);
+        w.idle(0.4);
+        t += 1;
+    }
+    assert!(w.engine.rage().ready(), "rage filled");
+    w.player.hp = w.player.max_hp * 0.5;
+    let hp0 = w.player.hp;
+    w.step(&[L3, R3], &[]);
+    w.idle(0.1);
+    assert!(w.engine.rage().active);
+    assert!(w.player.hp >= hp0 + w.player.max_hp * d.rage.activation_heal_pct / 100.0 - 1.0, "activation heals: {} -> {}", hp0, w.player.hp);
+    assert!(w.staggers.iter().any(|(id, _)| *id == 2), "the burst knocks down an enemy 8.5 m away");
+    assert!(!w.staggers.iter().any(|(id, _)| *id == 3), "but not one 14 m away");
+    // five seconds in, a kill buys time back
+    w.idle(5.0);
+    let before = w.engine.rage().time_left;
+    w.add_enemy(SimEnemy::new(4, 0.0, 2.2, 10.0));
+    w.step(&[R1], &[]);
+    w.idle(0.6);
+    assert!(!w.enemy(4).alive());
+    assert!(w.engine.rage().time_left > before, "kill extended rage: {} -> {}", before, w.engine.rage().time_left);
+    assert!(w.engine.rage().time_left <= d.rage.duration_s);
 }

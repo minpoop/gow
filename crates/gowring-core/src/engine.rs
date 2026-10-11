@@ -102,6 +102,8 @@ pub struct Engine {
     scaled: HashSet<EnemyId>,
     /// Native hits written to the log so far (the first few only).
     hit_logs: u32,
+    /// When the last finisher landed (drives the camera punch-in).
+    finisher_at: f64,
 }
 
 impl Engine {
@@ -138,6 +140,7 @@ impl Engine {
             aim_last_down: f64::NEG_INFINITY,
             scaled: HashSet::new(),
             hit_logs: 0,
+            finisher_at: f64::NEG_INFINITY,
         }
     }
 
@@ -342,6 +345,8 @@ impl Engine {
                     let dmg = self.stun.finisher_damage(e, rage);
                     out.push(Command::Damage { target: id, amount: dmg, source: DamageSource::Finisher });
                     out.push(Command::Finisher { target: id, rage });
+                    out.push(Command::Shake(if rage { 1.6 } else { 1.2 }));
+                    self.finisher_at = now;
                     let mv = d.mv(if rage { "rage_grab" } else { "finisher_grab" });
                     if let Some(s) = mv.sfx {
                         out.push(Command::Sfx(s));
@@ -438,7 +443,12 @@ impl Engine {
                 Event::RageOn => logs.push("Spartan Rage ON".into()),
                 Event::RageOff => logs.push("Spartan Rage off".into()),
                 Event::Parry { .. } => logs.push("perfect parry".into()),
-                Event::Kill { enemy, boss } => logs.push(format!("kill {enemy:#x}{}", if *boss { " (boss)" } else { "" })),
+                Event::Kill { enemy, boss } => {
+                    logs.push(format!("kill {enemy:#x}{}", if *boss { " (boss)" } else { "" }));
+                    if self.rage.active {
+                        self.rage.extend(d.rage.kill_extend_s);
+                    }
+                }
                 Event::AxeThrown => logs.push("axe thrown".into()),
                 Event::AxeCaught => logs.push("axe caught".into()),
                 Event::SpearThrown => logs.push("spear thrown".into()),
@@ -452,7 +462,9 @@ impl Engine {
         }
 
         // ---- camera & HUD ------------------------------------------------------------------------------------------------------
-        let camera = self.camera.update(f.dt, self.thrown.aiming, controllable);
+        let since = (now - self.finisher_at) as f32;
+        let punch = if since < 0.0 || since > 1.2 { 0.0 } else if since < 0.12 { since / 0.12 } else { (-(since - 0.12) / 0.35).exp() };
+        let camera = self.camera.update(f.dt, self.thrown.aiming, controllable, punch);
         let hud = self.build_hud(f, now, hp_frac, in_combat, finisher_target, &inp);
 
         TickOutput { commands: out, hud, camera, logs, projectiles: self.thrown.positions() }

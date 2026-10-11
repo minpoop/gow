@@ -1,7 +1,7 @@
 {
  "sheet": "rage",
  "struct": "RageDef",
- "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost); 3.0 is the speed play-tested as 'feels right' in 0.1.14.",
+ "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost): 3.0 filled the bar in about 85 s of fighting in 0.1.15 (good for testing); the release pace is 1.5. Turning Rage on heals activation_heal_pct of max HP and knocks down everything within burst_radius_m for burst_stagger_s; each kill while raging adds kill_extend_s (up to duration_s).",
  "columns": {
   "id": {
    "type": "id"
@@ -82,6 +82,26 @@
    "type": "float",
    "min": 0.1,
    "max": 20
+  },
+  "burst_radius_m": {
+   "type": "float",
+   "min": 1,
+   "max": 40
+  },
+  "burst_stagger_s": {
+   "type": "float",
+   "min": 0,
+   "max": 6
+  },
+  "activation_heal_pct": {
+   "type": "float",
+   "min": 0,
+   "max": 100
+  },
+  "kill_extend_s": {
+   "type": "float",
+   "min": 0,
+   "max": 30
   }
  },
  "rows": [
@@ -90,10 +110,10 @@
    "meter_max": 100,
    "gain_per_pct_hp_lost": 0.9,
    "duration_s": 25,
-   "damage_mult": 1.75,
-   "damage_taken_mult": 0.5,
-   "stun_mult": 2.0,
-   "regen_pct_per_s": 1.5,
+   "damage_mult": 2.0,
+   "damage_taken_mult": 0.35,
+   "stun_mult": 3.0,
+   "regen_pct_per_s": 3.0,
    "anim_speed": 1.12,
    "binding": "b_rage",
    "burst_move": "rage_burst",
@@ -103,7 +123,11 @@
    "mimir_trigger": "mt_rage",
    "tint": "#8a0b0b",
    "tint_strength": 0.45,
-   "gain_scale": 3.0
+   "gain_scale": 1.5,
+   "burst_radius_m": 10,
+   "burst_stagger_s": 3.0,
+   "activation_heal_pct": 20,
+   "kill_extend_s": 2.0
   }
  ]
 }

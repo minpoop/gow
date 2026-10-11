@@ -27,6 +27,9 @@ pub struct StunTracker {
 impl StunTracker {
     /// Keep the table in step with the enemies the host reports; emits kill events.
     pub fn sync(&mut self, d: &'static Data, f: &Frame, now: f64, ev: &mut Vec<Event>) {
+        // This frame's own hits count too: a single blow that kills is reported in the same frame as the death.
+        let hit_now: std::collections::HashSet<EnemyId> =
+            f.damage.iter().filter_map(|dm| if let DamageEvent::Dealt { enemy, .. } = dm { Some(*enemy) } else { None }).collect();
         for e in &f.enemies {
             let st = self.enemies.entry(e.id).or_insert_with(|| StunState {
                 meter: 0.0,
@@ -46,7 +49,7 @@ impl StunTracker {
             let alive_now = e.alive && e.hp > 0.0;
             if st.alive && !alive_now {
                 st.alive = false;
-                if now - st.player_hit_at <= 6.0 {
+                if now - st.player_hit_at <= 6.0 || hit_now.contains(&e.id) {
                     ev.push(Event::Kill { enemy: e.id, boss: st.boss });
                 }
             }
@@ -267,6 +270,21 @@ mod tests {
         st.note_player_hit(1, 19.5);
         st.wounded_check(d, &f, 20.0, &mut out, &mut ev);
         assert!(out.is_empty(), "no second stagger");
+    }
+
+    #[test]
+    fn a_one_hit_kill_is_credited_in_the_frame_it_happens() {
+        let d = Data::get();
+        let mut st = StunTracker::default();
+        let mut f = Frame::default();
+        f.enemies.push(enemy(1, 50.0, Vec3::ZERO));
+        let mut ev = vec![];
+        st.sync(d, &f, 0.0, &mut ev);
+        f.enemies[0].hp = 0.0;
+        f.enemies[0].alive = false;
+        f.damage.push(DamageEvent::Dealt { enemy: 1, amount: 50.0 });
+        st.sync(d, &f, 0.5, &mut ev);
+        assert!(ev.iter().any(|e| matches!(e, Event::Kill { enemy: 1, .. })));
     }
 
     #[test]

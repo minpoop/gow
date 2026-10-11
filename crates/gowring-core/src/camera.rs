@@ -14,7 +14,8 @@ impl Camera {
         Camera { d, cur: CameraRequest { shoulder_x_m: c.shoulder_x_m, height_m: c.height_m, distance_m: c.distance_m, fov_deg: c.fov_deg } }
     }
 
-    pub fn update(&mut self, dt: f32, aiming: bool, active: bool) -> CameraRequest {
+    /// `punch` (0..1) briefly pulls the camera in and narrows the view on top of the smoothed request (finishers).
+    pub fn update(&mut self, dt: f32, aiming: bool, active: bool, punch: f32) -> CameraRequest {
         let c = self.d.camera;
         let target = if !active {
             CameraRequest::default()
@@ -31,6 +32,10 @@ impl Camera {
             distance_m: mix(self.cur.distance_m, target.distance_m),
             fov_deg: mix(self.cur.fov_deg, target.fov_deg),
         };
+        let p = punch.clamp(0.0, 1.0);
+        if active && p > 0.0 && self.cur.fov_deg > 1.0 {
+            return CameraRequest { distance_m: (self.cur.distance_m - 0.9 * p).max(1.0), fov_deg: self.cur.fov_deg - 9.0 * p, ..self.cur };
+        }
         self.cur
     }
 }
@@ -43,16 +48,16 @@ mod tests {
     fn eases_toward_the_aim_framing_and_back() {
         let d = Data::get();
         let mut cam = Camera::new(d);
-        let walk = cam.update(0.016, false, true);
+        let walk = cam.update(0.016, false, true, 0.0);
         assert!((walk.shoulder_x_m - d.camera.shoulder_x_m).abs() < 0.05);
         let mut r = walk;
         for _ in 0..120 {
-            r = cam.update(0.016, true, true);
+            r = cam.update(0.016, true, true, 0.0);
         }
         assert!((r.shoulder_x_m - d.camera.aim_shoulder_x_m).abs() < 0.01);
         assert!((r.fov_deg - d.camera.aim_fov_deg).abs() < 0.1);
         for _ in 0..120 {
-            r = cam.update(0.016, false, true);
+            r = cam.update(0.016, false, true, 0.0);
         }
         assert!((r.distance_m - d.camera.distance_m).abs() < 0.01);
     }

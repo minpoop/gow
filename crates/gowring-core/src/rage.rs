@@ -57,14 +57,27 @@ impl Rage {
         out.push(Command::Sfx(self.d.rage.sfx_on));
         out.push(Command::AnimSpeed(self.d.rage.anim_speed));
         out.push(Command::Shake(1.0));
-        // Burst: everything close is hurt, staggered and stunned.
-        let radius = 8.0;
+        let r = self.d.rage;
+        if f.player.alive && r.activation_heal_pct > 0.0 {
+            out.push(Command::Heal { amount: f.player.max_hp * r.activation_heal_pct / 100.0 });
+        }
+        // Burst: everything close is hurt and knocked down.
+        let radius = r.burst_radius_m;
         for e in f.enemies.iter().filter(|e| e.alive && e.pos.dist(f.player.pos) <= radius + e.radius) {
             out.push(Command::Damage { target: e.id, amount: base_damage * burst.motion_value, source: DamageSource::RageBurst });
-            out.push(Command::Stagger { target: e.id, seconds: 1.5 });
+            if r.burst_stagger_s > 0.0 {
+                out.push(Command::Stagger { target: e.id, seconds: r.burst_stagger_s });
+            }
         }
         out.push(Command::Fx { kind: crate::sheets::FxKind::Blast, pos: f.player.pos, dir: f.player.facing, radius });
         ev.push(Event::RageOn);
+    }
+
+    /// A kill while raging buys more time (never past a full bar).
+    pub fn extend(&mut self, seconds: f32) {
+        if self.active {
+            self.time_left = (self.time_left + seconds).min(self.d.rage.duration_s);
+        }
     }
 
     pub fn update(&mut self, f: &Frame, out: &mut Vec<Command>, ev: &mut Vec<Event>) {

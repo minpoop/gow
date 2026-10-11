@@ -1,9 +1,10 @@
-Sixteenth alpha: fights now last long enough to stun and finish enemies, from your play-test of 0.1.14 (which passed Melty's two 10-minute runs).
+Seventeenth alpha: Spartan Rage becomes a tide-turner, from your play-test of 0.1.15 (stuns, wounded staggers and finishers all worked).
 
-- **Regular enemies are tougher.** Elden Ring's weakest enemies die in one hit, so nothing lived long enough to stun. Regular enemies now get three times their normal health when they first come into range. Bosses and mini-bosses are left alone. `enemy_health_multiplier` in `settings.json` changes it (1.0 = Elden Ring's own health).
-- **Wounded enemies can be finished.** A regular enemy you have worn down to a quarter of its health is staggered once, as if its stun bar had filled, so a normal fight ends with an R3 finisher on offer. `finisher_when_wounded` turns it off.
-- **Spartan Rage keeps the speed you tested.** Your 0.1.14 test ran with the Rage multiplier at 3 and you said it felt right, so that pace is now the built-in one and the multiplier is back at 1.0. A `settings.json` from 0.1.14 is converted for you (the old file is kept as `settings.v1.json`) so Rage plays the same as it did.
-- **Fewer enemy bars through walls.** Health bars now show for enemies within 22 metres (was 35) unless you have just hit them.
-- **Better log.** The log records the size of your first sixty melee hits against each enemy's health, every enemy whose health was raised, and Rage gained from damage you take, so tuning can be done from numbers instead of memory.
+- **Rage takes longer to earn.** A full bar now takes roughly twice as long as in 0.1.15 (about 3 minutes of fighting instead of about 85 seconds). For quick testing, set `rage_gain_multiplier` to 2 in `settings.json` to get the old speed back.
+- **Turning Rage on swings the fight.** It heals 20% of your health at once and knocks down every enemy within 10 metres for 3 seconds (was 8 metres, 1.5 seconds).
+- **Rage is much stronger while it lasts.** Double damage (was 1.75x), you take 35% of incoming damage (was 50%), 3% of your health back every second (was 1.5%), and enemies' stun bars fill three times as fast (was twice), so finishers chain.
+- **Kills feed it.** Every kill while raging adds 2 seconds, up to a full bar.
+- **Finishers land harder.** The camera punches in and the screen shakes when a finisher connects, a little more during Rage.
+- **Fix:** an enemy killed by a single blow did not count as your kill, so Mimir's kill lines and kill streaks missed them. It counts now.
 
 Still an alpha: Elden Ring's own animations play for every move, the HUD is the mod's own drawing, and nothing from Ragnarök's own art or sound is in use yet.
