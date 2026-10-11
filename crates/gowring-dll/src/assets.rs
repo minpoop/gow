@@ -8,6 +8,24 @@ pub struct Texture {
     pub w: u32,
     pub h: u32,
     pub rgba: Vec<u8>,
+    /// A white shape on transparency (Ragnarök's UI masks): the HUD colours it instead of drawing it as is.
+    pub mask: bool,
+}
+
+/// Every visible pixel near white and without colour.
+pub fn is_mask(rgba: &[u8]) -> bool {
+    let mut seen = false;
+    for p in rgba.chunks_exact(4) {
+        if p[3] < 16 {
+            continue;
+        }
+        seen = true;
+        let (lo, hi) = (p[0].min(p[1]).min(p[2]), p[0].max(p[1]).max(p[2]));
+        if lo < 200 || hi - lo > 12 {
+            return false;
+        }
+    }
+    seen
 }
 
 #[derive(Default)]
@@ -35,7 +53,8 @@ fn decode_png(path: &Path) -> Result<Texture, String> {
         png::ColorType::GrayscaleAlpha => buf.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
         other => return Err(format!("unsupported PNG colour type {other:?}")),
     };
-    Ok(Texture { w: info.width, h: info.height, rgba })
+    let mask = is_mask(&rgba);
+    Ok(Texture { w: info.width, h: info.height, rgba, mask })
 }
 
 pub fn load(cache: &Path, channel: &str) -> Store {

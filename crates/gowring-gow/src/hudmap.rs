@@ -11,12 +11,47 @@ use std::path::Path;
 
 /// The file's text when it does not exist yet: every HUD piece, empty, with what it is.
 pub fn template(pieces: &[(&str, &str)]) -> String {
-    let mut o = String::from("{\n  \"_about\": \"Put the name of a picture from the ragnarok_ui folder (for example TX_sonhud_meter_bg_1234ABCD) next to a HUD piece, save, and start the game again. Leave a piece empty to keep the mod's own drawing. Open ragnarok_ui/index.html in a browser to see every picture with its name.\"");
+    render(pieces, &[], false)
+}
+
+/// The file's text with these values (pieces not listed are empty). `suggested` records that the starter choices
+/// were put in once, so a piece the player empties again stays empty.
+pub fn render(pieces: &[(&str, &str)], values: &[(String, String)], suggested: bool) -> String {
+    let mut o = String::from("{\n  \"_about\": \"Put the name of a picture from the ragnarok_ui folder (for example TX_sonhud_meter_bg_1234ABCD) next to a HUD piece, save, and start the game again. Leave a piece empty to keep the mod's own drawing. Open ragnarok_ui/index.html in a browser to see every picture with its name. White shapes are coloured by the HUD (health green, Rage red).\"");
+    if suggested {
+        o.push_str(",\n  \"_suggestions_applied\": \"Starter choices were filled in once; change or empty any of them and they stay as you leave them.\"");
+    }
     for (id, what) in pieces {
-        let _ = write!(o, ",\n\n  \"{id}\": \"\",\n  \"_{id}\": \"{}\"", what.replace('"', "'"));
+        let v = values.iter().find(|(k, _)| k == id).map(|(_, v)| v.replace('"', "")).unwrap_or_default();
+        let _ = write!(o, ",\n\n  \"{id}\": \"{v}\",\n  \"_{id}\": \"{}\"", what.replace('"', "'"));
     }
     o.push_str("\n}\n");
     o
+}
+
+/// Put starter choices into a file that has never had them, for pieces that are empty and whose picture was
+/// exported. `None` when nothing changes (already applied, unreadable, or nothing to add).
+pub fn fill_suggestions(text: &str, pieces: &[(&str, &str)], suggestions: &[(&str, &str)], ui_dir: &Path) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let obj = v.as_object()?;
+    if obj.contains_key("_suggestions_applied") {
+        return None;
+    }
+    let mut values: Vec<(String, String)> = obj
+        .iter()
+        .filter(|(k, _)| !k.starts_with('_'))
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.trim().to_string())))
+        .filter(|(_, s)| !s.is_empty())
+        .collect();
+    let mut added = 0;
+    for (id, tex) in suggestions {
+        let empty = !values.iter().any(|(k, _)| k == id);
+        if empty && pieces.iter().any(|(p, _)| p == id) && ui_dir.join(picture_name(tex)).exists() {
+            values.push((id.to_string(), tex.to_string()));
+            added += 1;
+        }
+    }
+    (added > 0).then(|| render(pieces, &values, true))
 }
 
 /// The non-empty choices: (HUD piece id, texture name).
@@ -115,5 +150,27 @@ mod tests {
     fn broken_files_are_errors() {
         assert!(parse("{ nope").is_err());
         assert!(parse("[]").is_err());
+    }
+
+    #[test]
+    fn starter_choices_fill_empty_pieces_once_and_never_override() {
+        let pieces = [("hud_health_frame", "health frame"), ("hud_rage_frame", "rage frame"), ("hud_icon_shield", "shield")];
+        let dir = std::env::temp_dir().join(format!("gowring-hudmap-s-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["TX_health_A", "TX_rage_B"] {
+            std::fs::write(dir.join(format!("{n}.png")), b"x").unwrap();
+        }
+        let sugg = [("hud_health_frame", "TX_health_A"), ("hud_rage_frame", "TX_rage_B"), ("hud_icon_shield", "TX_not_exported")];
+        // the player already chose a rage picture: kept; the missing picture is not suggested
+        let mine = render(&pieces, &[("hud_rage_frame".into(), "TX_mine".into())], false);
+        let filled = fill_suggestions(&mine, &pieces, &sugg, &dir).expect("something to add");
+        let got = parse(&filled).unwrap();
+        assert!(got.contains(&("hud_health_frame".to_string(), "TX_health_A".to_string())));
+        assert!(got.contains(&("hud_rage_frame".to_string(), "TX_mine".to_string())), "the player's choice wins");
+        assert!(!got.iter().any(|(k, _)| k == "hud_icon_shield"));
+        // emptied again by the player: never refilled
+        let emptied = filled.replace("\"TX_health_A\"", "\"\"");
+        assert!(fill_suggestions(&emptied, &pieces, &sugg, &dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

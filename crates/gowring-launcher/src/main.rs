@@ -28,9 +28,24 @@ fn hud_pieces() -> Vec<(&'static str, &'static str, &'static str)> {
 }
 
 /// Copy the Ragnarök pictures chosen in `ragnarok_hud.json` into the cache for the overlay (before every Play).
+/// Ragnarök pictures picked from the player's own gallery (0.1.23 test) as the starting look.
+const SUGGESTED_HUD: [(&str, &str); 4] = [
+    ("hud_health_frame", "TX_player_health_housing_3F78F9427233D20B"),
+    ("hud_rage_frame", "TX_player_rage_housing_0B32235030FD391C"),
+    ("hud_enemy_health", "TX_enemyhud_meter_m_F808F3D038FF250A"),
+    ("hud_icon_shield", "TX_icon_runicarmor_D0945976D09F21C9"),
+];
+
 fn apply_hud_choices(ctx: &Ctx) {
     let path = ctx.local.join("ragnarok_hud.json");
-    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let Ok(mut text) = std::fs::read_to_string(&path) else { return };
+    let pieces: Vec<(&str, &str)> = hud_pieces().iter().map(|(id, what, _)| (*id, *what)).collect();
+    if let Some(filled) = gowring_gow::hudmap::fill_suggestions(&text, &pieces, &SUGGESTED_HUD, &ctx.local.join("ragnarok_ui")) {
+        if std::fs::write(&path, &filled).is_ok() {
+            ctx.log("ragnarok_hud: starter Ragnarök pictures filled in (health and Rage bar shapes, enemy bars, shield icon)");
+            text = filled;
+        }
+    }
     match gowring_gow::hudmap::parse(&text) {
         Ok(choices) => {
             let outputs: Vec<(&str, &str)> = hud_pieces().iter().map(|(id, _, out)| (*id, *out)).collect();

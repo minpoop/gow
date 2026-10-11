@@ -46,6 +46,8 @@ pub struct Overlay {
     shared: Shared,
     store: Arc<Store>,
     textures: HashMap<&'static str, (TextureId, f32, f32)>,
+    /// Textures that are white shapes (tinted by the HUD colour when drawn).
+    masks: std::collections::HashSet<&'static str>,
     big_font: Option<SendFont>,
 }
 
@@ -57,7 +59,7 @@ unsafe impl Sync for SendFont {}
 
 impl Overlay {
     pub fn new(shared: Shared, store: Arc<Store>) -> Self {
-        Overlay { shared, store, textures: HashMap::new(), big_font: None }
+        Overlay { shared, store, textures: HashMap::new(), masks: Default::default(), big_font: None }
     }
 }
 
@@ -86,12 +88,15 @@ impl ImguiRenderLoop for Overlay {
             match render_context.load_texture(&t.rgba, t.w, t.h) {
                 Ok(tid) => {
                     self.textures.insert(*id, (tid, t.w as f32, t.h as f32));
+                    if t.mask {
+                        self.masks.insert(*id);
+                    }
                     ok += 1;
                 }
                 Err(e) => crate::glog!("overlay", "texture {id}: {e:?}"),
             }
         }
-        crate::glog!("overlay", "initialised: {ok}/{} textures uploaded", self.store.textures.len());
+        crate::glog!("overlay", "initialised: {ok}/{} textures uploaded ({} of them white shapes the HUD colours: {:?})", self.store.textures.len(), self.masks.len(), self.masks);
     }
 
     fn render(&mut self, ui: &mut Ui) {
@@ -142,7 +147,15 @@ impl ImguiRenderLoop for Overlay {
                     }
                     DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha } => {
                         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+                        let is_mask = |id: Option<&'static str>| id.map(|i| self.masks.contains(i)).unwrap_or(false);
+                        let frame_mask = is_mask(*frame);
+                        // a picture clipped to the left `f` of the bar, tinted
+                        let clipped = |t: (TextureId, f32, f32), f: f32, tint: u32, a: f32| {
+                            dl.add_image(t.0, [x0, y0], [x0 + rect.w * f, y1]).uv_min([0.0, 0.0]).uv_max([f, 1.0]).col(col(tint, a)).build();
+                        };
                         match tex(*frame) {
+                            // Ragnarök's housing shapes are white masks: a dark body in that shape, the fill in the same shape
+                            Some(t) if frame_mask => image(t, rect, 0.82 * alpha, 0x17140F),
                             Some(t) => image(t, rect, *alpha, 0xFFFFFF),
                             None => {
                                 dl.add_rect([x0, y0], [x1, y1], col(0x101010, 0.65 * alpha)).filled(true).build();
@@ -150,11 +163,18 @@ impl ImguiRenderLoop for Overlay {
                         }
                         // the lagging "recent damage" trail, then the fill
                         if *trail > *frac {
-                            dl.add_rect([x0, y0], [x0 + rect.w * trail, y1], col(0xE8E2C8, 0.45 * alpha)).filled(true).build();
+                            match tex(*frame) {
+                                Some(t) if frame_mask => clipped(t, *trail, 0xE8E2C8, 0.45 * alpha),
+                                _ => {
+                                    dl.add_rect([x0, y0], [x0 + rect.w * trail, y1], col(0xE8E2C8, 0.45 * alpha)).filled(true).build();
+                                }
+                            }
                         }
-                        match tex(*fill) {
+                        let fill_t = tex(*fill).or(if frame_mask { tex(*frame) } else { None });
+                        match fill_t {
                             Some(t) => {
-                                dl.add_image(t.0, [x0, y0], [x0 + rect.w * frac, y1]).uv_min([0.0, 0.0]).uv_max([*frac, 1.0]).col(col(0xFFFFFF, *alpha)).build();
+                                let tinted = is_mask(*fill) || tex(*fill).is_none();
+                                clipped(t, *frac, if tinted { *color } else { 0xFFFFFF }, *alpha);
                             }
                             None => {
                                 dl.add_rect([x0, y0], [x0 + rect.w * frac, y1], col(*color, *alpha)).filled(true).build();
