@@ -17,6 +17,7 @@ pub mod oodle;
 pub mod prepare;
 pub mod scan;
 pub mod wad;
+pub mod wtoc;
 
 pub use catalog::{Catalog, CatalogEntry, EntryKind};
 pub use prepare::{AssetReq, AssetState, PrepareReport};

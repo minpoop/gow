@@ -250,6 +250,7 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
                 for (i, r) in recs.iter().enumerate() {
                     let _ = writeln!(o, "    #{i:<3} a={:04x} b={:04x} c={:08x} {:<34} tail {}", r.a, r.b, r.c, r.name, hex(&r.tail));
                 }
+                layout_check(&mut o, &buf);
             }
         }
         for key in ["r_ui.wad", "r_mimir00.wad"] {
@@ -284,31 +285,11 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
                             }
                         }
                     }
-                    // Texture records come as a descriptor + a data record sharing a name; their tails hold stream offsets
-                    // (u32 at tail+0x10). Show the bytes both point at, assuming offsets count from the end of the table.
+                    // Texture chunks, placed with the arena layout (see wtoc.rs): a parameter chunk (id 1, server 25,
+                    // a 0x68-byte header then a GNF header) and a GPU chunk (id 29) of the same name.
                     if key == "r_ui.wad" {
-                        let base = WTOC_FIRST + count * WTOC_REC;
                         if let Ok((big, _)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 64 << 20) {
-                            let _ = writeln!(o, "    UI textures (stream read: {} bytes; table ends at {base:#x}):", big.len());
-                            let words = ["sonhud_meter", "sonhud_icon_knockeddown", "stunicon_small", "toggleblockicon_", "toggleaimicon_", "ragedrain", "xbox_controller_buttonmasks", "worldinteract_rsbutton"];
-                            let off = |t: &[u8]| u32::from_le_bytes([t[16], t[17], t[18], t[19]]) as usize;
-                            let mut n = 0;
-                            for (i, r) in recs.iter().enumerate() {
-                                if r.a != 0x1d || !r.name.starts_with("TX_") || !words.iter().any(|k| r.name.to_lowercase().contains(k)) {
-                                    continue;
-                                }
-                                let od = base + off(&r.tail);
-                                let _ = writeln!(o, "      {} descriptor(c={:#x}) at {od:#x}: {}", r.name, r.c, big.get(od..od + 160).map(hex).unwrap_or_else(|| "(beyond what was read)".into()));
-                                if let Some(next) = recs.get(i + 1).filter(|x| x.name == r.name) {
-                                    let ox = base + off(&next.tail);
-                                    let _ = writeln!(o, "        data record(c={:#x}) at {ox:#x}: {}", next.c, big.get(ox..ox + 64).map(hex).unwrap_or_else(|| "(beyond what was read)".into()));
-                                    let _ = writeln!(o, "        data record tail: {}", hex(&next.tail));
-                                }
-                                n += 1;
-                                if n >= 12 {
-                                    break;
-                                }
-                            }
+                            ui_textures(&mut o, &big);
                         }
                     }
                     // the bytes at the end of the table, where the data starts
@@ -319,6 +300,16 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
                     let _ = writeln!(o, "  {}: {e:#}", w.path);
                 }
             }
+        }
+        // Kratos himself (roadmap R2): his model is in r_heroa00.wad (MESH_heroa00_*, MG_heroa00_*, goProtoheroa00).
+        if let Some(w) = lz.iter().find(|w| w.path.to_lowercase().ends_with("r_heroa00.wad")) {
+            if !late() {
+                if let Ok((big, _)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 96 << 20) {
+                    kratos_probe(&mut o, &w.path, w.size, &big);
+                }
+            }
+        } else {
+            let _ = writeln!(o, "\n  r_heroa00.wad (Kratos) not found among the LZ4 WADs");
         }
         // Which WAD names the things the design sheets need? Search every table.
         let words = ["hud", "health", "rage", "runic", "stun", "reticle", "crosshair", "btn", "button", "mimir", "leviathan", "chaos", "draupnir", "guardian"];
@@ -412,4 +403,80 @@ mod tests {
     fn missing_folder_is_reported_not_panicked() {
         assert!(report(Path::new("/nope"), None, &[], None).contains("does not exist"));
     }
+}
+
+/// Does the arena layout account for a whole (small) WAD exactly? The strongest check that `wtoc::layout` is right.
+fn layout_check(o: &mut String, buf: &[u8]) {
+    let Some(mut es) = crate::wtoc::read(buf) else {
+        let _ = writeln!(o, "    layout: table unreadable");
+        return;
+    };
+    let start = (crate::wtoc::HEADER_LEN + es.len() * crate::wtoc::ENTRY_LEN) as u64;
+    let end = crate::wtoc::layout(&mut es, start);
+    let blocks = es.last().map(|e| e.block + 1).unwrap_or(0);
+    let within = es.iter().filter(|e| e.id != crate::wtoc::PAD_CHUNK && e.file_off + e.length as u64 <= buf.len() as u64).count();
+    let _ = writeln!(
+        o,
+        "    layout: {} chunks in {blocks} load blocks; data laid out to {end:#x}, file is {:#x} bytes ({}); {within} chunks fit inside the file",
+        es.len(),
+        buf.len(),
+        if end == buf.len() as u64 { "EXACT MATCH" } else { "mismatch" }
+    );
+}
+
+fn gnf_at(b: &[u8], off: usize) -> bool {
+    b.get(off..off + 4).map(|m| m == b"GNF ").unwrap_or(false)
+}
+
+/// The HUD textures of r_ui.wad with their laid-out positions and first bytes (is there a GNF header where we expect?).
+fn ui_textures(o: &mut String, big: &[u8]) {
+    let Some(es) = crate::wtoc::read(big) else {
+        let _ = writeln!(o, "    UI textures: table unreadable in the {} bytes read", big.len());
+        return;
+    };
+    let words = ["sonhud_meter", "sonhud_icon_knockeddown", "stunicon_small", "toggleblockicon_", "toggleaimicon_", "ragedrain", "xbox_controller_buttonmasks", "worldinteract_rsbutton"];
+    let tx: Vec<&crate::wtoc::Entry> = es.iter().filter(|e| e.name.starts_with("TX_")).collect();
+    let gnf_hits = tx.iter().filter(|e| e.id == 1 && (gnf_at(big, e.file_off as usize + 0x68) || gnf_at(big, e.file_off as usize))).count();
+    let _ = writeln!(o, "    UI textures: {} TX_ chunks; {} parameter chunks have a GNF header where expected (stream read: {} bytes)", tx.len(), gnf_hits, big.len());
+    let mut ids: BTreeMap<(u16, u8, u8), usize> = BTreeMap::new();
+    for e in &tx {
+        *ids.entry((e.id, e.server, e.mem_type)).or_default() += 1;
+    }
+    let _ = writeln!(o, "    TX_ chunk kinds (id, server, arena) -> count: {ids:?}");
+    let mut n = 0;
+    for e in tx.iter().filter(|e| words.iter().any(|k| e.name.to_lowercase().contains(k))) {
+        let off = e.file_off as usize;
+        let head = big.get(off..off + 0x68 + 64).or_else(|| big.get(off..(off + 96).min(big.len()))).map(hex).unwrap_or_else(|| "(beyond what was read)".into());
+        let _ = writeln!(o, "      {} id={} server={} arena={} len={:#x} align={} block={} mem_off={:#x} file_off={off:#x} gnf@0x68={} gnf@0={}\n        {head}", e.name, e.id, e.server, e.mem_type, e.length, e.align, e.block, e.mem_off, gnf_at(big, off + 0x68), gnf_at(big, off));
+        n += 1;
+        if n >= 16 {
+            break;
+        }
+    }
+}
+
+/// Kratos's model chunks in r_heroa00.wad: what they are, where they lie, how they start.
+fn kratos_probe(o: &mut String, path: &str, disk: u64, big: &[u8]) {
+    let Some(es) = crate::wtoc::read(big) else {
+        let _ = writeln!(o, "\n  {path}: table unreadable in the {} bytes read", big.len());
+        return;
+    };
+    let _ = writeln!(o, "\n  {path} (Kratos; {disk} bytes on disk, {} decompressed bytes read): {} chunks", big.len(), es.len());
+    let mut ids: BTreeMap<(u16, u8, u8), usize> = BTreeMap::new();
+    for e in &es {
+        *ids.entry((e.id, e.server, e.mem_type)).or_default() += 1;
+    }
+    let _ = writeln!(o, "    chunk kinds (id, server, arena) -> count: {ids:?}");
+    let mut n = 0;
+    for e in es.iter().filter(|e| e.name.contains("heroa00") && (e.name.starts_with("MESH_") || e.name.starts_with("MG_") || e.name.starts_with("goProto") || e.name.starts_with("ANM_"))) {
+        let off = e.file_off as usize;
+        let head = big.get(off..off + 48).map(hex).unwrap_or_else(|| "(beyond what was read)".into());
+        let _ = writeln!(o, "      {:<40} id={} server={} arena={} len={:#x} block={} file_off={off:#x}: {head}", e.name, e.id, e.server, e.mem_type, e.length, e.block);
+        n += 1;
+        if n >= 40 {
+            break;
+        }
+    }
+    let anims = es.iter().filter(|e| e.name.starts_with("ANM_")).count();
+    let _ = writeln!(o, "    ANM_ chunks in this WAD: {anims}");
 }

@@ -173,3 +173,9 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - Tests: status meter unit test; scenario "Blades hits set enemies burning and axe hits freeze them" (Blades burn on hit >= 5, HUD shows the build-up, spear none).
 - Research started in parallel: Ragnarök PC asset formats, and how Elden Ring could take a custom player model and animations (for roadmap R1-R3).
 - Unverified in real play: everything in 0.1.16-0.1.18.
+
+## 0.1.19 — WAD arena layout (2026-10-11, research while the user was away)
+- Research (two background agents, one reported so far): public Ragnarök PC tools now exist — smpack (iArtorias, GPL-3.0, Oct 2026: WAD/texpack/lodpack/.as/shaderpack/audiopack; DDS + glTF/FBX with skin; no animation export), GoWToolkit (JeanxPereira, no licence file: GNF + RDNA2 detile, mesh, material, lodpack, format notes), GOWTool gowr-pc branch, GodOfWarTool, id-daemon's PS4 model tool. Kratos = r_heroa00.wad (goProtoheroa00, MESH_heroa00_0, MG_heroa00_0); bone names not stored; animations are Santa Monica's own anm (ANM_ chunks, .as sets), not Havok, undecoded publicly. PC texpacks raw, pixels PS5/AGC tiled.
+- Our earlier TX_ reading was wrong because `mem_off` (entry +0x78, u64) is an offset inside one of 9 memory arenas; the data is a run of load blocks (entry bits & 1 ends one), each laying out every arena in order; id 25 chunks are padding markers (length added after the block). New `gowring-gow/src/wtoc.rs` (own implementation from the documented rule; smpack is GPL so no code taken) with a synthetic two-block, two-arena, aligned, padded test.
+- diagnose: `layout_check` on the two smallest WADs (laid-out end vs real size: "EXACT MATCH" validates the rule on real data), `ui_textures` (TX_ chunk kinds by id/server/arena, GNF magic at +0x68 of parm chunks), `kratos_probe` (r_heroa00 chunk kinds, MESH/MG/goProto/ANM entries with offsets and first bytes).
+- Roadmap doc: new "Research notes" tab.
