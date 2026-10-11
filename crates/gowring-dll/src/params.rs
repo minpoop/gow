@@ -3,7 +3,7 @@
 //! ten starting classes are rewritten to start with them: a new character on the mashup's own save is
 //! born as Kratos, with the engine itself granting and equipping the kit.
 
-use eldenring::cs::{CharaInitParam, EquipParamWeapon, SoloParamRepository};
+use eldenring::cs::{CharaInitParam, EquipParamWeapon, SoloParam, SoloParamRepository};
 use fromsoftware_shared::FromStatic;
 use gowring_core::sheets::{WeaponKind, ER_TEMPLATES, WEAPONS};
 use std::collections::HashMap;
@@ -14,8 +14,21 @@ pub struct Carriers {
     pub notes: Vec<String>,
 }
 
+/// The game fills the param holders some time after start-up; reading one before that panics inside the
+/// library, so look first (a missing table is "not ready yet", not an error worth a panic).
+fn tables_ready(repo: &SoloParamRepository) -> Result<(), String> {
+    for (name, index) in [("EquipParamWeapon", EquipParamWeapon::INDEX), ("CharaInitParam", CharaInitParam::INDEX)] {
+        let ready = repo.solo_param_holders.get(index as usize).and_then(|h| h.get_res_cap(0)).is_some();
+        if !ready {
+            return Err(format!("{name} is not loaded yet"));
+        }
+    }
+    Ok(())
+}
+
 pub fn apply() -> Result<Carriers, String> {
     let repo = unsafe { SoloParamRepository::instance_mut() }.map_err(|e| format!("SoloParamRepository: {e}"))?;
+    tables_ready(repo)?;
     let mut notes = Vec::new();
     let mut rows: HashMap<&'static str, u32> = HashMap::new();
 

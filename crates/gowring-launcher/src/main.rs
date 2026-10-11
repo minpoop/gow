@@ -221,6 +221,8 @@ fn background_diagnose(ctx: &Ctx) {
     }
     let c = ctx.clone();
     let _ = std::thread::Builder::new().name("diagnose".into()).spawn(move || {
+        // Not while the game is starting: it reads a lot of files, and Elden Ring's own load comes first.
+        std::thread::sleep(std::time::Duration::from_secs(180));
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let vg = tools(&c, 60).vgmstream;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);

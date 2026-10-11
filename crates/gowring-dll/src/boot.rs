@@ -168,6 +168,7 @@ pub fn run(hmodule: usize) {
     std::mem::forget(h2);
     crate::testmode::TASKS_REGISTERED.store(true, std::sync::atomic::Ordering::SeqCst);
     crate::testmode::stage("tasks-registered");
+    spawn_heartbeat();
     crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, camera @ Draw_Pre)");
 }
 
@@ -179,4 +180,31 @@ impl Hudhook {
         let hooks = hudhook::Hudhook::builder().with::<ImguiDx12Hooks>(overlay).with_hmodule(HINSTANCE(hmodule as _)).build();
         hooks.apply().map_err(|e| format!("{e:?}"))
     }
+}
+
+/// One log line every few seconds saying whether the game's main loop is running and how far the mod got,
+/// so a stall or an early exit can be read off the log afterwards.
+fn spawn_heartbeat() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let _ = std::thread::Builder::new().name("gowring-heartbeat".into()).spawn(|| {
+        let start = std::time::Instant::now();
+        let mut last_frames = 0u32;
+        loop {
+            let t = start.elapsed().as_secs();
+            let frames = crate::testmode::H0_CALLS.load(SeqCst);
+            crate::glog!(
+                "alive",
+                "t={t}s frames_since_last={} params={} save_open={} player={} ticks={} kit={}",
+                frames.wrapping_sub(last_frames),
+                crate::testmode::PARAMS_OK.load(SeqCst),
+                crate::savehook::redirected(),
+                crate::testmode::PLAYER_SEEN.load(SeqCst),
+                crate::testmode::TICKS_WITH_PLAYER.load(SeqCst),
+                crate::testmode::KIT_OK.load(SeqCst),
+            );
+            last_frames = frames;
+            // every 5 s for the first two minutes, then every 30 s
+            std::thread::sleep(std::time::Duration::from_secs(if t < 120 { 5 } else { 30 }));
+        }
+    });
 }
