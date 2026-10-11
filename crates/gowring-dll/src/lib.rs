@@ -9,11 +9,13 @@ mod boot;
 mod exithook;
 mod host;
 mod log;
+mod mimir_text;
 mod overlay;
 mod params;
 mod paths;
 mod runtime;
 mod savehook;
+mod synth;
 mod testmode;
 
 use windows::Win32::Foundation::HMODULE;

@@ -379,7 +379,7 @@ impl Bridge {
                 Command::AnimSpeed(s) => anim_speed = Some(*s),
                 Command::Sfx(id) => {
                     if let Some(a) = audio {
-                        a.sfx(cache.join(sheets_asset_output(id)), 0.9);
+                        a.sfx(id, cache.join(sheets_asset_output(id)), 0.9);
                     }
                 }
                 Command::Voice { set, no_repeat, interrupt, .. } => {
@@ -501,12 +501,12 @@ fn sheets_asset_output(id: &str) -> &'static str {
     gowring_core::Data::get().asset(id).output
 }
 
-/// `OwnedPtr<T>` is declared non-null, but a character without a module can still hold null there.
 /// Alive by the game's own flags (hp above zero and no death flag).
 fn ehp_alive(e: &ChrIns) -> bool {
     opt(&e.modules.data).map(|d| d.hp > 0).unwrap_or(false) && !e.chr_flags1c5.death_flag()
 }
 
+/// `OwnedPtr<T>` is declared non-null, but a character without a module can still hold null there.
 fn opt<T>(p: &fromsoftware_shared::OwnedPtr<T>) -> Option<&T> {
     let raw = p.as_ptr();
     if raw.is_null() { None } else { Some(unsafe { &*raw }) }

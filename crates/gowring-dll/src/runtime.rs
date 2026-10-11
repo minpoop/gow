@@ -13,6 +13,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// A short camera shake: (amplitude 0..1, when it started). Read by the camera task each frame.
+pub static SHAKE: Mutex<Option<(f32, Instant)>> = Mutex::new(None);
+
 pub struct Runtime {
     engine: Engine,
     bridge: Bridge,
@@ -29,6 +32,8 @@ pub struct Runtime {
     pub camera_req: Arc<Mutex<gowring_core::CameraRequest>>,
     banner: String,
     stats: Stats,
+    /// Effect rings still alive: (kind, position, radius in metres, engine time born).
+    fx_live: Vec<(gowring_core::sheets::FxKind, gowring_core::Vec3, f32, f64)>,
 }
 
 #[derive(Default, Debug)]
@@ -63,6 +68,7 @@ impl Runtime {
             camera_req,
             banner,
             stats: Stats::default(),
+            fx_live: Vec::new(),
         }
     }
 
@@ -168,6 +174,20 @@ impl Runtime {
         }
         self.stats.dealt += frame.damage.iter().filter(|d| matches!(d, gowring_core::DamageEvent::Dealt { .. })).count() as u64;
         self.stats.taken += frame.damage.iter().filter(|d| matches!(d, gowring_core::DamageEvent::Taken { .. })).count() as u64;
+        for c in &out.commands {
+            match c {
+                Command::Fx { kind, pos, radius, .. } => self.fx_live.push((*kind, *pos, radius.max(1.0), now)),
+                Command::Shake(a) => {
+                    if let Ok(mut g) = SHAKE.lock() {
+                        let amp = g.map(|(old, t0)| old * (-t0.elapsed().as_secs_f32() / 0.3).exp()).unwrap_or(0.0).max(*a);
+                        *g = Some((amp, Instant::now()));
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.fx_live.retain(|f| now - f.3 < crate::overlay::FX_LIFE_S as f64);
+        self.fx_live.truncate(24);
         self.bridge.apply(&out.commands, now, self.audio.as_ref(), &self.cache);
         self.ray_results = self.bridge.cast(&out.commands);
         self.publish(&frame, out.hud, out.camera, out.projectiles);
@@ -229,6 +249,8 @@ impl Runtime {
                 s.fov_rad = fov;
             }
             s.banner = self.banner.clone();
+            let now = self.start.elapsed().as_secs_f64();
+            s.fx = self.fx_live.iter().map(|(k, p, r, born)| crate::overlay::FxMark { kind: *k, pos: *p, radius: *r, age: (now - born) as f32 }).collect();
         }
     }
 }
@@ -236,18 +258,33 @@ impl Runtime {
 /// hooks.camera_offset — runs after ER has placed its follow camera for the frame.
 pub fn apply_camera(req: &gowring_core::CameraRequest) {
     const ER_DEFAULT_DISTANCE_M: f32 = 3.8;
-    if req.fov_deg <= 1.0 {
+    // a decaying wobble for Rage, spear blasts and the like (zero when there is no shake)
+    let shake = SHAKE.lock().ok().and_then(|g| *g).and_then(|(amp, t0)| {
+        let t = t0.elapsed().as_secs_f32();
+        (t < 1.0).then(|| (amp * (-t / 0.3).exp() * 0.05, t))
+    });
+    if req.fov_deg <= 1.0 && shake.is_none() {
         return;
     }
     let Ok(cam) = (unsafe { CSCamera::instance_mut() }) else { return };
     let pc = &mut cam.pers_cam_1;
     let (r, u, f) = (pc.right(), pc.up(), pc.forward());
-    let pull = req.distance_m - ER_DEFAULT_DISTANCE_M;
     let m = &mut pc.matrix;
-    m.3 .0 += r.0 * req.shoulder_x_m + u.0 * req.height_m + f.0 * -pull;
-    m.3 .1 += r.1 * req.shoulder_x_m + u.1 * req.height_m + f.1 * -pull;
-    m.3 .2 += r.2 * req.shoulder_x_m + u.2 * req.height_m + f.2 * -pull;
-    pc.fov = req.fov_deg.to_radians();
+    if req.fov_deg > 1.0 {
+        let pull = req.distance_m - ER_DEFAULT_DISTANCE_M;
+        m.3 .0 += r.0 * req.shoulder_x_m + u.0 * req.height_m + f.0 * -pull;
+        m.3 .1 += r.1 * req.shoulder_x_m + u.1 * req.height_m + f.1 * -pull;
+        m.3 .2 += r.2 * req.shoulder_x_m + u.2 * req.height_m + f.2 * -pull;
+    }
+    if let Some((a, t)) = shake {
+        let (dx, dy, dz) = ((t * 61.0).sin() * a, (t * 83.0 + 1.0).sin() * a * 0.7, (t * 47.0 + 2.0).sin() * a * 0.5);
+        m.3 .0 += r.0 * dx + u.0 * dy + f.0 * dz;
+        m.3 .1 += r.1 * dx + u.1 * dy + f.1 * dz;
+        m.3 .2 += r.2 * dx + u.2 * dy + f.2 * dz;
+    }
+    if req.fov_deg > 1.0 {
+        pc.fov = req.fov_deg.to_radians();
+    }
 }
 
 #[allow(dead_code)]

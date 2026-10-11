@@ -18,7 +18,7 @@ pub struct VoiceState {
 }
 
 enum Msg {
-    Sfx { path: PathBuf, volume: f32 },
+    Sfx { id: &'static str, path: PathBuf, volume: f32 },
     Voice { dir: PathBuf, set: String, no_repeat: usize, interrupt: bool, volume: f32 },
 }
 
@@ -74,7 +74,7 @@ impl Audio {
                 let mut rng: u32 = 0x9E37_79B9;
                 for msg in rx {
                     match msg {
-                        Msg::Sfx { path, volume } => match std::fs::File::open(&path).ok().and_then(|f| Decoder::new(BufReader::new(f)).ok()) {
+                        Msg::Sfx { id, path, volume } => match std::fs::File::open(&path).ok().and_then(|f| Decoder::new(BufReader::new(f)).ok()) {
                             Some(dec) => {
                                 if let Ok(sink) = Sink::try_new(&handle) {
                                     sink.set_volume(volume);
@@ -82,7 +82,20 @@ impl Audio {
                                     sink.detach();
                                 }
                             }
-                            None => crate::log::once("sfx-missing", "audio", &format!("cannot play {}", path.display())),
+                            None => {
+                                // no converted Ragnarök sound: a short generated stand-in, so the effect is not silent
+                                match crate::synth::sfx(id) {
+                                    Some(samples) => {
+                                        crate::log::once_u64("sfx-standin", id.len() as u64 * 131 + id.bytes().map(|b| b as u64).sum::<u64>(), "audio", &format!("{id}: using a generated stand-in (no converted sound at {})", path.display()));
+                                        if let Ok(sink) = Sink::try_new(&handle) {
+                                            sink.set_volume(volume * 0.8);
+                                            sink.append(rodio::buffer::SamplesBuffer::new(1, crate::synth::RATE, samples));
+                                            sink.detach();
+                                        }
+                                    }
+                                    None => crate::log::once("sfx-missing", "audio", &format!("cannot play {}", path.display())),
+                                }
+                            }
                         },
                         Msg::Voice { dir, set, no_repeat, interrupt, volume } => {
                             let playing = voice_sink.as_ref().map(|s| !s.empty()).unwrap_or(false);
@@ -94,7 +107,27 @@ impl Audio {
                             }
                             let r = recent.entry(set.clone()).or_default();
                             let Some(path) = pick(&dir, r, no_repeat, &mut rng) else {
-                                crate::log::once("voice-empty", "audio", &format!("no Mimir lines in {} (prepare did not find them)", dir.display()));
+                                // No recording: speak in subtitles with a line written for the mod.
+                                let lines = crate::mimir_text::lines(&set);
+                                if lines.is_empty() {
+                                    crate::log::once("voice-empty", "audio", &format!("no Mimir lines in {} (prepare did not find them)", dir.display()));
+                                    continue;
+                                }
+                                let names: Vec<String> = (0..lines.len()).map(|i| i.to_string()).collect();
+                                let fresh: Vec<usize> = (0..lines.len()).filter(|i| !r.contains(&names[*i])).collect();
+                                let pool: Vec<usize> = if fresh.is_empty() { (0..lines.len()).collect() } else { fresh };
+                                rng ^= rng << 13;
+                                rng ^= rng >> 17;
+                                rng ^= rng << 5;
+                                let pick_i = pool[(rng as usize) % pool.len()];
+                                r.push_back(names[pick_i].clone());
+                                while r.len() > lines.len().saturating_sub(1).max(1) {
+                                    r.pop_front();
+                                }
+                                let line = lines[pick_i];
+                                let hold = crate::mimir_text::hold_seconds(line);
+                                crate::log::once("voice-text-only", "audio", "no recorded Mimir lines: showing text-only stand-in lines written for this mod");
+                                *vshared.lock().unwrap() = VoiceState { set, stem: format!("text{pick_i}"), until: Some(Instant::now() + Duration::from_secs_f32(hold)), subtitle: Some(line.to_string()) };
                                 continue;
                             };
                             let Some(dec) = std::fs::File::open(&path).ok().and_then(|f| Decoder::new(BufReader::new(f)).ok()) else {
@@ -119,8 +152,8 @@ impl Audio {
         Audio { tx, voice }
     }
 
-    pub fn sfx(&self, path: PathBuf, volume: f32) {
-        let _ = self.tx.send(Msg::Sfx { path, volume });
+    pub fn sfx(&self, id: &'static str, path: PathBuf, volume: f32) {
+        let _ = self.tx.send(Msg::Sfx { id, path, volume });
     }
 
     pub fn voice(&self, dir: PathBuf, set: &str, no_repeat: usize, interrupt: bool, volume: f32) {

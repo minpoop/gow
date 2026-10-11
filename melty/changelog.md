@@ -1,7 +1,10 @@
-Twelfth alpha. A 15-minute play session of 0.1.10 on Elden Ring 2.7.1.0 showed the kit working in real play: axe throws, weapon swaps (the axe returns when you swap away), spear throws (three at a time), all runics, and mod-dealt damage that killed the Chapel boss and other enemies. Two things did not work, both fixed here:
+Thirteenth alpha: polish. Everything in 0.1.11 (all 8 test checks, recall, steady aim) stays; this build makes it look and sound finished while Ragnarök's own art and sound are still being mapped.
 
-- **Recall now works.** It was bound to Elden Ring's two-hand button, which never reaches the game on your controller's Triangle / Y; that button is Elden Ring's *interact* button. Recall (and spear detonation) is now Triangle / Y. It only takes over the button while a throw is out, so doors and items still work with the axe in hand.
-- **The throw crosshair no longer flickers.** Masking L2 hid it from the game, so the aim dropped the instant it was held. L2 stays visible now, and the aim also forgives a single missed frame.
-- The log keeps the last four runs instead of two, so a three-run Melty test leaves all of them.
+- **A real HUD, drawn in code.** Framed health and Rage bars with end caps, notches, a lit fill and the pale "recent damage" trail; rune rings with a cooldown sweep and a ready glow; drawn icons for the Leviathan Axe, Blades of Chaos, Draupnir Spear and Guardian Shield; a proper aim reticle; a stunned-enemy marker. All original shapes, no game files.
+- **Thrown weapons are visible in flight**: the axe spins and the spear points along its throw, instead of a dot.
+- **Effects**: runic shockwaves, spear blasts and the Rage burst show expanding rings (frost blue, fire orange, blast gold), and the camera shakes on Rage and spear detonations.
+- **Sound**: every combat effect (throw, recall, catch, parry, block, swap, Rage on/off, runic ready, stun, finisher, spear throw and blast) now has a short generated stand-in sound while the real Ragnarök sounds are not available.
+- **Mimir speaks in subtitles** with lines written for this mod, until his recorded lines can be read from your install.
+- **Spartan Rage fills faster**: the meter is 60 points instead of 100, so it can be reached in a normal Elden Ring fight.
 
-Still an alpha: the HUD art is plain placeholder shapes until the Ragnarök art is mapped; runics and finishers have no animation of their own.
+Still an alpha: the HUD art is the mod's own drawing, runics and finishers have no animation of their own, and nothing from Ragnarök's own art or sound is in use yet.

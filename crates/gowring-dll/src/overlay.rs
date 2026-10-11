@@ -21,7 +21,21 @@ pub struct Snapshot {
     pub fov_rad: f32,
     pub banner: String,
     pub projectiles: Vec<(&'static str, Vec3)>,
+    /// Short-lived effect rings (runic shockwaves, impacts, the spear blast, Rage burst), see `FxMark`.
+    pub fx: Vec<FxMark>,
 }
+
+/// One effect: where it happened, how far it reaches (metres) and how old it is (seconds).
+#[derive(Clone)]
+pub struct FxMark {
+    pub kind: gowring_core::sheets::FxKind,
+    pub pos: Vec3,
+    pub radius: f32,
+    pub age: f32,
+}
+
+/// How long an effect ring lives.
+pub const FX_LIFE_S: f32 = 0.9;
 
 pub type Shared = Arc<Mutex<Snapshot>>;
 
@@ -224,11 +238,59 @@ impl ImguiRenderLoop for Overlay {
                     }
                 }
             }
-            // thrown weapons: a bright marker where the axe / spears are (no model in v0.1)
-            for (_, p) in &snap.projectiles {
-                if let Some((sx, sy)) = project(*p) {
+            // Thrown weapons: the weapon's own icon where the axe / spears are, spinning (axe) or pointing along the
+            // throw (spear), with a soft halo. There is no flying model, so this is what the player sees in flight.
+            let px_per_m = h / (2.0 * tan.max(0.05));
+            for (id, p) in &snap.projectiles {
+                let Some((sx, sy)) = project(*p) else { continue };
+                let z = (*p - pos).dot(fwd).max(0.5);
+                let size = (px_per_m * 0.9 / z).clamp(30.0, 150.0);
+                let rect = Rect { x: sx - size / 2.0, y: sy - size / 2.0, w: size, h: size };
+                dl.add_circle([sx, sy], size * 0.5, col(0x9FE3FF, 0.16)).filled(true).num_segments(24).build();
+                let (asset, angle) = if *id == "leviathan_axe" { ("hud_icon_axe", snap.hud.pulse * std::f32::consts::TAU * 3.0) } else { ("hud_icon_spear", 0.0) };
+                if let Some(v) = gowring_core::vector::icon_prims(asset, &rect, 0xFFFFFF, 1.0) {
+                    draw_prims(&dl, &gowring_core::vector::rotated(&v, (sx, sy), angle));
+                } else {
                     dl.add_circle([sx, sy], 9.0, col(0x9FE3FF, 0.95)).filled(true).num_segments(16).build();
-                    dl.add_circle([sx, sy], 14.0, col(0xFFFFFF, 0.6)).thickness(2.0).num_segments(16).build();
+                }
+            }
+        }
+        if snap.valid {
+            let (right, up, fwd, pos) = (snap.cam_right, snap.cam_up, snap.cam_fwd, snap.cam_pos);
+            let tan = (snap.fov_rad.clamp(0.2, 2.5) * 0.5).tan();
+            let aspect = w / h;
+            let project = move |p: Vec3| -> Option<(f32, f32)> {
+                let d = p - pos;
+                let z = d.dot(fwd);
+                if z <= 0.1 {
+                    return None;
+                }
+                let nx = d.dot(right) / (z * tan * aspect);
+                let ny = d.dot(up) / (z * tan);
+                if nx.abs() > 1.6 || ny.abs() > 1.6 {
+                    return None;
+                }
+                Some(((nx * 0.5 + 0.5) * w, (0.5 - ny * 0.5) * h))
+            };
+            for f in &snap.fx {
+                let (Some((cx, cy)), Some((ex, ey))) = (project(f.pos), project(f.pos + right * f.radius)) else { continue };
+                let reach = ((ex - cx).powi(2) + (ey - cy).powi(2)).sqrt().clamp(14.0, w * 0.6);
+                let t = (f.age / FX_LIFE_S).clamp(0.0, 1.0);
+                let grow = 1.0 - (1.0 - t).powi(3);
+                let a = (1.0 - t).powf(1.4);
+                let (main, light) = match f.kind {
+                    gowring_core::sheets::FxKind::Frost => (0x7FD8FF, 0xE6F8FF),
+                    gowring_core::sheets::FxKind::Fire => (0xFF8A3A, 0xFFD9A0),
+                    gowring_core::sheets::FxKind::Blast => (0xFFD27A, 0xFFFFFF),
+                };
+                let r = reach * (0.2 + 0.8 * grow);
+                dl.add_circle([cx, cy], r, col(main, 0.9 * a)).thickness(2.0 + 5.0 * (1.0 - t)).num_segments(48).build();
+                dl.add_circle([cx, cy], r * 0.82, col(light, 0.55 * a)).thickness(1.5).num_segments(48).build();
+                dl.add_circle([cx, cy], r * 0.6, col(main, 0.18 * a)).filled(true).num_segments(32).build();
+                for k in 0..10 {
+                    let ang = k as f32 * std::f32::consts::TAU / 10.0 + 0.3;
+                    let (c0, s0) = (ang.cos(), ang.sin());
+                    dl.add_line([cx + c0 * r * 0.9, cy + s0 * r * 0.9], [cx + c0 * r * (1.06 + 0.25 * grow), cy + s0 * r * (1.06 + 0.25 * grow)], col(light, 0.8 * a)).thickness(2.0).build();
                 }
             }
         }

@@ -115,3 +115,12 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 ## 0.1.11 verified in play (2026-10-11)
 - Test 31a0ae86 passed (3 of 3, graduates: true). Player: "it all worked". Run-1 log: `L2 was masked for 30 frames and still visible in 30 of them` (×4), axe thrown → Triangle (Action) → `axe caught` (49.9 s, 55.5 s, 195.9 s, 201.6 s) without a swap, thrown-axe damage orders of 672 killing 27-55 hp enemies, 16 hostiles in range at 254 s, hostile team learned from lock-on (48), first parry/damage numbers as before. Not seen: Rage (no RageOn), finisher, Blades' own moves, spear detonation.
 - Waiting on the user's explicit go-ahead to publish. The listing was updated to say what has and has not been seen live.
+
+## 0.1.12 — polish (2026-10-11)
+- User: "keep this mod cooking, don't post until it's more polished". Publishing is on hold; 0.1.11 passed Melty's 3-run test and stays a draft.
+- HUD: new `gowring-core/src/vector.rs` — original vector drawing (framed bars with caps/notches/lit fill/trail, cooldown rings with ready glow, axe / blades / spear / shield icons, aim reticle, stunned marker) as triangles, lines and circles; the overlay and `hud-preview` both draw the same primitives (`docs/hud-layout-preview.png` regenerated). Fills are fans grown by 0.6 px so no seams show; icons keep their own metal palette (the sheet tints them white).
+- Thrown weapons: the overlay draws the axe icon spinning / the spear icon in flight (size from distance) with a halo; FX commands (runic shockwaves, spear blast, Rage burst, impacts) become expanding rings by kind (frost blue / fire orange / blast gold); `Command::Shake` shakes the camera (decaying wobble applied after ER's camera, also while no camera request is active).
+- Sound: `synth.rs` generates a stand-in for each of the 14 `sfx_*` assets (filtered noise sweeps, sine sweeps, bell partials; each 0.3-1.5 s, peak <= 0.8, finite, no end clicks — unit-tested, not listened to) used only when the converted Ragnarök file is missing.
+- Mimir: `mimir_text.rs` has original placeholder lines for all 14 voice sets; when no recording exists the subtitle shows for 2.5-7 s (no audio). These are not Ragnarök dialogue.
+- Rage: `meter_max` 100 -> 60 (gain per hit unchanged) so it fills in an ER fight; it never reached full in ~25 min of play.
+- Everything above is unverified in the real game until the next play session; the Wine probe only shows the DLL still loads and redirects the save.

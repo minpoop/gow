@@ -155,6 +155,23 @@ pub fn ring(cx: f32, cy: f32, r: f32, remaining: f32, ready: bool, color: u32, a
     c.out
 }
 
+/// The same shapes turned by `angle` radians about `centre` (for thrown weapons that spin in flight).
+pub fn rotated(prims: &[Prim], centre: (f32, f32), angle: f32) -> Vec<Prim> {
+    let (sn, cs) = angle.sin_cos();
+    let rot = |q: (f32, f32)| {
+        let (dx, dy) = (q.0 - centre.0, q.1 - centre.1);
+        (centre.0 + dx * cs - dy * sn, centre.1 + dx * sn + dy * cs)
+    };
+    prims
+        .iter()
+        .map(|p| match p {
+            Prim::Tri { p, color, alpha } => Prim::Tri { p: [rot(p[0]), rot(p[1]), rot(p[2])], color: *color, alpha: *alpha },
+            Prim::Line { a, b, thick, color, alpha } => Prim::Line { a: rot(*a), b: rot(*b), thick: *thick, color: *color, alpha: *alpha },
+            Prim::Circle { c, r, fill, thick, color, alpha } => Prim::Circle { c: rot(*c), r: *r, fill: *fill, thick: *thick, color: *color, alpha: *alpha },
+        })
+        .collect()
+}
+
 /// Vector art for the HUD asset ids that have a drawing; `None` for any other id.
 pub fn icon_prims(asset: &str, rect: &Rect, color: u32, alpha: f32) -> Option<Vec<Prim>> {
     let (sx, sy, s) = square(rect);
@@ -292,6 +309,18 @@ mod tests {
             }
         }
         assert!(icon_prims("hud_btn_r3", &R, 0xFFFFFF, 1.0).is_none());
+    }
+
+    #[test]
+    fn rotation_keeps_the_shape_and_moves_it_about_the_centre() {
+        let prims = icon_prims("hud_icon_axe", &R, 0xFFFFFF, 1.0).unwrap();
+        let centre = (R.x + R.w / 2.0, R.y + R.h / 2.0);
+        let turned = rotated(&prims, centre, std::f32::consts::FRAC_PI_2);
+        assert_eq!(prims.len(), turned.len());
+        let (Prim::Line { a: a0, b: b0, .. }, Prim::Line { a: a1, b: b1, .. }) = (prims.iter().find(|p| matches!(p, Prim::Line { .. })).unwrap(), turned.iter().find(|p| matches!(p, Prim::Line { .. })).unwrap()) else { unreachable!() };
+        let len = |a: &(f32, f32), b: &(f32, f32)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+        assert!((len(a0, b0) - len(a1, b1)).abs() < 1e-3, "a quarter turn must not change lengths");
+        assert!(len(a0, a1) > 0.1, "points must actually move");
     }
 
     #[test]
