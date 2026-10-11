@@ -56,14 +56,14 @@ impl Default for Settings {
             finisher_when_wounded: true,
             debug_tools: true,
             debug_spawn_key: 9,
-            debug_enemy_health: 12000.0,
-            debug_enemy_damage_multiplier: 2.5,
+            debug_enemy_health: 20000.0,
+            debug_enemy_damage_multiplier: 3.5,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 5;
+const FILE_VERSION: u32 = 6;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -161,8 +161,8 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     finisher_when_wounded: true,
     debug_tools: true,
     debug_spawn_key: 9,
-    debug_enemy_health: 12000.0,
-    debug_enemy_damage_multiplier: 2.5,
+    debug_enemy_health: 20000.0,
+    debug_enemy_damage_multiplier: 3.5,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -264,6 +264,13 @@ fn migrated_text(text: &str) -> Option<String> {
     // version 5: summons became bosses with 12000 health (8000 was "not that strong")
     if version < 5 && (s.debug_enemy_health - 8000.0).abs() < 0.5 {
         s.debug_enemy_health = Settings::default().debug_enemy_health;
+    }
+    // version 6: "the boss is still a bit easy" at 12000 / x2.5
+    if version < 6 && (s.debug_enemy_health - 12000.0).abs() < 0.5 {
+        s.debug_enemy_health = Settings::default().debug_enemy_health;
+    }
+    if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
+        s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
     // version 3 only added keys: re-rendering the file shows them with their notes
     Some(render(&s))
@@ -396,9 +403,13 @@ mod tests {
     #[test]
     fn a_version_3_file_gets_the_tougher_summon_unless_it_was_changed() {
         let s = parse(&migrated_text(r#"{ "settings_version": 3, "debug_enemy_health": 3000.0 }"#).unwrap()).unwrap();
-        assert_eq!(s.debug_enemy_health, 12000.0, "3000 -> 8000 -> 12000 across versions 4 and 5");
+        assert_eq!(s.debug_enemy_health, 20000.0, "3000 -> 8000 -> 12000 -> 20000 across versions 4 to 6");
         let s = parse(&migrated_text(r#"{ "settings_version": 4, "debug_enemy_health": 8000.0 }"#).unwrap()).unwrap();
-        assert_eq!(s.debug_enemy_health, 12000.0);
+        assert_eq!(s.debug_enemy_health, 20000.0);
+        let s = parse(&migrated_text(r#"{ "settings_version": 5, "debug_enemy_health": 12000.0, "debug_enemy_damage_multiplier": 2.5 }"#).unwrap()).unwrap();
+        assert_eq!((s.debug_enemy_health, s.debug_enemy_damage_multiplier), (20000.0, 3.5));
+        let s = parse(&migrated_text(r#"{ "settings_version": 5, "debug_enemy_health": 15000.0, "debug_enemy_damage_multiplier": 2.0 }"#).unwrap()).unwrap();
+        assert_eq!((s.debug_enemy_health, s.debug_enemy_damage_multiplier), (15000.0, 2.0), "the player's own values stay");
         let s = parse(&migrated_text(r#"{ "settings_version": 3, "debug_enemy_health": 4500.0 }"#).unwrap()).unwrap();
         assert_eq!(s.debug_enemy_health, 4500.0, "a value the player chose is kept");
     }

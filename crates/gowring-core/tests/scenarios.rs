@@ -590,3 +590,22 @@ fn blades_hits_set_enemies_burning_and_axe_hits_freeze_them() {
     assert_eq!(spear, None, "the spear has no element");
     assert_eq!(frac_s, 0.0);
 }
+
+#[test]
+fn bosses_take_half_the_build_up_and_shake_statuses_off_sooner() {
+    let mut w = SimWorld::new();
+    w.right_slot = 0; // axe: freezes
+    let mut boss = SimEnemy::new(1, 0.0, 2.2, 1.0e6);
+    boss.boss = true;
+    w.add_enemy(boss);
+    let mut swings = 0;
+    while swings < 40 && !w.all_commands.iter().any(|c| matches!(c, Command::Status { target: 1, .. })) {
+        w.step(&[R1], &[]);
+        w.idle(0.5);
+        swings += 1;
+    }
+    let secs = w.all_commands.iter().find_map(|c| if let Command::Status { target: 1, seconds, .. } = c { Some(*seconds) } else { None }).expect("the boss freezes eventually");
+    let axe = gowring_core::Data::get().weapon("leviathan_axe");
+    assert!((secs - axe.status_s * 0.5).abs() < 1e-3, "half as long: {secs}");
+    assert!(swings as f32 >= (100.0 / axe.status_per_hit) * 2.0 - 1.0, "half the build-up per hit: frozen after {swings} swings");
+}

@@ -52,6 +52,9 @@ pub struct TickOutput {
     pub projectiles: Vec<(&'static str, Vec3)>,
 }
 
+/// How much of a weapon's burn or freeze build-up, and of its duration, a boss takes.
+const BOSS_STATUS_RESIST: f32 = 0.5;
+
 /// Player-adjustable multipliers (the DLL reads them from `settings.json`).
 #[derive(Clone, Copy, Debug)]
 pub struct Tuning {
@@ -173,6 +176,9 @@ impl Engine {
 
     /// Add elemental build-up to an enemy; a full meter freezes or burns it (with a ring of frost or fire).
     fn build_status(&mut self, f: &Frame, enemy: EnemyId, kind: WeaponStatus, pts: f32, secs: f32, out: &mut Vec<Command>, logs: &mut Vec<String>) {
+        // Bosses resist: the meter fills at half speed and the status lasts half as long (no freeze-lock).
+        let boss = f.enemies.iter().any(|e| e.id == enemy && e.boss);
+        let (pts, secs) = if boss { (pts * BOSS_STATUS_RESIST, secs * BOSS_STATUS_RESIST) } else { (pts, secs) };
         if !self.status.add(enemy, kind, pts, f.time) {
             return;
         }
