@@ -54,13 +54,13 @@ impl Default for Settings {
             finisher_when_wounded: true,
             debug_tools: true,
             debug_spawn_key: 9,
-            debug_enemy_health: 3000.0,
+            debug_enemy_health: 8000.0,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 3;
+const FILE_VERSION: u32 = 4;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -154,7 +154,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     finisher_when_wounded: true,
     debug_tools: true,
     debug_spawn_key: 9,
-    debug_enemy_health: 3000.0,
+    debug_enemy_health: 8000.0,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -247,6 +247,10 @@ fn migrated_text(text: &str) -> Option<String> {
     let mut s = parse(text).ok()?;
     if version < 2 && v.get("rage_gain_multiplier").and_then(|x| x.as_f64()).is_some() {
         s.rage_gain_multiplier = ((s.rage_gain_multiplier / 3.0) * 100.0).round() / 100.0;
+    }
+    // version 4: summoned enemies went from 3000 to 8000 health (a summon should outlast a Rage); keep a changed value
+    if version < 4 && (s.debug_enemy_health - 3000.0).abs() < 0.5 {
+        s.debug_enemy_health = Settings::default().debug_enemy_health;
     }
     // version 3 only added keys: re-rendering the file shows them with their notes
     Some(render(&s))
@@ -373,5 +377,13 @@ mod tests {
         assert_eq!(parse(r#"{ "debug_spawn_key": "f5" }"#).unwrap().debug_spawn_key, 5);
         assert_eq!(parse(r#"{ "debug_spawn_key": "F13" }"#).unwrap().debug_spawn_key, 9);
         assert_eq!(parse(r#"{ "debug_spawn_key": "Q" }"#).unwrap().debug_spawn_key, 9);
+    }
+
+    #[test]
+    fn a_version_3_file_gets_the_tougher_summon_unless_it_was_changed() {
+        let s = parse(&migrated_text(r#"{ "settings_version": 3, "debug_enemy_health": 3000.0 }"#).unwrap()).unwrap();
+        assert_eq!(s.debug_enemy_health, 8000.0);
+        let s = parse(&migrated_text(r#"{ "settings_version": 3, "debug_enemy_health": 4500.0 }"#).unwrap()).unwrap();
+        assert_eq!(s.debug_enemy_health, 4500.0, "a value the player chose is kept");
     }
 }

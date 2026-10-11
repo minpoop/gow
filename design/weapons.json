@@ -138,7 +138,7 @@
    "post_game": "max",
    "notes": "Frost axe: balanced, throw-and-recall.",
    "status": "frozen",
-   "status_per_hit": 12,
+   "status_per_hit": 20,
    "status_s": 2.5
   },
   {
@@ -171,7 +171,7 @@
    "post_game": "max",
    "notes": "Chained fire blades: wide, fast, hit many. Shield is stowed while out.",
    "status": "burning",
-   "status_per_hit": 10,
+   "status_per_hit": 17,
    "status_s": 5.0
   },
   {

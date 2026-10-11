@@ -95,6 +95,8 @@ pub struct Bridge {
     tough: HashMap<u64, (i32, f64)>,
     /// Every enemy summoned this session (never used as a template).
     summoned: HashSet<u64>,
+    /// Their handles: the game keeps debug-created characters out of its by-distance list, so the scan adds them.
+    summoned_handles: Vec<FieldInsHandle>,
     last_ppos: Vec3,
     last_facing: Vec3,
     /// HP we took off enemies ourselves outside the engine's ledger (burn ticks), so it is not read back as melee.
@@ -138,6 +140,7 @@ impl Bridge {
             pending_spawn: None,
             tough: HashMap::new(),
             summoned: HashSet::new(),
+            summoned_handles: Vec::new(),
             last_ppos: Vec3::ZERO,
             last_facing: Vec3::new(0.0, 0.0, 1.0),
             own_pending: HashMap::new(),
@@ -221,6 +224,7 @@ impl Bridge {
                 let off = Vec3::new(x, y, z).dist(p.want);
                 crate::glog!("debug_spawn", "created {id:#x} from {}: at ({x:.1},{y:.1},{z:.1}), {off:.1} m from where it was asked for; team {}; health set to {}", p.template, chr.team_type, p.hp);
                 self.summoned.insert(id);
+                self.summoned_handles.push(chr.field_ins_handle);
                 self.scaled.insert(id, p.hp);
                 self.tough.insert(id, (p.hp, now + 2.0));
                 crate::overlay::toast(if off > 25.0 { "Tough enemy summoned, but it landed away from you (see gowring.log)" } else { "Tough enemy summoned" });
@@ -238,7 +242,7 @@ impl Bridge {
                 let Some(h) = self.handles.get(id).copied() else { continue };
                 if let Some(chr) = wcm.chr_ins_by_handle_mut(&h) {
                     if let Some(d) = opt_mut(&mut chr.modules.data) {
-                        if d.max_hp < *hp && d.hp > 0 {
+                        if d.max_hp != *hp && d.hp > 0 {
                             let untouched = d.hp >= d.max_hp;
                             d.max_hp = *hp;
                             d.max_uncapped_hp = d.max_uncapped_hp.max(*hp);
@@ -368,8 +372,17 @@ impl Bridge {
         let mut nearest_hostile = f32::INFINITY;
         let mut seen_hp: HashMap<u64, i32> = HashMap::new();
         let mut damage: Vec<DamageEvent> = Vec::new();
-        for entry in wcm.chr_inses_by_distance.iter().take(512) {
-            let e: &ChrIns = unsafe { entry.chr_ins.as_ref() };
+        let mut cands: Vec<&ChrIns> = wcm.chr_inses_by_distance.iter().take(512).map(|entry| unsafe { entry.chr_ins.as_ref() }).collect();
+        self.summoned_handles.retain(|h| wcm.chr_ins_by_handle(h).is_some());
+        for h in &self.summoned_handles {
+            if let Some(e) = wcm.chr_ins_by_handle(h) {
+                if !cands.iter().any(|c| c.field_ins_handle == e.field_ins_handle) {
+                    crate::log::once_u64("summon-scan", id_of(h), "debug_spawn", &format!("{:#x} is not in the game's by-distance list; scanning it directly", id_of(h)));
+                    cands.push(e);
+                }
+            }
+        }
+        for e in cands {
             if e.field_ins_handle == player_handle {
                 continue;
             }
@@ -530,7 +543,7 @@ impl Bridge {
                     RunicStatus::Burning => {
                         let max_hp = self.handles.get(target).and_then(|h| wcm.chr_ins_by_handle(h)).map(|c| c.modules.data.max_hp).unwrap_or(1000);
                         self.burning.retain(|b| b.id != *target);
-                        self.burning.push(Burn { id: *target, until: now + *seconds as f64, next_tick: now + 0.5, per_tick: (max_hp / 120).max(8) });
+                        self.burning.push(Burn { id: *target, until: now + *seconds as f64, next_tick: now + 0.5, per_tick: (max_hp / 50).max(8) });
                     }
                     RunicStatus::None => {}
                 },

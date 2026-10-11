@@ -1,7 +1,7 @@
 {
  "sheet": "rage",
  "struct": "RageDef",
- "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost): 3.0 filled the bar in about 85 s of fighting in 0.1.15 (good for testing); the release pace is 1.5. Turning Rage on heals activation_heal_pct of max HP and knocks down everything within burst_radius_m for burst_stagger_s; each kill while raging adds kill_extend_s (up to duration_s).",
+ "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost): 3.0 filled the bar in about 85 s of fighting in 0.1.15 (good for testing); the release pace is 1.25 (0.1.21 at 1.5 was 'still a bit fast', most of it from damage taken, so gain_per_pct_hp_lost went 0.9 -> 0.6). Turning Rage on heals activation_heal_pct of max HP and knocks down everything within burst_radius_m for burst_stagger_s; each kill while raging adds kill_extend_s (up to duration_s).",
  "columns": {
   "id": {
    "type": "id"
@@ -108,7 +108,7 @@
   {
    "id": "spartan_rage",
    "meter_max": 100,
-   "gain_per_pct_hp_lost": 0.9,
+   "gain_per_pct_hp_lost": 0.6,
    "duration_s": 25,
    "damage_mult": 2.0,
    "damage_taken_mult": 0.35,
@@ -123,7 +123,7 @@
    "mimir_trigger": "mt_rage",
    "tint": "#8a0b0b",
    "tint_strength": 0.45,
-   "gain_scale": 1.5,
+   "gain_scale": 1.25,
    "burst_radius_m": 10,
    "burst_stagger_s": 3.0,
    "activation_heal_pct": 20,

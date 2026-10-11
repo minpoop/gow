@@ -302,7 +302,10 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
             }
         }
         // Kratos himself (roadmap R2): his model is in r_heroa00.wad (MESH_heroa00_*, MG_heroa00_*, goProtoheroa00).
-        if let Some(w) = lz.iter().find(|w| w.path.to_lowercase().ends_with("r_heroa00.wad")) {
+        if let Some(w) = lz.iter().find(|w| {
+            let p = w.path.to_lowercase().replace('\\', "/");
+            p.rsplit('/').next() == Some("r_heroa00.wad")
+        }) {
             if !late() {
                 if let Ok((big, _)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 96 << 20) {
                     kratos_probe(&mut o, &w.path, w.size, &big);

@@ -181,6 +181,7 @@ impl Engine {
             _ => (RunicStatus::Burning, FxKind::Fire, "burning"),
         };
         out.push(Command::Status { target: enemy, status, seconds: secs });
+        self.status.set_active(enemy, kind, f.time + secs as f64);
         if let Some(e) = f.enemies.iter().find(|e| e.id == enemy) {
             out.push(Command::Fx { kind: fx, pos: e.pos, dir: f.player.facing, radius: 1.6 + e.radius });
         }
@@ -611,6 +612,11 @@ impl Engine {
             stunned: st.is_stunned(e.id, now),
             boss: e.boss,
             status_frac: self.status.frac(e.id).0,
+            status_label: match self.status.active(e.id, now) {
+                Some(WeaponStatus::Frozen) => Some("FROZEN"),
+                Some(WeaponStatus::Burning) => Some("BURNING"),
+                _ => None,
+            },
             status_color: match self.status.frac(e.id).1 {
                 WeaponStatus::Frozen => 0x7FD8FF,
                 WeaponStatus::Burning => 0xFF8A3A,

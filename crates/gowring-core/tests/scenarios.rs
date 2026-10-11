@@ -568,6 +568,8 @@ fn hits_until_status(slot: u8) -> (Option<gowring_core::sheets::RunicStatus>, us
         }
         let status = w.all_commands.iter().find_map(|c| if let Command::Status { target: 1, status, .. } = c { Some(*status) } else { None });
         if status.is_some() {
+            let label = w.idle(0.1).hud.enemies.iter().find(|e| e.id == 1).and_then(|e| e.status_label);
+            assert!(label.is_some(), "the enemy is labelled while the status lasts");
             return (status, n, seen_frac);
         }
     }
@@ -579,11 +581,11 @@ fn blades_hits_set_enemies_burning_and_axe_hits_freeze_them() {
     use gowring_core::sheets::RunicStatus;
     let (blades, n_b, frac_b) = hits_until_status(1);
     assert_eq!(blades, Some(RunicStatus::Burning), "Blades hits end in a burn");
-    assert!(n_b >= 5, "not on the first swing ({n_b})");
+    assert!(n_b >= 3, "not on the first swing ({n_b})");
     assert!(frac_b > 0.3, "the HUD shows the heat building ({frac_b})");
     let (axe, n_a, _) = hits_until_status(0);
     assert_eq!(axe, Some(RunicStatus::Frozen), "axe hits end in a freeze");
-    assert!(n_a >= 5, "not on the first swing ({n_a})");
+    assert!(n_a >= 3, "not on the first swing ({n_a})");
     let (spear, _, frac_s) = hits_until_status(2);
     assert_eq!(spear, None, "the spear has no element");
     assert_eq!(frac_s, 0.0);

@@ -159,6 +159,7 @@ mod tests {
     fn damage_taken_fills_the_meter() {
         let mut r = rage();
         r.gain_from_hp_loss(250.0, 2500.0); // 10% of max HP
-        assert!((r.meter - 9.0).abs() < 1e-3);
+        let want = 10.0 * Data::get().rage.gain_per_pct_hp_lost * r.gain_mult;
+        assert!(want > 0.0 && (r.meter - want).abs() < 1e-3, "{} vs {want}", r.meter);
     }
 }

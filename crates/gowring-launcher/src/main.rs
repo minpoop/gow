@@ -306,8 +306,8 @@ fn export_ui_textures(gow: &std::path::Path, out: &std::path::Path) -> String {
             return o;
         }
     };
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    let report = gowring_gow::wadtex::export(&buf, out, 1500, || std::time::Instant::now() < until);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(150);
+    let report = gowring_gow::wadtex::export(&buf, out, 4000, || std::time::Instant::now() < until);
     o.push_str(&format!("{} ({} decompressed bytes) -> {}\n", wad.display(), buf.len(), out.display()));
     // the summary first, then the first 300 lines
     if let Some(sum) = report.lines().last() {

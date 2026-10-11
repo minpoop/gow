@@ -18,6 +18,8 @@ struct Meter {
 #[derive(Default)]
 pub struct StatusMeters {
     m: HashMap<EnemyId, Meter>,
+    /// Statuses in effect: enemy -> (element, until when).
+    active: HashMap<EnemyId, (WeaponStatus, f64)>,
 }
 
 impl StatusMeters {
@@ -58,6 +60,17 @@ impl StatusMeters {
     /// Forget enemies that are gone.
     pub fn keep_only(&mut self, live: &HashSet<EnemyId>) {
         self.m.retain(|id, _| live.contains(id));
+        self.active.retain(|id, _| live.contains(id));
+    }
+
+    /// Record that a full meter put an enemy under its status until `until`.
+    pub fn set_active(&mut self, enemy: EnemyId, kind: WeaponStatus, until: f64) {
+        self.active.insert(enemy, (kind, until));
+    }
+
+    /// The status an enemy is under right now, if any.
+    pub fn active(&self, enemy: EnemyId, now: f64) -> Option<WeaponStatus> {
+        self.active.get(&enemy).filter(|(_, until)| now < *until).map(|(k, _)| *k)
     }
 }
 

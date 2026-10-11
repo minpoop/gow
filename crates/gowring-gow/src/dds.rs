@@ -13,6 +13,8 @@ pub enum Format {
     Bc3,
     Bc4,
     Bc5,
+    Bc6U,
+    Bc6S,
     Bc7,
     Rgba8,
     Bgra8,
@@ -78,7 +80,7 @@ pub fn decode_raw(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> 
     let (wz, hz) = (w as usize, h as usize);
     let mut px = vec![0u32; wz * hz];
     match format {
-        Format::Bc1 | Format::Bc2 | Format::Bc3 | Format::Bc4 | Format::Bc5 | Format::Bc7 => {
+        Format::Bc1 | Format::Bc2 | Format::Bc3 | Format::Bc4 | Format::Bc5 | Format::Bc6U | Format::Bc6S | Format::Bc7 => {
             let blocks = wz.div_ceil(4) * hz.div_ceil(4);
             let size = blocks * if matches!(format, Format::Bc1 | Format::Bc4) { 8 } else { 16 };
             if data.len() < size {
@@ -90,6 +92,8 @@ pub fn decode_raw(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> 
                 Format::Bc3 => texture2ddecoder::decode_bc3(data, wz, hz, &mut px),
                 Format::Bc4 => texture2ddecoder::decode_bc4(data, wz, hz, &mut px),
                 Format::Bc5 => texture2ddecoder::decode_bc5(data, wz, hz, &mut px),
+                Format::Bc6U => texture2ddecoder::decode_bc6(data, wz, hz, &mut px, false),
+                Format::Bc6S => texture2ddecoder::decode_bc6(data, wz, hz, &mut px, true),
                 _ => texture2ddecoder::decode_bc7(data, wz, hz, &mut px),
             };
             r.map_err(|e| anyhow::anyhow!("decode failed: {e}"))?;

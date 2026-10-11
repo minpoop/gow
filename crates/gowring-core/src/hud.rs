@@ -16,6 +16,8 @@ pub struct EnemyBar {
     /// The frost / burn build-up from weapon hits (0-1) and the colour it is drawn in (0 = none).
     pub status_frac: f32,
     pub status_color: u32,
+    /// "BURNING" / "FROZEN" while a full meter's status lasts.
+    pub status_label: Option<&'static str>,
 }
 
 #[derive(Clone, Debug)]
@@ -221,6 +223,11 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                                 let thin = Rect { y: rc.y + rc.h + 2.0 * k * us, h: (rc.h * 0.5).max(2.0), ..rc };
                                 out.push(DrawCmd::Bar { rect: thin, frac: e.status_frac, trail: e.status_frac, frame: None, fill: None, color: e.status_color, alpha: 0.95 });
                             }
+                            if let Some(label) = e.status_label {
+                                let tag = Rect { y: rc.y + rc.h * 2.0 + 6.0 * k * us, h: 16.0 * k * us, ..rc };
+                                let tint = if label == "FROZEN" { 0x7FD8FF } else { 0xFF8A3A };
+                                out.push(DrawCmd::Text { rect: tag, px: 14.0 * k * us, text: label.to_string(), color: tint, alpha: 1.0, align: Align::Center, plate: None, portrait: None });
+                            }
                         }
                         _ if e.stunned => out.push(DrawCmd::Icon { rect: rc, asset: h.glyph, color, alpha: pulse_alpha }),
                         _ => {}
@@ -334,8 +341,8 @@ mod tests {
         s.recall_label = "Recall";
         s.in_combat = true;
         s.enemies = vec![
-            EnemyBar { id: 1, pos: Vec3::new(2.0, 0.0, 5.0), hp_frac: 0.5, stun_frac: 0.7, stunned: false, boss: false, status_frac: 0.0, status_color: 0 },
-            EnemyBar { id: 2, pos: Vec3::new(-2.0, 0.0, 5.0), hp_frac: 1.0, stun_frac: 1.0, stunned: true, boss: false, status_frac: 0.0, status_color: 0 },
+            EnemyBar { id: 1, pos: Vec3::new(2.0, 0.0, 5.0), hp_frac: 0.5, stun_frac: 0.7, stunned: false, boss: false, status_frac: 0.0, status_color: 0, status_label: None },
+            EnemyBar { id: 2, pos: Vec3::new(-2.0, 0.0, 5.0), hp_frac: 1.0, stun_frac: 1.0, stunned: true, boss: false, status_frac: 0.0, status_color: 0, status_label: None },
         ];
         s.finisher_target = Some(2);
         s.rage_ready = true;
@@ -354,7 +361,7 @@ mod tests {
         let d = Data::get();
         let mut s = base_state();
         s.in_combat = true;
-        s.boss = Some(EnemyBar { id: 9, pos: Vec3::new(0.0, 0.0, 8.0), hp_frac: 0.6, stun_frac: 0.2, stunned: false, boss: true, status_frac: 0.0, status_color: 0 });
+        s.boss = Some(EnemyBar { id: 9, pos: Vec3::new(0.0, 0.0, 8.0), hp_frac: 0.6, stun_frac: 0.2, stunned: false, boss: true, status_frac: 0.0, status_color: 0, status_label: None });
         s.enemies = vec![s.boss.clone().unwrap()];
         s.subtitle = Some("Boy, mind the left.".into());
         s.mimir_speaking = true;
@@ -393,9 +400,9 @@ mod tests {
         s.mimir_speaking = true;
         s.subtitle = Some("x".into());
         s.finisher_target = Some(1);
-        let boss = EnemyBar { id: 9, pos: Vec3::new(0.0, 0.0, 8.0), hp_frac: 0.6, stun_frac: 0.2, stunned: false, boss: true, status_frac: 0.0, status_color: 0 };
+        let boss = EnemyBar { id: 9, pos: Vec3::new(0.0, 0.0, 8.0), hp_frac: 0.6, stun_frac: 0.2, stunned: false, boss: true, status_frac: 0.0, status_color: 0, status_label: None };
         s.boss = Some(boss);
-        s.enemies = vec![EnemyBar { id: 1, pos: Vec3::new(1.0, 0.0, 4.0), hp_frac: 0.5, stun_frac: 1.0, stunned: true, boss: false, status_frac: 0.0, status_color: 0 }];
+        s.enemies = vec![EnemyBar { id: 1, pos: Vec3::new(1.0, 0.0, 4.0), hp_frac: 0.5, stun_frac: 1.0, stunned: true, boss: false, status_frac: 0.0, status_color: 0, status_label: None }];
         let cmds = draw_list(d, &s, Screen { w: 1920.0, h: 1080.0 }, &project);
         // 18 hud rows -> each yields at least one command (world rows yield per enemy)
         assert!(cmds.len() >= HUD.len(), "{} cmds for {} rows", cmds.len(), HUD.len());

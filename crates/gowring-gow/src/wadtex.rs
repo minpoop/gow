@@ -88,6 +88,8 @@ pub fn format_info(f: u32) -> Option<(Format, usize, u32)> {
         173 | 174 => (Format::Bc3, 16, 4),
         175 => (Format::Bc4, 8, 4),
         177 => (Format::Bc5, 16, 4),
+        179 => (Format::Bc6U, 16, 4),
+        180 => (Format::Bc6S, 16, 4),
         181 | 182 => (Format::Bc7, 16, 4),
         56 | 130 => (Format::Rgba8, 4, 1),
         _ => return None,
@@ -129,7 +131,16 @@ pub fn decode(parm: &TexParm, gpu: &[u8]) -> Result<(dds::Image, Layout)> {
     let Some(bytes) = gpu.get(l.mip0_off..l.mip0_off + l.mip0_len) else {
         bail!("GPU chunk is {} bytes; the {w}x{h} image would need {} at {:#x}", gpu.len(), l.mip0_len, l.mip0_off)
     };
-    Ok((dds::decode_raw(format, w, h, bytes)?, l))
+    let mut img = dds::decode_raw(format, w, h, bytes)?;
+    if format == Format::Bc4 {
+        // One-channel UI textures are masks (button glyphs, letters, meter shapes) that the game tints: show them as
+        // white shapes on transparency rather than as red-only pictures.
+        for px in img.rgba.chunks_exact_mut(4) {
+            let v = px[0];
+            px.copy_from_slice(&[255, 255, 255, v]);
+        }
+    }
+    Ok((img, l))
 }
 
 /// Every texture pair in a WAD's table: (parameter entry index, GPU entry index).
@@ -275,7 +286,7 @@ mod tests {
 
     #[test]
     fn unsupported_and_short_chunks_are_errors_not_panics() {
-        let p = parse_parm(&parm("TX_x", tsharp(179, 8, 8, 0))).unwrap(); // BC6H
+        let p = parse_parm(&parm("TX_x", tsharp(140, 8, 8, 0))).unwrap(); // a float format we do not decode
         assert!(decode(&p, &[0u8; 64]).is_err());
         let p = parse_parm(&parm("TX_x", tsharp(169, 64, 64, 0))).unwrap();
         assert!(decode(&p, &[0u8; 16]).is_err());
@@ -318,5 +329,15 @@ mod tests {
         let page = std::fs::read_to_string(dir.join("index.html")).unwrap();
         assert!(page.contains("src='TX_hud_test_0123.png'") && page.contains("8 x 8"), "{page}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn one_channel_masks_come_out_white_on_transparency() {
+        // BC4 block: red0 = 255, red1 = 0, all indices 0 -> every texel 255
+        let p = parse_parm(&parm("TX_mask", tsharp(175, 4, 4, 0))).unwrap();
+        let mut gpu = vec![0u8; 256];
+        gpu[0] = 255;
+        let (img, _) = decode(&p, &gpu).unwrap();
+        assert!(img.rgba.chunks_exact(4).all(|px| px == [255, 255, 255, 255]), "{:?}", &img.rgba[..8]);
     }
 }
