@@ -24,6 +24,10 @@ pub struct Settings {
     pub effect_rings: bool,
     /// How long the controls panel stays up after you enter the world (0 = never show it).
     pub controls_hint_seconds: f32,
+    /// Regular enemies get this many times their normal HP when they first come into range (bosses are left alone).
+    pub enemy_health_multiplier: f32,
+    /// A regular enemy worn down to a quarter of its health is staggered once, so you can finish it with R3.
+    pub finisher_when_wounded: bool,
 }
 
 impl Default for Settings {
@@ -40,47 +44,78 @@ impl Default for Settings {
             camera_shake: 1.0,
             effect_rings: true,
             controls_hint_seconds: 25.0,
+            enemy_health_multiplier: 3.0,
+            finisher_when_wounded: true,
         }
     }
 }
 
-const DEFAULT_FILE: &str = r#"{
+/// Written into the file so a settings file from an older build can be recognised and brought forward.
+const FILE_VERSION: u32 = 2;
+
+/// The settings file's text for these values, with a plain-language note under every key.
+fn render(s: &Settings) -> String {
+    format!(
+        r#"{{
+  "settings_version": {ver},
   "_about": "Kratos in the Lands Between settings. Save this file while the game is running and the change applies within a second or two. Delete a line to get its default back; delete the whole file to start over.",
 
-  "rage_gain_multiplier": 1.0,
-  "_rage_gain_multiplier": "Spartan Rage earned per hit, throw, parry and so on. 0.5 = half as fast, 2 = twice as fast, 0 = it never fills.",
+  "rage_gain_multiplier": {rage:?},
+  "_rage_gain_multiplier": "Spartan Rage earned per hit, throw, parry and so on. 1.0 is the tuned speed; 0.5 = half as fast, 2 = twice as fast, 0 = it never fills.",
 
-  "mod_damage_multiplier": 1.0,
+  "mod_damage_multiplier": {dmg:?},
   "_mod_damage_multiplier": "Damage the mod itself deals: axe and spear throws, runics, finishers, the Rage burst. Elden Ring's own weapon hits are not scaled.",
 
-  "hud_scale": 1.0,
+  "enemy_health_multiplier": {ehp:?},
+  "_enemy_health_multiplier": "Regular enemies get this many times their normal health when they first come into range, so a fight lasts long enough to stun them. 1.0 = Elden Ring's own health. Bosses and mini-bosses are never changed. Applies to enemies you meet after the change.",
+
+  "finisher_when_wounded": {wounded},
+  "_finisher_when_wounded": "A regular enemy worn down to a quarter of its health is staggered once, so you can finish it with R3. false = only a full stun bar stuns.",
+
+  "hud_scale": {scale:?},
   "_hud_scale": "HUD size. 1.0 = normal, 1.3 = bigger, 0.8 = smaller (0.4 to 3.0).",
 
-  "hud_opacity": 1.0,
+  "hud_opacity": {opacity:?},
   "_hud_opacity": "0.0 invisible to 1.0 solid.",
 
-  "sfx_volume": 1.0,
+  "sfx_volume": {sfx:?},
   "_sfx_volume": "Volume of the mod's sound effects, 0.0 to 2.0.",
 
-  "stand_in_sounds": true,
+  "stand_in_sounds": {stand},
   "_stand_in_sounds": "Generated stand-in sounds used while the real Ragnarok sounds are not available. false = silence instead.",
 
-  "mimir_subtitles": true,
+  "mimir_subtitles": {subs},
   "_mimir_subtitles": "Mimir's stand-in subtitle lines (shown while no recording is available).",
 
-  "mimir_frequency": 1.0,
+  "mimir_frequency": {mimir:?},
   "_mimir_frequency": "How often Mimir speaks. 0 = never, 0.5 = half as often, 3 = three times as often.",
 
-  "camera_shake": 1.0,
+  "camera_shake": {shake:?},
   "_camera_shake": "Strength of the screen shake on Rage and spear blasts. 0 = none.",
 
-  "effect_rings": true,
+  "effect_rings": {rings},
   "_effect_rings": "The expanding rings for runics, spear blasts and the Rage burst.",
 
-  "controls_hint_seconds": 25,
+  "controls_hint_seconds": {hint:?},
   "_controls_hint_seconds": "How long the controls panel stays on screen when you enter the world. 0 = never."
+}}
+"#,
+        ver = FILE_VERSION,
+        rage = s.rage_gain_multiplier,
+        dmg = s.mod_damage_multiplier,
+        ehp = s.enemy_health_multiplier,
+        wounded = s.finisher_when_wounded,
+        scale = s.hud_scale,
+        opacity = s.hud_opacity,
+        sfx = s.sfx_volume,
+        stand = s.stand_in_sounds,
+        subs = s.mimir_subtitles,
+        mimir = s.mimir_frequency,
+        shake = s.camera_shake,
+        rings = s.effect_rings,
+        hint = s.controls_hint_seconds,
+    )
 }
-"#;
 
 static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     rage_gain_multiplier: 1.0,
@@ -94,6 +129,8 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     camera_shake: 1.0,
     effect_rings: true,
     controls_hint_seconds: 25.0,
+    enemy_health_multiplier: 3.0,
+    finisher_when_wounded: true,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -132,6 +169,8 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     num(&v, "camera_shake", 0.0, 3.0, &mut s.camera_shake);
     flag(&v, "effect_rings", &mut s.effect_rings);
     num(&v, "controls_hint_seconds", 0.0, 600.0, &mut s.controls_hint_seconds);
+    num(&v, "enemy_health_multiplier", 0.25, 20.0, &mut s.enemy_health_multiplier);
+    flag(&v, "finisher_when_wounded", &mut s.finisher_when_wounded);
     Ok(s)
 }
 
@@ -159,17 +198,44 @@ fn reload(path: &Path, first: bool) {
     }
 }
 
+/// What a settings file from an older build becomes: every value kept, the Rage multiplier divided by 3 (Rage gain was
+/// tuned up threefold in the rules in version 2, so the same play feels the same), and the notes brought up to date.
+/// `None` when the text is already current or is not a settings file (a file that does not parse is left for its owner).
+fn migrated_text(text: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    if !v.is_object() || v.get("settings_version").and_then(|x| x.as_u64()).unwrap_or(1) >= FILE_VERSION as u64 {
+        return None;
+    }
+    let mut s = parse(text).ok()?;
+    if v.get("rage_gain_multiplier").and_then(|x| x.as_f64()).is_some() {
+        s.rage_gain_multiplier = ((s.rage_gain_multiplier / 3.0) * 100.0).round() / 100.0;
+    }
+    Some(render(&s))
+}
+
+fn migrate(path: &Path) {
+    let Ok(text) = std::fs::read_to_string(path) else { return };
+    let Some(new_text) = migrated_text(&text) else { return };
+    let backup = path.with_file_name("settings.v1.json");
+    let _ = std::fs::write(&backup, &text);
+    match std::fs::write(path, new_text) {
+        Ok(()) => crate::glog!("settings", "brought {} up to date (the old one is kept as {})", path.display(), backup.display()),
+        Err(e) => crate::glog!("settings", "could not update {}: {e}", path.display()),
+    }
+}
+
 /// Read (and on first run create) the settings file and watch it for edits.
 pub fn init(local_dir: &Path) {
     let path = local_dir.join("settings.json");
     let _ = PATH.set(path.clone());
     if !path.exists() {
         let _ = std::fs::create_dir_all(local_dir);
-        match std::fs::write(&path, DEFAULT_FILE) {
+        match std::fs::write(&path, render(&Settings::default())) {
             Ok(()) => crate::glog!("settings", "created {} with the defaults", path.display()),
             Err(e) => crate::glog!("settings", "could not create {}: {e}", path.display()),
         }
     }
+    migrate(&path);
     reload(&path, true);
     let _ = std::thread::Builder::new().name("gowring-settings".into()).spawn(move || {
         let mut seen = mtime(&path);
@@ -192,7 +258,7 @@ mod tests {
 
     #[test]
     fn the_default_file_parses_to_the_defaults() {
-        assert_eq!(parse(DEFAULT_FILE).unwrap(), Settings::default());
+        assert_eq!(parse(&render(&Settings::default())).unwrap(), Settings::default());
     }
 
     #[test]
@@ -210,5 +276,42 @@ mod tests {
         assert!(parse("{ not json").is_err());
         assert!(parse("[1, 2]").is_err());
         assert!(parse("").is_err());
+    }
+
+    #[test]
+    fn every_value_survives_a_round_trip_through_the_file_text() {
+        let s = Settings {
+            rage_gain_multiplier: 0.5,
+            mod_damage_multiplier: 2.5,
+            hud_scale: 1.3,
+            hud_opacity: 0.8,
+            sfx_volume: 0.25,
+            stand_in_sounds: false,
+            mimir_subtitles: false,
+            mimir_frequency: 3.0,
+            camera_shake: 0.0,
+            effect_rings: false,
+            controls_hint_seconds: 0.0,
+            enemy_health_multiplier: 5.0,
+            finisher_when_wounded: false,
+        };
+        assert_eq!(parse(&render(&s)).unwrap(), s);
+    }
+
+    #[test]
+    fn an_old_settings_file_is_brought_forward_once() {
+        let old = r#"{ "rage_gain_multiplier": 3.0, "hud_scale": 1.5, "mimir_frequency": 0.5 }"#;
+        let new = migrated_text(old).expect("old file is migrated");
+        let s = parse(&new).unwrap();
+        assert_eq!(s.rage_gain_multiplier, 1.0, "3x of the old rate is 1x of the new");
+        assert_eq!(s.hud_scale, 1.5);
+        assert_eq!(s.mimir_frequency, 0.5);
+        assert_eq!(s.enemy_health_multiplier, 3.0);
+        assert!(migrated_text(&new).is_none(), "a current file is left alone");
+        // a file that never mentioned Rage keeps the default
+        let s = parse(&migrated_text(r#"{ "hud_scale": 1.2 }"#).unwrap()).unwrap();
+        assert_eq!(s.rage_gain_multiplier, 1.0);
+        // not JSON: left for the owner to fix
+        assert!(migrated_text("{ nope").is_none());
     }
 }

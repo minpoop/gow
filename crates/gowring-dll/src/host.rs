@@ -87,6 +87,8 @@ pub struct Bridge {
     team_report_done: bool,
     frozen: HashMap<u64, Frozen>,
     burning: Vec<Burn>,
+    /// Enemies whose health has been scaled up: handle id -> the max HP written (never scaled twice).
+    scaled: HashMap<u64, i32>,
     /// HP we took off enemies ourselves outside the engine's ledger (burn ticks), so it is not read back as melee.
     own_pending: HashMap<u64, i32>,
     my_mask: ActionBits,
@@ -115,6 +117,7 @@ impl Bridge {
             team_report_done: false,
             frozen: HashMap::new(),
             burning: Vec::new(),
+            scaled: HashMap::new(),
             own_pending: HashMap::new(),
             my_mask: ActionBits::NONE,
             prev_pos: None,
@@ -264,6 +267,11 @@ impl Bridge {
                 continue;
             }
             let ehp = edata.hp;
+            if let Some(want) = self.scaled.get(&id) {
+                if edata.max_hp < *want {
+                    crate::log::once_u64("scale-reverted", id, "enemy_health", &format!("{id:#x}: max hp is back to {} (wrote {want}); the game resets it", edata.max_hp));
+                }
+            }
             let ealive = ehp > 0 && !e.chr_flags1c5.death_flag();
             // damage the player did since last frame
             if let Some(prev) = self.prev_enemy_hp.get(&id) {
@@ -364,6 +372,28 @@ impl Bridge {
                                 crate::log::once_u64("dmg-target", *target, "enemy_damage", &format!("order of {:.0} on {target:#x}: hp {before} -> {}", amount, d.hp));
                             }
                             chr.last_hit_by = player_handle;
+                        }
+                    }
+                }
+                Command::ScaleEnemy { target, factor } => {
+                    if self.scaled.contains_key(target) {
+                        continue;
+                    }
+                    if let Some(h) = self.handles.get(target).copied() {
+                        if let Some(chr) = wcm.chr_ins_by_handle_mut(&h) {
+                            if let Some(d) = opt_mut(&mut chr.modules.data) {
+                                let k = factor.clamp(0.25, 20.0) as f64;
+                                let (hp0, max0, base0) = (d.hp, d.max_hp, d.base_hp);
+                                if hp0 > 0 && max0 > 0 {
+                                    let scale = |v: i32| ((v as f64) * k).round().clamp(1.0, 1.0e8) as i32;
+                                    d.max_hp = scale(max0);
+                                    d.max_uncapped_hp = d.max_uncapped_hp.max(d.max_hp);
+                                    d.base_hp = scale(base0.max(1));
+                                    d.hp = scale(hp0).min(d.max_hp);
+                                    self.scaled.insert(*target, d.max_hp);
+                                    crate::log::once_u64("scale-enemy", *target, "enemy_health", &format!("{target:#x}: hp {hp0}/{max0} -> {}/{} (x{k})", d.hp, d.max_hp));
+                                }
+                            }
                         }
                     }
                 }

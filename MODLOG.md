@@ -144,3 +144,12 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - Log: every Rage gain writes `rage +X (xM) -> meter/max` so Rage speed can be read from gowring.log.
 - Mimir: 14 voice sets keep original stand-in text; kills, combat start, axe throws, parries and runics got more lines.
 - Unverified in real play: everything above plus the 0.1.13 Rage fixes.
+
+## 0.1.14 verified in play, 0.1.15 (2026-10-11)
+- Test 0009e11d (2 runs of 10 min) passed; Melty says it can be published (not published: the user wants polish first). Run 2 played 2:35, run 1 5:35 (the rest was idle). Player's answers to the checklist: controls card yes, HUD additions yes, Rage speed "feels ok / feels right" (the run was at rage_gain_multiplier 3.0), "things do die too fast to stun", "all animations are the default ones", live settings work, Mimir fine.
+- Log: Rage went 7 -> 50 on one 316-hp hit taken (hp-loss gain, unlogged until now); `dealt: 20` and Rage ON at 158 s, boss kill at 164 s; the 55-hp Chapel enemies die to one mod hit (600), so no stun bar ever filled except on a heavy runic that also killed. After 201 s nothing happened (idle).
+- Fix for "die too fast to stun": `Command::ScaleEnemy` (engine emits it once per regular enemy, `enemy_health_multiplier` default 3, ceiling `tuning.enemy_scale_hp_ceiling` = 1000 base hp, never bosses); the host scales hp, max_hp, max_uncapped_hp and base_hp once per handle id and logs `enemy_health` (and `max hp is back to ...` if the game resets it — unverified: Elden Ring may recompute enemy max HP). `StunTracker::wounded_check`: a non-boss enemy the player hit in the last 6 s and now at or below `wounded_hp_pct` (25) of max HP is staggered once via the normal stun path (finisher on offer); `finisher_when_wounded` setting.
+- Rage baseline: `rage.gain_scale` 3.0 in the sheet (play-tested pace); settings_version 2; a 0.1.14 settings.json is migrated (rage multiplier / 3, backup settings.v1.json).
+- HUD: enemy bars within `bar_range_m` 22 (was engage 35) unless recently hit; controls panel finisher line reworded.
+- Log: first 60 native hits (`hit N on id (hp a/b)`), `rage +X from losing N hp`, rage line shows the combined multiplier.
+- Unverified in real play: that writing enemy hp/max_hp sticks, how many native hits a 3x enemy takes, whether wounded stagger feels right, bar range.

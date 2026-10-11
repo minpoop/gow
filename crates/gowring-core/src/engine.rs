@@ -55,11 +55,15 @@ pub struct Tuning {
     pub rage_gain: f32,
     pub mod_damage: f32,
     pub mimir_chance: f32,
+    /// Regular enemies get this many times their normal HP when first seen (1 = untouched).
+    pub enemy_health: f32,
+    /// A regular enemy the player has worn down to the tuning sheet's wounded level is staggered once, so it can be finished.
+    pub wounded_stun: bool,
 }
 
 impl Default for Tuning {
     fn default() -> Self {
-        Tuning { rage_gain: 1.0, mod_damage: 1.0, mimir_chance: 1.0 }
+        Tuning { rage_gain: 1.0, mod_damage: 1.0, mimir_chance: 1.0, enemy_health: 1.0, wounded_stun: true }
     }
 }
 
@@ -94,6 +98,10 @@ pub struct Engine {
     voice_was_playing: bool,
     /// Last time the aim chord was seen held; aiming survives a missed frame or two (see `tick`).
     aim_last_down: f64,
+    /// Enemies already sent a `ScaleEnemy` this session.
+    scaled: HashSet<EnemyId>,
+    /// Native hits written to the log so far (the first few only).
+    hit_logs: u32,
 }
 
 impl Engine {
@@ -128,6 +136,8 @@ impl Engine {
             rage_on_at: f64::NEG_INFINITY,
             voice_was_playing: false,
             aim_last_down: f64::NEG_INFINITY,
+            scaled: HashSet::new(),
+            hit_logs: 0,
         }
     }
 
@@ -152,12 +162,18 @@ impl Engine {
     }
 
     pub fn set_tuning(&mut self, t: Tuning) {
-        self.tuning = Tuning { rage_gain: t.rage_gain.clamp(0.0, 10.0), mod_damage: t.mod_damage.clamp(0.0, 20.0), mimir_chance: t.mimir_chance.clamp(0.0, 10.0) };
+        self.tuning = Tuning {
+            rage_gain: t.rage_gain.clamp(0.0, 10.0),
+            mod_damage: t.mod_damage.clamp(0.0, 20.0),
+            mimir_chance: t.mimir_chance.clamp(0.0, 10.0),
+            enemy_health: t.enemy_health.clamp(0.25, 20.0),
+            wounded_stun: t.wounded_stun,
+        };
     }
 
     pub fn tick(&mut self, f: &Frame) -> TickOutput {
         let d = self.d;
-        self.rage.gain_mult = self.tuning.rage_gain;
+        self.rage.gain_mult = self.tuning.rage_gain * d.rage.gain_scale;
         self.mimir.chance_mult = self.tuning.mimir_chance;
         let now = f.time;
         let mut out: Vec<Command> = Vec::new();
@@ -197,6 +213,13 @@ impl Engine {
 
         // ---- world sync ----------------------------------------------------------------------------
         self.stun.sync(d, f, now, &mut ev);
+        if (self.tuning.enemy_health - 1.0).abs() > 0.01 {
+            for e in &f.enemies {
+                if e.alive && !e.boss && e.max_hp <= d.tuning.enemy_scale_hp_ceiling as f32 && self.scaled.insert(e.id) {
+                    out.push(Command::ScaleEnemy { target: e.id, factor: self.tuning.enemy_health });
+                }
+            }
+        }
         let near_engaged = f.enemies.iter().any(|e| e.alive && e.engaged && e.pos.dist(f.player.pos) <= d.tuning.engage_range_m);
         if near_engaged {
             self.last_combat = now;
@@ -221,6 +244,11 @@ impl Engine {
                     self.last_combat = now;
                     let native = self.ledger.settle(*enemy, *amount, now);
                     if native > 0.5 {
+                        if self.hit_logs < 60 {
+                            self.hit_logs += 1;
+                            let hp = f.enemies.iter().find(|e| e.id == *enemy).map(|e| (e.hp, e.max_hp)).unwrap_or((0.0, 0.0));
+                            logs.push(format!("hit {native:.0} on {enemy:#x} (hp {:.0}/{:.0})", hp.0, hp.1));
+                        }
                         let (stun_pts, rage_pts) = match self.melee.attribute(now) {
                             Some(m) => {
                                 let h = m.hits.max(1) as f32;
@@ -265,7 +293,11 @@ impl Engine {
                         if self.rage.active && self.rage.taken_mult() < 1.0 {
                             out.push(Command::Refund { amount: amount * (1.0 - self.rage.taken_mult()) });
                         }
+                        let before = self.rage.meter;
                         self.rage.gain_from_hp_loss(*amount, f.player.max_hp);
+                        if self.rage.meter > before {
+                            logs.push(format!("rage +{:.1} from losing {:.0} hp -> {:.0}/{:.0}", self.rage.meter - before, amount, self.rage.meter, self.rage.max()));
+                        }
                     }
                 }
             }
@@ -341,12 +373,15 @@ impl Engine {
         }
         if gains.rage > 0.05 && !self.rage.active {
             self.rage.gain(gains.rage);
-            logs.push(format!("rage +{:.1} (x{:.2}) -> {:.0}/{:.0}", gains.rage, self.tuning.rage_gain, self.rage.meter, self.rage.max()));
+            logs.push(format!("rage +{:.1} (x{:.2}) -> {:.0}/{:.0}", gains.rage * self.rage.gain_mult, self.rage.gain_mult, self.rage.meter, self.rage.max()));
         } else {
             self.rage.gain(gains.rage);
         }
         for (id, pts) in std::mem::take(&mut gains.stun) {
             self.stun.add(d, id, pts, now, &mut out, &mut ev);
+        }
+        if self.tuning.wounded_stun {
+            self.stun.wounded_check(d, f, now, &mut out, &mut ev);
         }
         self.stun.update(d, f.dt, now);
 
@@ -535,7 +570,7 @@ impl Engine {
         let mut boss = None;
         for e in f.enemies.iter().filter(|e| e.alive && e.pos.dist(f.player.pos) <= d.tuning.scan_range_m) {
             let recently_hit = self.stun.enemies.get(&e.id).map(|s| now - s.player_hit_at <= 8.0).unwrap_or(false);
-            let show = e.boss || recently_hit || (e.engaged && e.pos.dist(f.player.pos) <= d.tuning.engage_range_m);
+            let show = e.boss || recently_hit || (e.engaged && e.pos.dist(f.player.pos) <= d.tuning.bar_range_m);
             if !show {
                 continue;
             }

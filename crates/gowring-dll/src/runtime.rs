@@ -163,7 +163,13 @@ impl Runtime {
 
         let st = crate::settings::get();
         self.entered_at.get_or_insert_with(Instant::now);
-        self.engine.set_tuning(gowring_core::Tuning { rage_gain: st.rage_gain_multiplier, mod_damage: st.mod_damage_multiplier, mimir_chance: st.mimir_frequency });
+        self.engine.set_tuning(gowring_core::Tuning {
+            rage_gain: st.rage_gain_multiplier,
+            mod_damage: st.mod_damage_multiplier,
+            mimir_chance: st.mimir_frequency,
+            enemy_health: st.enemy_health_multiplier,
+            wounded_stun: st.finisher_when_wounded,
+        });
         let mut out = self.engine.tick(&frame);
         out.hud.ui_scale = st.hud_scale;
         for l in &out.logs {

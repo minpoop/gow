@@ -321,7 +321,7 @@ impl ImguiRenderLoop for Overlay {
                 "L1: block (tap just before a hit: parry)",
                 "D-pad up / down: light / heavy runic",
                 "L3 + R3: Spartan Rage (full bar)",
-                "R3 near a stunned enemy: finisher",
+                "R3 near a staggered enemy: finisher (wear them down first)",
                 "Tweak things live: settings.json",
             ];
             let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));

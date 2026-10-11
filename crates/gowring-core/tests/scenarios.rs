@@ -456,10 +456,61 @@ fn spear_hit_meter(t: gowring_core::Tuning) -> (f32, f32) {
 fn player_settings_scale_rage_and_the_mods_own_damage() {
     let base = spear_hit_meter(gowring_core::Tuning::default());
     assert!(base.0 > 0.0 && base.1 > 0.0, "{base:?}");
-    let more_rage = spear_hit_meter(gowring_core::Tuning { rage_gain: 2.0, ..Default::default() });
-    assert!((more_rage.0 - 2.0 * base.0).abs() < 0.01 * base.0.max(1.0) + 0.01 || more_rage.0 >= base.0 * 1.9, "rage x2: {} vs {}", more_rage.0, base.0);
+    let more_rage = spear_hit_meter(gowring_core::Tuning { rage_gain: 1.5, ..Default::default() });
+    assert!(more_rage.0 > base.0 * 1.4 && more_rage.0 <= 100.0, "rage x1.5: {} vs {}", more_rage.0, base.0);
     let no_rage = spear_hit_meter(gowring_core::Tuning { rage_gain: 0.0, ..Default::default() });
     assert_eq!(no_rage.0, 0.0);
     let double_damage = spear_hit_meter(gowring_core::Tuning { mod_damage: 2.0, ..Default::default() });
     assert!(double_damage.1 > base.1 * 1.8, "damage x2: {} vs {}", double_damage.1, base.1);
+}
+
+#[test]
+fn regular_enemies_are_toughened_once_and_bosses_are_not() {
+    let mut w = SimWorld::new();
+    w.engine.set_tuning(gowring_core::Tuning { enemy_health: 3.0, ..Default::default() });
+    w.add_enemy(SimEnemy::new(1, 0.0, 12.0, 55.0));
+    let mut boss = SimEnemy::new(2, 4.0, 12.0, 55.0);
+    boss.boss = true;
+    w.add_enemy(boss);
+    w.add_enemy(SimEnemy::new(3, -4.0, 12.0, 3000.0)); // above the ceiling: a mini-boss, left alone
+    w.idle(1.0);
+    assert_eq!(w.enemy(1).hp, 165.0);
+    assert_eq!(w.enemy(1).max_hp, 165.0);
+    assert_eq!(w.enemy(2).hp, 55.0, "bosses are not scaled");
+    assert_eq!(w.enemy(3).hp, 3000.0);
+    w.idle(2.0);
+    assert_eq!(w.enemy(1).hp, 165.0, "scaled once, not every frame");
+    let n = w.all_commands.iter().filter(|c| matches!(c, Command::ScaleEnemy { .. })).count();
+    assert_eq!(n, 1);
+}
+
+#[test]
+fn untouched_health_setting_sends_no_scale_commands() {
+    let mut w = SimWorld::new();
+    w.add_enemy(SimEnemy::new(1, 0.0, 12.0, 55.0));
+    w.idle(1.0);
+    assert!(!w.all_commands.iter().any(|c| matches!(c, Command::ScaleEnemy { .. })));
+    assert_eq!(w.enemy(1).hp, 55.0);
+}
+
+#[test]
+fn a_fight_with_a_toughened_enemy_ends_in_a_stagger_and_a_finisher() {
+    let mut w = SimWorld::new();
+    w.engine.set_tuning(gowring_core::Tuning { enemy_health: 6.0, ..Default::default() });
+    w.add_enemy(SimEnemy::new(1, 0.0, 2.2, 300.0));
+    let mut staggered_at_hp = None;
+    for _ in 0..60 {
+        w.step(&[R1], &[]);
+        w.idle(0.5);
+        if staggered_at_hp.is_none() && w.engine.stun().is_stunned(1, w.time) {
+            staggered_at_hp = Some(w.enemy(1).hp / w.enemy(1).max_hp);
+        }
+        if staggered_at_hp.is_some() || !w.enemy(1).alive() {
+            break;
+        }
+    }
+    let frac = staggered_at_hp.expect("the enemy is staggered before it dies");
+    assert!(w.enemy(1).alive());
+    w.step(&[R3], &[]);
+    assert!(w.finishers.contains(&1), "the finisher is on offer (hp fraction {frac})");
 }

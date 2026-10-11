@@ -217,6 +217,8 @@ pub enum Command {
     /// Deal `amount` HP of damage to an enemy (the host uses engine bullets so ER credits kills).
     Damage { target: EnemyId, amount: f32, source: DamageSource },
     Stagger { target: EnemyId, seconds: f32 },
+    /// Multiply a regular enemy's HP and max HP once (the host keeps a record so no enemy is scaled twice).
+    ScaleEnemy { target: EnemyId, factor: f32 },
     Status { target: EnemyId, status: RunicStatus, seconds: f32 },
     Heal { amount: f32 },
     /// Give back HP the player lost this frame (parry, rage damage reduction).

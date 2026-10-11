@@ -90,6 +90,21 @@
    "type": "int",
    "min": 0,
    "max": 2147483647
+  },
+  "wounded_hp_pct": {
+   "type": "float",
+   "min": 1,
+   "max": 90
+  },
+  "bar_range_m": {
+   "type": "float",
+   "min": 5,
+   "max": 200
+  },
+  "enemy_scale_hp_ceiling": {
+   "type": "int",
+   "min": 1,
+   "max": 2147483647
   }
  },
  "rows": [
@@ -111,7 +126,10 @@
    "hp_trail_s": 0.6,
    "runic_min_targets_voice": 3,
    "boss_sight_range_m": 80,
-   "rng_seed": 7031
+   "rng_seed": 7031,
+   "wounded_hp_pct": 25,
+   "bar_range_m": 22,
+   "enemy_scale_hp_ceiling": 1000
   }
  ]
 }

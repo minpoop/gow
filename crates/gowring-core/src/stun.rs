@@ -15,6 +15,8 @@ pub struct StunState {
     /// When the player last damaged this enemy (for kill credit).
     pub player_hit_at: f64,
     pub boss: bool,
+    /// Already staggered for being worn down (once per enemy).
+    pub wounded_done: bool,
 }
 
 #[derive(Default)]
@@ -34,6 +36,7 @@ impl StunTracker {
                 alive: e.alive && e.hp > 0.0,
                 player_hit_at: f64::NEG_INFINITY,
                 boss: e.boss,
+                wounded_done: false,
             });
             // A boss bar can appear after the character was first seen.
             if e.boss && !st.boss {
@@ -77,6 +80,30 @@ impl StunTracker {
             return true;
         }
         false
+    }
+
+    /// A regular enemy the player has worn down to the tuning sheet's wounded level is staggered once, as if its
+    /// stun meter had filled, so a normal fight ends with a finisher on offer rather than only a kill.
+    pub fn wounded_check(&mut self, d: &'static Data, f: &Frame, now: f64, out: &mut Vec<Command>, ev: &mut Vec<Event>) {
+        let level = d.tuning.wounded_hp_pct / 100.0;
+        let ready: Vec<EnemyId> = f
+            .enemies
+            .iter()
+            .filter(|e| e.alive && !e.boss && e.max_hp > 0.0 && e.hp / e.max_hp <= level)
+            .filter(|e| {
+                self.enemies
+                    .get(&e.id)
+                    .map(|s| s.alive && !s.boss && !s.wounded_done && now - s.player_hit_at <= 6.0 && now >= s.stunned_until)
+                    .unwrap_or(false)
+            })
+            .map(|e| e.id)
+            .collect();
+        for id in ready {
+            if let Some(s) = self.enemies.get_mut(&id) {
+                s.wounded_done = true;
+            }
+            self.add(d, id, 1.0e6, now, out, ev);
+        }
     }
 
     pub fn update(&mut self, d: &'static Data, dt: f32, now: f64) {
@@ -206,6 +233,40 @@ mod tests {
         let b = st.finisher_damage(&boss, false);
         assert!((b - 20000.0 * 0.18).abs() < 1.0);
         assert!(st.finisher_damage(&boss, true) > b);
+    }
+
+    #[test]
+    fn a_worn_down_regular_enemy_is_staggered_once_and_bosses_never() {
+        let d = Data::get();
+        let mut st = StunTracker::default();
+        let mut f = Frame::default();
+        f.enemies.push(EnemyView { max_hp: 400.0, ..enemy(1, 400.0, Vec3::new(0.0, 0.0, 2.0)) });
+        f.enemies.push(EnemyView { boss: true, max_hp: 400.0, ..enemy(2, 400.0, Vec3::new(2.0, 0.0, 2.0)) });
+        f.enemies.push(EnemyView { max_hp: 400.0, ..enemy(3, 400.0, Vec3::new(-2.0, 0.0, 2.0)) });
+        let (mut out, mut ev) = (vec![], vec![]);
+        st.sync(d, &f, 0.0, &mut ev);
+        for id in 1..=3 {
+            st.note_player_hit(id, 0.0);
+        }
+        // healthy: nothing happens
+        st.wounded_check(d, &f, 0.1, &mut out, &mut ev);
+        assert!(out.is_empty());
+        // 1 and 2 are down to 20% of their max, 3 was never hit by the player (poison, a fall, an ally)
+        f.enemies[0].hp = 80.0;
+        f.enemies[1].hp = 80.0;
+        f.enemies[2].hp = 80.0;
+        st.enemies.get_mut(&3).unwrap().player_hit_at = f64::NEG_INFINITY;
+        st.wounded_check(d, &f, 1.0, &mut out, &mut ev);
+        assert!(st.is_stunned(1, 1.5), "the worn-down enemy is staggered");
+        assert!(!st.is_stunned(2, 1.5), "a boss is left to its stun bar");
+        assert!(!st.is_stunned(3, 1.5), "an enemy the player did not hit is left alone");
+        assert_eq!(ev.iter().filter(|e| matches!(e, Event::StunFull { enemy: 1 })).count(), 1);
+        // once only, even after the stun runs out
+        out.clear();
+        st.wounded_check(d, &f, 20.0, &mut out, &mut ev);
+        st.note_player_hit(1, 19.5);
+        st.wounded_check(d, &f, 20.0, &mut out, &mut ev);
+        assert!(out.is_empty(), "no second stagger");
     }
 
     #[test]

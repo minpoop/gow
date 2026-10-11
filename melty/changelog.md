@@ -1,10 +1,9 @@
-Fifteenth alpha: a batch release. It carries the Rage fixes from the last build (not play-tested yet) plus a settings file and several HUD additions, so one session can check a lot at once.
+Sixteenth alpha: fights now last long enough to stun and finish enemies, from your play-test of 0.1.14 (which passed Melty's two 10-minute runs).
 
-- **Settings you can change while playing.** The first launch writes `%LOCALAPPDATA%\GowRing\settings.json`. Save it with a text editor while the game is running and the change applies within a second or two: Rage gain speed, damage the mod deals, HUD size and opacity, sound volume, Mimir's chattiness and subtitles, screen shake, effect rings, how long the controls panel stays up. Every key has a plain-language note beside it.
-- **Controls panel.** For the first 25 seconds after you enter the world, a "KRATOS CONTROLS" card lists the buttons (aim, throw, recall, weapon swap, block and parry, runics, Rage, finisher).
-- **HUD additions.** The weapon you are holding is named under the weapon icons, the runic slots are labelled LIGHT and HEAVY, and Mimir's subtitle carries a MIMIR tag.
-- **Rage fixes from 0.1.13.** Detonating spears into empty air no longer earns Rage, ordinary swings now count toward Rage and stun (Elden Ring does not record who hit an enemy, so the mod attributes a nearby hit shortly after your own attack), and the meter is back to 100 points.
-- **Rage log.** Every Rage gain is written to `gowring.log` with its size and the meter after it, so how fast it fills can be read straight off the log.
-- **More Mimir lines** for kills, fights starting, axe throws, parries and runics, so he repeats himself less.
+- **Regular enemies are tougher.** Elden Ring's weakest enemies die in one hit, so nothing lived long enough to stun. Regular enemies now get three times their normal health when they first come into range. Bosses and mini-bosses are left alone. `enemy_health_multiplier` in `settings.json` changes it (1.0 = Elden Ring's own health).
+- **Wounded enemies can be finished.** A regular enemy you have worn down to a quarter of its health is staggered once, as if its stun bar had filled, so a normal fight ends with an R3 finisher on offer. `finisher_when_wounded` turns it off.
+- **Spartan Rage keeps the speed you tested.** Your 0.1.14 test ran with the Rage multiplier at 3 and you said it felt right, so that pace is now the built-in one and the multiplier is back at 1.0. A `settings.json` from 0.1.14 is converted for you (the old file is kept as `settings.v1.json`) so Rage plays the same as it did.
+- **Fewer enemy bars through walls.** Health bars now show for enemies within 22 metres (was 35) unless you have just hit them.
+- **Better log.** The log records the size of your first sixty melee hits against each enemy's health, every enemy whose health was raised, and Rage gained from damage you take, so tuning can be done from numbers instead of memory.
 
-Still an alpha: the HUD is the mod's own drawing, runics and finishers have no animation of their own, and nothing from Ragnarök's own art or sound is in use yet.
+Still an alpha: Elden Ring's own animations play for every move, the HUD is the mod's own drawing, and nothing from Ragnarök's own art or sound is in use yet.

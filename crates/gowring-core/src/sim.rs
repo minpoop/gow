@@ -239,6 +239,12 @@ impl SimWorld {
                 }
                 Command::Finisher { target, .. } => self.finishers.push(*target),
                 Command::Cast { runic } => self.casts.push(runic),
+                Command::ScaleEnemy { target, factor } => {
+                    if let Some(e) = self.enemies.iter_mut().find(|e| e.id == *target) {
+                        e.hp *= *factor;
+                        e.max_hp *= *factor;
+                    }
+                }
                 Command::Status { .. } | Command::Fx { .. } | Command::Shake(_) => {}
             }
         }
