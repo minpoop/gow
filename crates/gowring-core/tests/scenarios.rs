@@ -391,3 +391,42 @@ fn recall_button_is_only_taken_over_while_something_is_out() {
     let out = w.step(&[Action], &[]);
     assert!(out.commands.iter().any(|c| matches!(c, Command::Mask(m) if m.has(Action))));
 }
+
+
+#[test]
+fn detonating_spears_into_empty_air_earns_no_rage() {
+    let mut w = SimWorld::new();
+    w.right_slot = 2;
+    // no enemies at all: throw three spears, let them stick, detonate, repeat
+    for _ in 0..4 {
+        w.step(&[], &[L2]);
+        for _ in 0..3 {
+            w.step(&[R1], &[L2]);
+            for _ in 0..30 {
+                w.step(&[], &[L2]);
+            }
+        }
+        w.step(&[Action], &[]);
+        w.idle(1.5);
+    }
+    assert!(w.sfx.contains(&"sfx_spear_blast"), "the detonations did happen");
+    assert_eq!(w.engine.rage().meter, 0.0, "spamming throw + detonate at nothing must not fill Rage");
+}
+
+#[test]
+fn spears_that_hit_earn_rage() {
+    let mut w = SimWorld::new();
+    w.right_slot = 2;
+    for i in 0..3u64 {
+        w.add_enemy(soldier(40 + i, -1.0 + i as f32, 10.0));
+    }
+    w.step(&[], &[L2]);
+    for _ in 0..3 {
+        w.step(&[R1], &[L2]);
+        for _ in 0..30 {
+            w.step(&[], &[L2]);
+        }
+    }
+    w.step(&[Action], &[]);
+    assert!(w.engine.rage().meter > 0.0, "hitting enemies with spears fills Rage");
+}

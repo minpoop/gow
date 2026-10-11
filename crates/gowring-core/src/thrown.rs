@@ -337,7 +337,8 @@ impl Thrown {
         if let Some(sfx) = mv.sfx {
             out.push(Command::Sfx(sfx));
         }
-        gains.rage += mv.rage_gain * stuck.len() as f32;
+        // Rage is earned by hitting something; detonating into empty air earns nothing.
+        gains.rage += mv.rage_gain * (total_hit as f32).min(stuck.len() as f32);
         out.push(Command::Shake(0.5));
         self.spears = flying;
         self.spear_ready_at = now + def.reready_s as f64;

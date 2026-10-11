@@ -75,6 +75,8 @@ struct Burn {
 pub struct Bridge {
     /// The six weapon slot param ids last read from the player (for the self-checks).
     pub last_equip: [i32; 6],
+    /// Last time the player pressed an attack button (R1/R2): damage to a nearby enemy shortly after counts as the player's.
+    last_swing: f64,
     /// Frames L2 was masked, and in how many of them it was still visible in the game's requests (evidence for the log).
     l2_masked: (u32, u32),
     prev_player_hp: Option<i32>,
@@ -102,6 +104,7 @@ impl Bridge {
     pub fn new(scan_range: f32) -> Self {
         Bridge {
             last_equip: [0; 6],
+            last_swing: f64::NEG_INFINITY,
             l2_masked: (0, 0),
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
@@ -175,6 +178,12 @@ impl Bridge {
             controllable: alive,
         };
         f.actions_down = bits_from_er(&ar.action_requests);
+        {
+            let pressed = bits_from_er(&ar.new_action_presses);
+            if pressed.has(ErAction::R1) || pressed.has(ErAction::R2) {
+                self.last_swing = time;
+            }
+        }
         if self.my_mask.has(ErAction::L2) {
             self.l2_masked.0 += 1;
             if f.actions_down.has(ErAction::L2) {
@@ -258,7 +267,10 @@ impl Bridge {
             let ealive = ehp > 0 && !e.chr_flags1c5.death_flag();
             // damage the player did since last frame
             if let Some(prev) = self.prev_enemy_hp.get(&id) {
-                if ehp < *prev && e.last_hit_by == player_handle {
+                // Elden Ring does not reliably set `last_hit_by` for ordinary hits, so damage to a nearby enemy within
+                // a moment of the player's own attack counts as the player's (mod orders are netted off by the ledger).
+                let swinging = time - self.last_swing <= 1.4 && dist <= 8.0;
+                if ehp < *prev && (e.last_hit_by == player_handle || swinging) {
                     let own = self.own_pending.remove(&id).unwrap_or(0);
                     let amount = (*prev - ehp - own).max(0);
                     if amount > 0 {
