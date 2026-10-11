@@ -76,6 +76,10 @@ pub fn run(hmodule: usize) {
     crate::glog!("save", "CreateFileW redirect installed -> {}", p.save_file);
     crate::testmode::stage("save-hooked");
 
+    match crate::exithook::install() {
+        Ok(()) => crate::glog!("exit", "exit hooks installed (record-only)"),
+        Err(e) => crate::glog!("exit", "exit hooks not installed: {e}"),
+    }
     // ---- assets, overlay ---------------------------------------------------------------------------------------
     let store = Arc::new(assets::load(&p.cache, &p.channel));
     crate::glog!("gow_cache", "{}/{} Ragnarök assets present (prepared: {}); missing: {}", store.converted, store.total, store.prepared, store.missing.join(", "));

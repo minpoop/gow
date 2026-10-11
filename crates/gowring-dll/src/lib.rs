@@ -6,6 +6,7 @@
 mod assets;
 mod audio;
 mod boot;
+mod exithook;
 mod host;
 mod log;
 mod overlay;

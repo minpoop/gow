@@ -26,6 +26,15 @@ pub static PLAYER_SEEN: AtomicBool = AtomicBool::new(false);
 pub static KIT_OK: AtomicBool = AtomicBool::new(false);
 pub static TICKS_WITH_PLAYER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static KIT_STATE: Mutex<String> = Mutex::new(String::new());
+static EXIT_CALL: Mutex<String> = Mutex::new(String::new());
+
+/// Recorded by the exit hooks: which call, from where.
+pub fn exit_called(text: &str) {
+    let mut g = EXIT_CALL.lock().unwrap();
+    if g.is_empty() {
+        *g = text.chars().take(600).collect();
+    }
+}
 static TICK_PANIC: Mutex<String> = Mutex::new(String::new());
 
 pub fn kit_state(s: String) {
@@ -53,7 +62,7 @@ fn is_fatal(code: u32) -> bool {
 }
 
 /// `module.dll+0x1234` for an address in this process.
-fn locate(addr: usize) -> String {
+pub fn locate(addr: usize) -> String {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT};
@@ -105,6 +114,24 @@ pub fn process_exit() {
     crate::glog!("exit", "process is exiting after {:?}; fatal-class exceptions seen: {n}", BORN.get().map(|b| b.elapsed()));
     if !active() {
         return;
+    }
+    // A run that ends early leaves the other checks unreported; say why instead.
+    let secs = BORN.get().map(|b| b.elapsed().as_secs()).unwrap_or(0);
+    let why = format!("the game exited after {secs} s: {} | exit call: [{}]", state(), EXIT_CALL.lock().unwrap());
+    if !crate::savehook::redirected() {
+        report("save-redirected", false, &why);
+    }
+    if !PLAYER_SEEN.load(Ordering::SeqCst) {
+        report("player-found", false, &why);
+        report("kit-equipped", false, &why);
+        report("rules-ran", false, &why);
+    } else {
+        if !KIT_OK.load(Ordering::SeqCst) {
+            report("kit-equipped", false, &format!("{why} | {}", KIT_STATE.lock().unwrap()));
+        }
+        if TICKS_WITH_PLAYER.load(Ordering::SeqCst) < 300 {
+            report("rules-ran", false, &why);
+        }
     }
     if n == 0 {
         report("no-fault", true, "");
