@@ -9,7 +9,7 @@ inside `eldenring.exe`) and the player's **God of War Ragnarök** folder (read-o
 | The player character, camera, animations, hit detection, enemies | **Elden Ring** | Kratos is the Tarnished with a rewritten kit; ER plays every swing, roll and hit reaction. |
 | Kratos' rules: stances, throw/recall, spears, runics, Rage, stun, finishers, parry window, Mimir timing, HUD | **gowring-core** | Pure Rust, no game access. Driven by `design/*.json`. |
 | Ragnarök art/audio | **the player's GoW install** | Converted by `--prepare` into `%LOCALAPPDATA%/GowRing/cache`. Never shipped. |
-| The save | **`ER0000.gowring2.sl2`** | The DLL redirects every ER save path; the real `ER0000.sl2` is never opened. |
+| The save | **`ER0000.gowring3.sl2`** | The DLL redirects every ER save path; the real `ER0000.sl2` is never opened. |
 
 ## Launcher → DLL (environment, set by `GowRing.exe --play`)
 `GOWRING_HOME` (package folder), `GOWRING_CACHE`, `GOWRING_LOCAL`, `GOWRING_CHANNEL` (`alpha`|`release`),

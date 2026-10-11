@@ -7,7 +7,7 @@ pub const CHANNEL: &str = "alpha";
 /// Bump the trailing number whenever the prepare output format changes.
 pub const READY_TOKEN: &str = concat!("gowring-", env!("CARGO_PKG_VERSION"), "-prep-1");
 /// The mashup's own save file; the DLL redirects Elden Ring to it.
-pub const SAVE_FILE: &str = "ER0000.gowring2.sl2";
+pub const SAVE_FILE: &str = "ER0000.gowring3.sl2";
 
 #[derive(Clone)]
 pub struct Ctx {

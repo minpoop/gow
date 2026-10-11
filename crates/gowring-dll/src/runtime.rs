@@ -182,7 +182,7 @@ impl Runtime {
         }
         // one line of evidence per kind of input/damage the first time it is seen
         if !frame.actions_pressed.is_empty() {
-            crate::log::once_u64("act", frame.actions_pressed.0, "action_read", &format!("ER action bits pressed: {:#x} (down {:#x})", frame.actions_pressed.0, frame.actions_down.0));
+            crate::log::once_u64("act", frame.actions_pressed.0, "action_read", &format!("ER action bits pressed: {:#x} = {} (down {:#x})", frame.actions_pressed.0, action_names(frame.actions_pressed), frame.actions_down.0));
         }
         for d in &frame.damage {
             match d {
@@ -252,3 +252,11 @@ pub fn apply_camera(req: &gowring_core::CameraRequest) {
 
 #[allow(dead_code)]
 fn _cmd(_: &Command) {}
+
+/// `R1+L1` for a set of action bits, for the log.
+fn action_names(bits: gowring_core::ActionBits) -> String {
+    use gowring_core::sheets::ErAction as A;
+    let all = [("R1", A::R1), ("R2", A::R2), ("L1", A::L1), ("L2", A::L2), ("Action", A::Action), ("SpMove", A::SpMove), ("Jump", A::Jump), ("UseItem", A::UseItem), ("SwitchForm", A::SwitchForm), ("ChangeWeaponR", A::ChangeWeaponR), ("ChangeWeaponL", A::ChangeWeaponL), ("ChangeItem", A::ChangeItem), ("R3", A::R3), ("L3", A::L3), ("Guard", A::Guard), ("ChangeStyleR", A::ChangeStyleR), ("ChangeStyleL", A::ChangeStyleL)];
+    let v: Vec<&str> = all.iter().filter(|(_, a)| bits.has(*a)).map(|(n, _)| *n).collect();
+    if v.is_empty() { "?".into() } else { v.join("+") }
+}
