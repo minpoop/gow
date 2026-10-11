@@ -24,6 +24,10 @@ static PARAM_ERR: Mutex<String> = Mutex::new(String::new());
 /// In-game observations, reported as checks once the player is in the world.
 pub static PLAYER_SEEN: AtomicBool = AtomicBool::new(false);
 pub static KIT_OK: AtomicBool = AtomicBool::new(false);
+/// Time spent in the rules tick (microseconds), summed and maxed between heartbeats.
+pub static TICK_US_SUM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static TICK_US_MAX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static TICK_N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 pub static TICKS_WITH_PLAYER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static KIT_STATE: Mutex<String> = Mutex::new(String::new());
 static EXIT_CALL: Mutex<String> = Mutex::new(String::new());

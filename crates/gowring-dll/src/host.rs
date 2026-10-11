@@ -213,6 +213,7 @@ impl Bridge {
             }
         }
         self.handles.clear();
+        let mut nearest_hostile = f32::INFINITY;
         let mut seen_hp: HashMap<u64, i32> = HashMap::new();
         let mut damage: Vec<DamageEvent> = Vec::new();
         for entry in wcm.chr_inses_by_distance.iter().take(512) {
@@ -229,6 +230,9 @@ impl Bridge {
             let HavokPosition(ex, ey, ez, _) = e.modules.physics.position;
             let epos = Vec3::new(ex, ey, ez);
             let dist = epos.dist(ppos);
+            if self.hostile_teams.contains(&e.team_type) && ehp_alive(e) {
+                nearest_hostile = nearest_hostile.min(dist);
+            }
             if dist > self.scan_range {
                 continue;
             }
@@ -267,7 +271,7 @@ impl Bridge {
         if !self.team_report_done && time - self.last_team_report > 20.0 && teams.values().sum::<usize>() > 4 {
             self.last_team_report = time;
             self.team_report_done = !f.enemies.is_empty();
-            crate::glog!("enemy_scan", "{} hostile in range; team_type histogram of everything near the player: {:?}; hostile set {:?}", f.enemies.len(), teams, self.hostile_teams);
+            crate::glog!("enemy_scan", "{} hostile in range (scan range {} m, nearest living hostile-team character {:.1} m); team_type histogram of everything near the player: {:?}; hostile set {:?}", f.enemies.len(), self.scan_range, nearest_hostile, teams, self.hostile_teams);
         }
 
         // --- damage the player took -----------------------------------------------------------------------------
@@ -477,6 +481,11 @@ fn sheets_asset_output(id: &str) -> &'static str {
 }
 
 /// `OwnedPtr<T>` is declared non-null, but a character without a module can still hold null there.
+/// Alive by the game's own flags (hp above zero and no death flag).
+fn ehp_alive(e: &ChrIns) -> bool {
+    opt(&e.modules.data).map(|d| d.hp > 0).unwrap_or(false) && !e.chr_flags1c5.death_flag()
+}
+
 fn opt<T>(p: &fromsoftware_shared::OwnedPtr<T>) -> Option<&T> {
     let raw = p.as_ptr();
     if raw.is_null() { None } else { Some(unsafe { &*raw }) }

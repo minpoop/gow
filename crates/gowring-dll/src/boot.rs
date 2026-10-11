@@ -144,7 +144,16 @@ pub fn run(hmodule: usize) {
     let h1 = cs_task.run_recurring(
         move |_: &FD4TaskData| {
             if let Ok(mut r) = rt2.try_lock() {
-                if let Err(e) = catch_unwind(AssertUnwindSafe(|| r.tick())) {
+                let t0 = std::time::Instant::now();
+                let res = catch_unwind(AssertUnwindSafe(|| r.tick()));
+                {
+                    use std::sync::atomic::Ordering::Relaxed;
+                    let us = t0.elapsed().as_micros() as u64;
+                    crate::testmode::TICK_US_SUM.fetch_add(us, Relaxed);
+                    crate::testmode::TICK_US_MAX.fetch_max(us, Relaxed);
+                    crate::testmode::TICK_N.fetch_add(1, Relaxed);
+                }
+                if let Err(e) = res {
                     let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
                     crate::log::once("tick-panic", "rules_tick", &format!("PANIC in tick: {why}"));
                     crate::testmode::tick_panic(&why);
@@ -192,9 +201,14 @@ fn spawn_heartbeat() {
         loop {
             let t = start.elapsed().as_secs();
             let frames = crate::testmode::H0_CALLS.load(SeqCst);
+            let (n, sum, max) = {
+                use std::sync::atomic::Ordering::Relaxed;
+                (crate::testmode::TICK_N.swap(0, Relaxed), crate::testmode::TICK_US_SUM.swap(0, Relaxed), crate::testmode::TICK_US_MAX.swap(0, Relaxed))
+            };
+            let avg_us = if n > 0 { sum / n as u64 } else { 0 };
             crate::glog!(
                 "alive",
-                "t={t}s frames_since_last={} params={} save_open={} player={} ticks={} kit={}",
+                "t={t}s frames_since_last={} rules_tick_avg={avg_us}us max={max}us params={} save_open={} player={} ticks={} kit={}",
                 frames.wrapping_sub(last_frames),
                 crate::testmode::PARAMS_OK.load(SeqCst),
                 crate::savehook::redirected(),

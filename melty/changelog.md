@@ -1,12 +1,7 @@
-Eighth alpha (builds on the fifth to seventh: a game closing on its own now explains itself). The last tests ran Elden Ring 2.7.1.0 with the start-up checks passing (the mod loads, patches the parameter tables and hooks the HUD), but the game closed by itself before the run ended. This build records who asks the game to exit, and starts checking the game itself:
+Ninth alpha. The last run (0.1.7) got through every in-game check on Elden Ring 2.7.1.0: the mod loads, plays on its own save, patches the parameter tables, hooks the HUD, equips all four weapons on a new character and runs the combat rules. This build fixes what that run's log showed:
 
-- **Start a new character.** The mod now plays on a fresh save file (`ER0000.gowring2.sl2`), so you get a new character creation. The starting classes are rewritten, so a new character starts with the Leviathan Axe, Blades of Chaos, Draupnir Spear and Guardian Shield and no armour. Your real saves are never touched, and the character from earlier alphas stays in the old mod save file.
-- New self-checks report to Melty's test: `player-found`, `kit-equipped` (all four weapons are equipped), `rules-ran` (the combat rules ran for a few seconds with you in the world) and `no-fault` (the game did not die of a crash inside it). Each failure says what the mod saw.
-- If the game closes before the run ends, the checks that had not been reported yet now say why: the mod's stage, its last log lines and which code called ExitProcess (the call is recorded and passed on unchanged; nothing is blocked).
-- The mod's log now has a heartbeat every few seconds (is the game's main loop running, how far has the mod got), and the parameter patch no longer raises a panic every frame while the game is still loading its tables (your log showed ~60 of them in the first minute).
-- The setup report now also shows the first bytes of the Ragnarök HUD textures (meter, stun icon, block icon, rage tutorial) so their format can be decoded.
-- The setup report no longer reads your Ragnarök folder while Elden Ring is starting; it waits three minutes.
-- The HUD banner showed an old version number; it now shows the real one.
-- The setup report (`%LOCALAPPDATA%\GowRing\diagnose.txt`) now reads the table of the Ragnarök UI and Mimir `.wad` files by record count, which is what the HUD art and Mimir's voice mapping needs.
+- **Kratos' health.** Elden Ring recalculates max HP from Vigor every frame and discarded the mod's direct write (it showed up as 1978 "damage taken" a few seconds after spawning, which would have charged the Rage meter). The starting classes now start at Vigor 99 instead, which is how the game itself gives a character more health.
+- The mod's log now records how long the combat rules take each frame, and how close the nearest living enemy is, so a frame-rate dip or "no enemies found" can be read from the log.
+- Everything from earlier builds stays: record-only exit trace, heartbeat, delayed setup report, new character on the mod's own save (`ER0000.gowring2.sl2`).
 
-Still an alpha: the HUD art is plain placeholder shapes until the Ragnarök art is mapped.
+Still an alpha: the HUD art is plain placeholder shapes until the Ragnarök art is mapped, and combat has only been exercised in simulation and one minute of walking around.

@@ -6,10 +6,10 @@
   "id": {
    "type": "id"
   },
-  "max_hp": {
+  "vigor": {
    "type": "int",
-   "min": 100,
-   "max": 100000
+   "min": 1,
+   "max": 99
   },
   "free_stamina": {
    "type": "bool"
@@ -73,7 +73,6 @@
  "rows": [
   {
    "id": "post_game_kratos",
-   "max_hp": 2500,
    "free_stamina": true,
    "hide_fp": true,
    "start_weapon": "leviathan_axe",
@@ -93,7 +92,8 @@
    "aim_binding": "b_aim",
    "dodge_binding": "b_dodge",
    "swap_weapon_binding": "b_swap_r",
-   "swap_shield_binding": "b_swap_l"
+   "swap_shield_binding": "b_swap_l",
+   "vigor": 99
   }
  ]
 }

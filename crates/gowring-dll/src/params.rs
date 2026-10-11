@@ -78,9 +78,12 @@ pub fn apply() -> Result<Carriers, String> {
 
     // ---- the ten starting classes become Kratos ----------------------------------------------------------------------------
     let (axe, blades, spear, shield) = (rows["leviathan_axe"] as i32, rows["blades_of_chaos"] as i32, rows["draupnir_spear"] as i32, rows["guardian_shield"] as i32);
+    let vigor = gowring_core::Data::get().loadout.vigor.clamp(1, 99) as u8;
     let mut classes = 0;
     for id in 3000u32..=3009 {
         if let Some(c) = repo.get_mut::<CharaInitParam>(id) {
+            // Elden Ring derives max HP from Vigor and resets any direct write within a frame, so Kratos' toughness is his starting Vigor
+            c.set_base_vit(vigor);
             c.set_equip_wep_right(axe);
             c.set_equip_subwep_right(blades);
             c.set_equip_subwep_right3(spear);
@@ -95,7 +98,7 @@ pub fn apply() -> Result<Carriers, String> {
             classes += 1;
         }
     }
-    notes.push(format!("{classes} starting classes rewritten to the Kratos kit"));
+    notes.push(format!("{classes} starting classes rewritten to the Kratos kit (vigor {vigor})"));
     if classes == 0 {
         return Err("no CharaInitParam rows 3000..3009 found".into());
     }

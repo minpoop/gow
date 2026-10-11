@@ -26,7 +26,6 @@ pub struct Runtime {
     carriers: Option<Carriers>,
     params_tried: u32,
     ticks: u64,
-    healed_on_entry: bool,
     pub camera_req: Arc<Mutex<gowring_core::CameraRequest>>,
     banner: String,
     stats: Stats,
@@ -61,7 +60,6 @@ impl Runtime {
             carriers: None,
             params_tried: 0,
             ticks: 0,
-            healed_on_entry: false,
             camera_req,
             banner,
             stats: Stats::default(),
@@ -200,15 +198,6 @@ impl Runtime {
         if let Ok(wcm) = unsafe { WorldChrMan::instance_mut() } {
             if let Some(p) = wcm.main_player.as_mut() {
                 let data = &mut p.chr_ins.modules.data;
-                if d.loadout.max_hp > 0 && data.max_hp != d.loadout.max_hp {
-                    data.max_hp = d.loadout.max_hp;
-                    data.max_uncapped_hp = d.loadout.max_hp;
-                    if !self.healed_on_entry {
-                        data.hp = d.loadout.max_hp;
-                        self.healed_on_entry = true;
-                        crate::glog!("hp_scale", "max HP set to {}", d.loadout.max_hp);
-                    }
-                }
                 if d.loadout.free_stamina && frame.player.alive {
                     data.stamina = data.max_stamina;
                 }
