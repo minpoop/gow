@@ -22,6 +22,27 @@ use std::path::Path;
 /// game says so on screen. "release": every asset must convert or Play stops with a clear message.
 pub const CHANNEL: &str = config::CHANNEL;
 
+/// HUD pieces that can take a Ragnarök picture: (id, what it is, cache path).
+fn hud_pieces() -> Vec<(&'static str, &'static str, &'static str)> {
+    ASSETS.iter().filter(|a| a.id.starts_with("hud_") && a.output.ends_with(".png")).map(|a| (a.id, a.describes, a.output)).collect()
+}
+
+/// Copy the Ragnarök pictures chosen in `ragnarok_hud.json` into the cache for the overlay (before every Play).
+fn apply_hud_choices(ctx: &Ctx) {
+    let path = ctx.local.join("ragnarok_hud.json");
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    match gowring_gow::hudmap::parse(&text) {
+        Ok(choices) => {
+            let outputs: Vec<(&str, &str)> = hud_pieces().iter().map(|(id, _, out)| (*id, *out)).collect();
+            let report = gowring_gow::hudmap::apply(&choices, &ctx.local.join("ragnarok_ui"), &ctx.cache, &outputs);
+            for line in report.lines() {
+                ctx.log(&format!("ragnarok_hud: {line}"));
+            }
+        }
+        Err(e) => ctx.log(&format!("ragnarok_hud: {} could not be read ({e:#}); the HUD keeps its current art", path.display())),
+    }
+}
+
 fn requests() -> Vec<AssetReq> {
     ASSETS
         .iter()
@@ -148,6 +169,7 @@ fn play(ctx: &Ctx) -> Result<()> {
     if !prepared(ctx) {
         prepare(ctx)?;
     }
+    apply_hud_choices(ctx);
     ctx.log(&format!("play: package folder {} contains: {}", ctx.managed.display(), Ctx::listing(&ctx.managed)));
     if let Some(parent) = ctx.managed.parent() {
         ctx.log(&format!("play: parent folder {} contains: {}", parent.display(), Ctx::listing(parent)));
@@ -233,6 +255,11 @@ fn background_diagnose(ctx: &Ctx) {
                 let _ = std::fs::create_dir_all(&c.local);
                 // Ragnarök's own UI textures, decoded from the player's install for a look (not used in game yet).
                 let ui = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| export_ui_textures(&gow, &c.local.join("ragnarok_ui"))));
+                let map = c.local.join("ragnarok_hud.json");
+                if !map.exists() {
+                    let pieces: Vec<(&str, &str)> = hud_pieces().iter().map(|(id, what, _)| (*id, *what)).collect();
+                    let _ = std::fs::write(&map, gowring_gow::hudmap::template(&pieces));
+                }
                 text.push_str(&match ui {
                     Ok(t) => t,
                     Err(_) => "\n== Ragnarök UI textures\n(the export panicked)\n".into(),

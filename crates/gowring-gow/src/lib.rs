@@ -13,6 +13,7 @@ pub mod convert;
 pub mod dds;
 pub mod lz4;
 pub mod diagnose;
+pub mod hudmap;
 pub mod oodle;
 pub mod prepare;
 pub mod scan;

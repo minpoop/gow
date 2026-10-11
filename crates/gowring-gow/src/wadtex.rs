@@ -162,6 +162,7 @@ pub fn export(buf: &[u8], out_dir: &Path, max: usize, mut more: impl FnMut() -> 
     };
     let _ = std::fs::create_dir_all(out_dir);
     let ps = pairs(&es);
+    let mut shown: Vec<(String, u32, u32)> = Vec::new();
     let (mut ok, mut failed) = (0usize, 0usize);
     let mut sizes_match = 0usize;
     for &(pi, gi) in ps.iter().take(max) {
@@ -189,6 +190,9 @@ pub fn export(buf: &[u8], out_dir: &Path, max: usize, mut more: impl FnMut() -> 
                 let file = out_dir.join(format!("{}.png", safe(&pe.name)));
                 let wrote = dds::to_png(&img).ok().and_then(|png| std::fs::write(&file, png).ok()).is_some();
                 ok += wrote as usize;
+                if wrote {
+                    shown.push((safe(&pe.name), img.w, img.h));
+                }
                 let _ = writeln!(o, "{} {}x{} fmt {} mips {} tile {} gpu {:#x} layout {:#x}{}", pe.name, img.w, img.h, t.format(), t.mips(), t.tile_mode(), gb.len(), l.total, if wrote { "" } else { " (could not write the PNG)" });
             }
             Err(e) => {
@@ -197,8 +201,22 @@ pub fn export(buf: &[u8], out_dir: &Path, max: usize, mut more: impl FnMut() -> 
             }
         }
     }
+    let _ = std::fs::write(out_dir.join("index.html"), gallery(&shown));
     let _ = writeln!(o, "summary: {} texture pairs, {ok} written as PNG, {failed} not decoded, {sizes_match} whose GPU chunk is exactly the laid-out size", ps.len());
     o
+}
+
+/// A page that shows every exported picture with its name, with a filter box (open it in any browser).
+pub fn gallery(items: &[(String, u32, u32)]) -> String {
+    use std::fmt::Write;
+    let mut h = String::from(
+        "<!doctype html><meta charset=utf-8><title>Ragnarok UI textures</title>\n<style>body{background:#1b1b1d;color:#e8e2cf;font:13px system-ui,sans-serif;margin:16px}input{font:inherit;padding:6px 8px;width:min(420px,90vw);margin:8px 0 16px}.g{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}figure{margin:0;background:#2a2a2e;border-radius:8px;padding:8px}img{display:block;max-width:100%;max-height:160px;margin:auto;background:repeating-conic-gradient(#3a3a40 0 25%,#2e2e33 0 50%) 0 0/16px 16px}figcaption{margin-top:6px;word-break:break-all;user-select:all}small{color:#a39e8c}</style>\n<h1>Ragnar&ouml;k UI textures from your install</h1><p>Copy a name into <code>ragnarok_hud.json</code> next to the HUD piece it should replace, then start the game again.</p>\n<input id=f placeholder='filter by name, e.g. sonhud, rage, icon'>\n<div class=g id=g>\n",
+    );
+    for (name, w, hh) in items {
+        let _ = writeln!(h, "<figure data-n='{}'><img loading=lazy src='{name}.png'><figcaption>{name}<br><small>{w} x {hh}</small></figcaption></figure>", name.to_lowercase());
+    }
+    h.push_str("</div>\n<script>f.oninput=()=>{const q=f.value.toLowerCase();for(const e of g.children)e.style.display=e.dataset.n.includes(q)?'':'none'}</script>\n");
+    h
 }
 
 fn safe(name: &str) -> String {
@@ -297,6 +315,8 @@ mod tests {
         assert!(report.contains("1 whose GPU chunk is exactly the laid-out size"), "{report}");
         let png = std::fs::read(dir.join("TX_hud_test_0123.png")).unwrap();
         assert_eq!(&png[1..4], b"PNG");
+        let page = std::fs::read_to_string(dir.join("index.html")).unwrap();
+        assert!(page.contains("src='TX_hud_test_0123.png'") && page.contains("8 x 8"), "{page}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

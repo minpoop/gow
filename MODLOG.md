@@ -186,3 +186,8 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - Launcher background diagnose: after the report, `export_ui_textures` finds r_ui.wad, decodes up to 1500 textures in at most 90 s into `%LOCALAPPDATA%\GowRing\ragnarok_ui\*.png` and appends a section to diagnose.txt (summary: pairs / written / not decoded / GPU chunk exactly the laid-out size — the last count validates the layout rule on real data).
 - Tests: T# field round trip; two-mip BC1 picks the full-size image after the small one; unsupported/short inputs are errors; a synthetic one-texture WAD exports one PNG with an exact layout size.
 - Unverified on real data until the player's next run (diagnose runs once per version, 3 min after launch).
+
+## 0.1.21 — gallery and ragnarok_hud.json (2026-10-11, third block while the user was away)
+- `wadtex::export` also writes `ragnarok_ui/index.html`: every exported picture with its name and size, a filter box, checkerboard behind transparency.
+- `gowring-gow/src/hudmap.rs` + launcher: after the export, `%LOCALAPPDATA%\GowRing\ragnarok_hud.json` is created (every hud_* piece, empty, with its description). Before every Play, `apply_hud_choices` copies each chosen picture (`ragnarok_ui/<name>.png`) to the piece's cache path (`cache/hud/...png`), where the overlay's asset store already looks; pieces no longer chosen get their copied picture removed (tracked in `cache/hud/from_ragnarok_ui.txt`, so prepared art is never touched). Unknown pieces and missing pictures are logged (`ragnarok_hud:` lines in launcher.log).
+- Tests: template/parse/apply/undo/missing; gallery content in the export test. Wine: the real `GowRing.exe --play` with a mapping file copied the picture and logged the missing one.
