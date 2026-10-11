@@ -62,6 +62,15 @@ impl Overlay {
 }
 
 /// Overall HUD opacity from the settings (f32 bits; 1.0 until the first snapshot).
+static TOAST: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
+/// Show a short line near the top of the screen for a few seconds (debug summons and the like).
+pub fn toast(msg: &str) {
+    if let Ok(mut g) = TOAST.lock() {
+        *g = Some((msg.to_string(), std::time::Instant::now()));
+    }
+}
+
 static OPACITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
 
 fn col(rgb: u32, alpha: f32) -> [f32; 4] {
@@ -314,7 +323,8 @@ impl ImguiRenderLoop for Overlay {
             }
         }
         if snap.valid && snap.hint > 0.01 {
-            const LINES: [&str; 8] = [
+            let st = crate::settings::get();
+            let mut lines: Vec<String> = [
                 "L2 hold: aim     L2 + R1: throw",
                 "Triangle: recall axe / detonate spears",
                 "D-pad right: Axe > Blades > Spear",
@@ -323,18 +333,38 @@ impl ImguiRenderLoop for Overlay {
                 "L3 + R3: Spartan Rage (full bar)",
                 "R3 near a staggered enemy: finisher (wear them down first)",
                 "Tweak things live: settings.json",
-            ];
+            ]
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+            if st.debug_tools {
+                lines.push(format!("F{} (keyboard): summon a tough enemy", st.debug_spawn_key));
+            }
+            let lines = &lines;
             let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));
             let line_h = ui.calc_text_size("Ag")[1] + 4.0;
-            let width = LINES.iter().map(|l| ui.calc_text_size(l)[0]).fold(0.0f32, f32::max).max(ui.calc_text_size("KRATOS CONTROLS")[0]) + 44.0;
-            let height = line_h * (LINES.len() as f32 + 1.4) + 28.0;
+            let width = lines.iter().map(|l| ui.calc_text_size(l)[0]).fold(0.0f32, f32::max).max(ui.calc_text_size("KRATOS CONTROLS")[0]) + 44.0;
+            let height = line_h * (lines.len() as f32 + 1.4) + 28.0;
             let (x0, y0) = (w - width - 36.0, h * 0.09);
             let a = snap.hint;
             dl.add_rect([x0, y0], [x0 + width, y0 + height], col(0x000000, 0.58 * a)).filled(true).rounding(8.0).build();
             dl.add_rect([x0, y0], [x0 + width, y0 + height], col(0xC9BB8E, 0.5 * a)).rounding(8.0).thickness(1.5).build();
             dl.add_text([x0 + 22.0, y0 + 12.0], col(0xFFD27A, a), "KRATOS CONTROLS");
-            for (i, l) in LINES.iter().enumerate() {
+            for (i, l) in lines.iter().enumerate() {
                 dl.add_text([x0 + 22.0, y0 + 14.0 + line_h * (i as f32 + 1.4)], col(0xF1ECD8, 0.95 * a), l);
+            }
+        }
+        let toast = TOAST.lock().ok().and_then(|g| g.clone());
+        if let Some((msg, t0)) = toast {
+            let age = t0.elapsed().as_secs_f32();
+            if age < 4.0 {
+                let a = if age > 3.3 { (4.0 - age) / 0.7 } else { 1.0 };
+                let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));
+                let sz = ui.calc_text_size(&msg);
+                let (x0, y0) = ((w - sz[0]) / 2.0 - 18.0, h * 0.16);
+                dl.add_rect([x0, y0], [x0 + sz[0] + 36.0, y0 + sz[1] + 18.0], col(0x000000, 0.6 * a)).filled(true).rounding(8.0).build();
+                dl.add_rect([x0, y0], [x0 + sz[0] + 36.0, y0 + sz[1] + 18.0], col(0xC9BB8E, 0.5 * a)).rounding(8.0).thickness(1.5).build();
+                dl.add_text([x0 + 18.0, y0 + 9.0], col(0xFFD27A, a), &msg);
             }
         }
         if alpha_mode && !snap.banner.is_empty() {

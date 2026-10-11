@@ -28,6 +28,12 @@ pub struct Settings {
     pub enemy_health_multiplier: f32,
     /// A regular enemy worn down to a quarter of its health is staggered once, so you can finish it with R3.
     pub finisher_when_wounded: bool,
+    /// Testing aids (the summon key) are on.
+    pub debug_tools: bool,
+    /// The function key (1-12 for F1-F12) that summons a tough enemy.
+    pub debug_spawn_key: u8,
+    /// Health given to a summoned enemy.
+    pub debug_enemy_health: f32,
 }
 
 impl Default for Settings {
@@ -46,12 +52,15 @@ impl Default for Settings {
             controls_hint_seconds: 25.0,
             enemy_health_multiplier: 3.0,
             finisher_when_wounded: true,
+            debug_tools: true,
+            debug_spawn_key: 9,
+            debug_enemy_health: 3000.0,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 2;
+const FILE_VERSION: u32 = 3;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -97,7 +106,16 @@ fn render(s: &Settings) -> String {
   "_effect_rings": "The expanding rings for runics, spear blasts and the Rage burst.",
 
   "controls_hint_seconds": {hint:?},
-  "_controls_hint_seconds": "How long the controls panel stays on screen when you enter the world. 0 = never."
+  "_controls_hint_seconds": "How long the controls panel stays on screen when you enter the world. 0 = never.",
+
+  "debug_tools": {dbg},
+  "_debug_tools": "Testing aids. While true, the summon key below works. false = off.",
+
+  "debug_spawn_key": "F{dkey}",
+  "_debug_spawn_key": "Keyboard key (F1 to F12) that summons a tough copy of a nearby enemy 5 metres in front of you, so a fight is one key away.",
+
+  "debug_enemy_health": {dhp:?},
+  "_debug_enemy_health": "Health of a summoned enemy (100 to 100000)."
 }}
 "#,
         ver = FILE_VERSION,
@@ -114,6 +132,9 @@ fn render(s: &Settings) -> String {
         shake = s.camera_shake,
         rings = s.effect_rings,
         hint = s.controls_hint_seconds,
+        dbg = s.debug_tools,
+        dkey = s.debug_spawn_key,
+        dhp = s.debug_enemy_health,
     )
 }
 
@@ -131,6 +152,9 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     controls_hint_seconds: 25.0,
     enemy_health_multiplier: 3.0,
     finisher_when_wounded: true,
+    debug_tools: true,
+    debug_spawn_key: 9,
+    debug_enemy_health: 3000.0,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -149,6 +173,13 @@ fn flag(v: &serde_json::Value, key: &str, into: &mut bool) {
     if let Some(x) = v.get(key).and_then(|x| x.as_bool()) {
         *into = x;
     }
+}
+
+/// "F9" -> 9 (F1 to F12, any case).
+fn fkey(name: &str) -> Option<u8> {
+    let t = name.trim();
+    let n: u8 = t.strip_prefix('F').or_else(|| t.strip_prefix('f'))?.parse().ok()?;
+    (1..=12).contains(&n).then_some(n)
 }
 
 /// Parse a settings file's text; every missing key keeps its default.
@@ -171,6 +202,11 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     num(&v, "controls_hint_seconds", 0.0, 600.0, &mut s.controls_hint_seconds);
     num(&v, "enemy_health_multiplier", 0.25, 20.0, &mut s.enemy_health_multiplier);
     flag(&v, "finisher_when_wounded", &mut s.finisher_when_wounded);
+    flag(&v, "debug_tools", &mut s.debug_tools);
+    if let Some(k) = v.get("debug_spawn_key").and_then(|x| x.as_str()).and_then(fkey) {
+        s.debug_spawn_key = k;
+    }
+    num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
     Ok(s)
 }
 
@@ -198,25 +234,29 @@ fn reload(path: &Path, first: bool) {
     }
 }
 
-/// What a settings file from an older build becomes: every value kept, the Rage multiplier divided by 3 (Rage gain was
-/// tuned up threefold in the rules in version 2, so the same play feels the same), and the notes brought up to date.
+/// What a settings file from an older build becomes: every value kept, new keys shown with their defaults, the notes
+/// brought up to date, and (from version 1) the Rage multiplier divided by 3 (Rage gain was tuned up threefold in the
+/// rules in version 2, so the same play feels the same).
 /// `None` when the text is already current or is not a settings file (a file that does not parse is left for its owner).
 fn migrated_text(text: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
-    if !v.is_object() || v.get("settings_version").and_then(|x| x.as_u64()).unwrap_or(1) >= FILE_VERSION as u64 {
+    let version = v.get("settings_version").and_then(|x| x.as_u64()).unwrap_or(1);
+    if !v.is_object() || version >= FILE_VERSION as u64 {
         return None;
     }
     let mut s = parse(text).ok()?;
-    if v.get("rage_gain_multiplier").and_then(|x| x.as_f64()).is_some() {
+    if version < 2 && v.get("rage_gain_multiplier").and_then(|x| x.as_f64()).is_some() {
         s.rage_gain_multiplier = ((s.rage_gain_multiplier / 3.0) * 100.0).round() / 100.0;
     }
+    // version 3 only added keys: re-rendering the file shows them with their notes
     Some(render(&s))
 }
 
 fn migrate(path: &Path) {
     let Ok(text) = std::fs::read_to_string(path) else { return };
     let Some(new_text) = migrated_text(&text) else { return };
-    let backup = path.with_file_name("settings.v1.json");
+    let old_version = serde_json::from_str::<serde_json::Value>(&text).ok().and_then(|v| v.get("settings_version").and_then(|x| x.as_u64())).unwrap_or(1);
+    let backup = path.with_file_name(format!("settings.v{old_version}.json"));
     let _ = std::fs::write(&backup, &text);
     match std::fs::write(path, new_text) {
         Ok(()) => crate::glog!("settings", "brought {} up to date (the old one is kept as {})", path.display(), backup.display()),
@@ -294,6 +334,9 @@ mod tests {
             controls_hint_seconds: 0.0,
             enemy_health_multiplier: 5.0,
             finisher_when_wounded: false,
+            debug_tools: false,
+            debug_spawn_key: 11,
+            debug_enemy_health: 5000.0,
         };
         assert_eq!(parse(&render(&s)).unwrap(), s);
     }
@@ -313,5 +356,22 @@ mod tests {
         assert_eq!(s.rage_gain_multiplier, 1.0);
         // not JSON: left for the owner to fix
         assert!(migrated_text("{ nope").is_none());
+    }
+
+    #[test]
+    fn a_version_2_file_keeps_its_rage_and_gains_the_new_keys() {
+        let v2 = r#"{ "settings_version": 2, "rage_gain_multiplier": 2.0, "hud_scale": 1.2 }"#;
+        let s = parse(&migrated_text(v2).expect("v2 is brought forward")).unwrap();
+        assert_eq!(s.rage_gain_multiplier, 2.0, "only version 1 files had Rage divided");
+        assert_eq!(s.hud_scale, 1.2);
+        assert!(s.debug_tools);
+        assert_eq!(s.debug_spawn_key, 9);
+    }
+
+    #[test]
+    fn function_keys_parse_and_others_keep_the_default() {
+        assert_eq!(parse(r#"{ "debug_spawn_key": "f5" }"#).unwrap().debug_spawn_key, 5);
+        assert_eq!(parse(r#"{ "debug_spawn_key": "F13" }"#).unwrap().debug_spawn_key, 9);
+        assert_eq!(parse(r#"{ "debug_spawn_key": "Q" }"#).unwrap().debug_spawn_key, 9);
     }
 }

@@ -6,9 +6,9 @@
 //! thread. Nothing in this file has been run against the real game yet (docs/STATUS.md).
 
 use crate::audio::Audio;
-use eldenring::cs::{CSCamExt, CSCamera, CSFeManImp, CSHavokMan, ChrActions, ChrIns, FieldInsHandle, WorldChrMan};
+use eldenring::cs::{CSCamExt, CSCamera, CSFeManImp, CSHavokMan, ChrActions, ChrDebugSpawnRequest, ChrIns, EnemyIns, FieldInsHandle, WorldChrMan};
 use eldenring::position::{HavokPosition, PositionDelta};
-use fromsoftware_shared::FromStatic;
+use fromsoftware_shared::{FromStatic, Superclass};
 use gowring_core::sheets::{ErAction, RunicStatus};
 use gowring_core::{ActionBits, Command, DamageEvent, EnemyView, Frame, PlayerView, RayResult, Vec3, VoiceInfo};
 use std::collections::{HashMap, HashSet};
@@ -89,6 +89,14 @@ pub struct Bridge {
     burning: Vec<Burn>,
     /// Enemies whose health has been scaled up: handle id -> the max HP written (never scaled twice).
     scaled: HashMap<u64, i32>,
+    /// A debug summon waiting for the game to create the character.
+    pending_spawn: Option<PendingSpawn>,
+    /// Summoned enemies still settling in: id -> (health to hold, until when).
+    tough: HashMap<u64, (i32, f64)>,
+    /// Every enemy summoned this session (never used as a template).
+    summoned: HashSet<u64>,
+    last_ppos: Vec3,
+    last_facing: Vec3,
     /// HP we took off enemies ourselves outside the engine's ledger (burn ticks), so it is not read back as melee.
     own_pending: HashMap<u64, i32>,
     my_mask: ActionBits,
@@ -100,6 +108,15 @@ pub struct Bridge {
     last_team_report: f64,
     pub scan_range: f32,
     pub max_enemies: usize,
+}
+
+/// A debug summon sent to the game's own character creator, waiting to show up.
+struct PendingSpawn {
+    at: f64,
+    hp: i32,
+    before: usize,
+    want: Vec3,
+    template: String,
 }
 
 impl Bridge {
@@ -118,6 +135,11 @@ impl Bridge {
             frozen: HashMap::new(),
             burning: Vec::new(),
             scaled: HashMap::new(),
+            pending_spawn: None,
+            tough: HashMap::new(),
+            summoned: HashSet::new(),
+            last_ppos: Vec3::ZERO,
+            last_facing: Vec3::new(0.0, 0.0, 1.0),
             own_pending: HashMap::new(),
             my_mask: ActionBits::NONE,
             prev_pos: None,
@@ -127,6 +149,107 @@ impl Bridge {
             last_team_report: f64::NEG_INFINITY,
             scan_range,
             max_enemies: 96,
+        }
+    }
+
+    /// Testing aid: copy the toughest regular enemy the game has loaded and have the game's own debug character
+    /// creator put the copy 5 m in front of the player, with `hp` health. Returns a line for the screen.
+    pub fn debug_spawn(&mut self, hp: f32, now: f64) -> String {
+        if self.pending_spawn.is_some() {
+            return "Still summoning the last one".into();
+        }
+        let Ok(wcm) = (unsafe { WorldChrMan::instance_mut() }) else { return "Not in the world yet".into() };
+        let Some(player) = wcm.main_player.as_ref() else { return "Not in the world yet".into() };
+        let player_handle = player.chr_ins.field_ins_handle;
+        let bosses: HashSet<u64> = unsafe { CSFeManImp::instance() }
+            .map(|fe| fe.boss_health_displays.iter().filter(|b| !b.field_ins_handle.is_empty()).map(|b| id_of(&b.field_ins_handle)).collect())
+            .unwrap_or_default();
+        // (max hp, character id, npc param, think param, chara init param, distance)
+        let mut best: Option<(i32, u32, i32, i32, i32, f32)> = None;
+        for entry in wcm.chr_inses_by_distance.iter().take(512) {
+            let e: &ChrIns = unsafe { entry.chr_ins.as_ref() };
+            let id = id_of(&e.field_ins_handle);
+            if e.field_ins_handle == player_handle || entry.distance > 250.0 || !self.hostile_teams.contains(&e.team_type) || !ehp_alive(e) {
+                continue;
+            }
+            if bosses.contains(&id) || self.summoned.contains(&id) || e.character_id == 0 || e.npc_param_id <= 0 {
+                continue;
+            }
+            let Some(d) = opt(&e.modules.data) else { continue };
+            let Some(enemy) = e.as_subclass::<EnemyIns>() else { continue };
+            let cand = (d.max_hp, e.character_id, e.npc_param_id, enemy.npc_think_param, d.chara_init_param_id, entry.distance);
+            if best.map(|b| cand.0 > b.0).unwrap_or(true) {
+                best = Some(cand);
+            }
+        }
+        let Some((max_hp, chr_id, npc, think, init, dist)) = best else {
+            crate::glog!("debug_spawn", "no regular hostile enemy is loaded within 250 m to copy");
+            return "No enemy nearby to copy: go where enemies are first".into();
+        };
+        let dir = {
+            let f = self.last_facing.flat();
+            if f.len() > 0.01 { f.normalized() } else { Vec3::new(0.0, 0.0, 1.0) }
+        };
+        let want = self.last_ppos + dir * 5.0 + Vec3::new(0.0, 0.5, 0.0);
+        let before = wcm.debug_chr_creator.last_created_chr.map(|p| p.as_ptr() as usize).unwrap_or(0);
+        wcm.spawn_debug_character(&ChrDebugSpawnRequest {
+            chr_id: chr_id as i32,
+            chara_init_param_id: init,
+            npc_param_id: npc,
+            npc_think_param_id: think,
+            event_entity_id: 0,
+            talk_id: 0,
+            pos_x: want.x,
+            pos_y: want.y,
+            pos_z: want.z,
+        });
+        let template = format!("c{chr_id:04} (npc {npc}, think {think}, init {init}, {max_hp} hp, {dist:.0} m away)");
+        crate::glog!("debug_spawn", "asked the game for a copy of {template} at ({:.1},{:.1},{:.1})", want.x, want.y, want.z);
+        self.pending_spawn = Some(PendingSpawn { at: now, hp: hp.round().clamp(100.0, 100_000.0) as i32, before, want, template });
+        "Summoning a tough enemy...".into()
+    }
+
+    /// Follow up a debug summon: find the new character, give it its health, report where it landed.
+    fn settle_debug_spawn(&mut self, wcm: &mut WorldChrMan, now: f64) {
+        if let Some(p) = self.pending_spawn.as_ref() {
+            let cur = wcm.debug_chr_creator.last_created_chr;
+            let addr = cur.map(|c| c.as_ptr() as usize).unwrap_or(0);
+            if addr != 0 && addr != p.before {
+                let chr = unsafe { &mut *cur.unwrap().as_ptr() };
+                let id = id_of(&chr.field_ins_handle);
+                let HavokPosition(x, y, z, _) = chr.modules.physics.position;
+                let off = Vec3::new(x, y, z).dist(p.want);
+                crate::glog!("debug_spawn", "created {id:#x} from {}: at ({x:.1},{y:.1},{z:.1}), {off:.1} m from where it was asked for; team {}; health set to {}", p.template, chr.team_type, p.hp);
+                self.summoned.insert(id);
+                self.scaled.insert(id, p.hp);
+                self.tough.insert(id, (p.hp, now + 2.0));
+                crate::overlay::toast(if off > 25.0 { "Tough enemy summoned, but it landed away from you (see gowring.log)" } else { "Tough enemy summoned" });
+                self.pending_spawn = None;
+            } else if now - p.at > 5.0 {
+                crate::glog!("debug_spawn", "the game did not create {} within 5 s", p.template);
+                crate::overlay::toast("Could not summon an enemy (see gowring.log)");
+                self.pending_spawn = None;
+            }
+        }
+        // Hold a fresh summon's health while the game finishes setting it up (it may write its own once).
+        if !self.tough.is_empty() {
+            self.tough.retain(|_, (_, until)| now < *until);
+            for (id, (hp, _)) in self.tough.iter() {
+                let Some(h) = self.handles.get(id).copied() else { continue };
+                if let Some(chr) = wcm.chr_ins_by_handle_mut(&h) {
+                    if let Some(d) = opt_mut(&mut chr.modules.data) {
+                        if d.max_hp < *hp && d.hp > 0 {
+                            let untouched = d.hp >= d.max_hp;
+                            d.max_hp = *hp;
+                            d.max_uncapped_hp = d.max_uncapped_hp.max(*hp);
+                            d.base_hp = *hp;
+                            if untouched {
+                                d.hp = *hp;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -164,6 +287,8 @@ impl Bridge {
         }
         self.prev_pos = Some(ppos);
         let facing = facing_candidate(self.face_mode, yaw);
+        self.last_ppos = ppos;
+        self.last_facing = facing;
         let (hp, max_hp) = (data.hp, data.max_hp);
         let alive = hp > 0 && !chr.chr_flags1c5.death_flag();
         let player_handle = chr.field_ins_handle;
@@ -358,6 +483,7 @@ impl Bridge {
             Some(p) => p.chr_ins.field_ins_handle,
             None => return,
         };
+        self.settle_debug_spawn(wcm, now);
         let mut new_mask = ActionBits::NONE;
         let mut anim_speed: Option<f32> = None;
         let sheets = gowring_core::Data::get();

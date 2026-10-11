@@ -36,6 +36,8 @@ pub struct Runtime {
     fx_live: Vec<(gowring_core::sheets::FxKind, gowring_core::Vec3, f32, f64)>,
     /// When the player first appeared in the world (for the controls panel).
     entered_at: Option<Instant>,
+    /// The summon key was down last tick (summon on the press, not while held).
+    spawn_key_down: bool,
 }
 
 #[derive(Default, Debug)]
@@ -72,6 +74,7 @@ impl Runtime {
             stats: Stats::default(),
             fx_live: Vec::new(),
             entered_at: None,
+            spawn_key_down: false,
         }
     }
 
@@ -163,6 +166,14 @@ impl Runtime {
 
         let st = crate::settings::get();
         self.entered_at.get_or_insert_with(Instant::now);
+        if st.debug_tools {
+            let down = function_key_down(st.debug_spawn_key);
+            if down && !self.spawn_key_down {
+                let msg = self.bridge.debug_spawn(st.debug_enemy_health, now);
+                crate::overlay::toast(&msg);
+            }
+            self.spawn_key_down = down;
+        }
         self.engine.set_tuning(gowring_core::Tuning {
             rage_gain: st.rage_gain_multiplier,
             mod_damage: st.mod_damage_multiplier,
@@ -320,4 +331,22 @@ fn action_names(bits: gowring_core::ActionBits) -> String {
     let all = [("R1", A::R1), ("R2", A::R2), ("L1", A::L1), ("L2", A::L2), ("Action", A::Action), ("SpMove", A::SpMove), ("Jump", A::Jump), ("UseItem", A::UseItem), ("SwitchForm", A::SwitchForm), ("ChangeWeaponR", A::ChangeWeaponR), ("ChangeWeaponL", A::ChangeWeaponL), ("ChangeItem", A::ChangeItem), ("R3", A::R3), ("L3", A::L3), ("Guard", A::Guard), ("ChangeStyleR", A::ChangeStyleR), ("ChangeStyleL", A::ChangeStyleL)];
     let v: Vec<&str> = all.iter().filter(|(_, a)| bits.has(*a)).map(|(n, _)| *n).collect();
     if v.is_empty() { "?".into() } else { v.join("+") }
+}
+
+/// Whether F`n` is held while the game's own window has the focus (a key pressed in another program is ignored).
+fn function_key_down(n: u8) -> bool {
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_F1};
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+    if !(1..=12).contains(&n) {
+        return false;
+    }
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid));
+        if pid != GetCurrentProcessId() {
+            return false;
+        }
+        (GetAsyncKeyState(VK_F1.0 as i32 + n as i32 - 1) as u16 & 0x8000) != 0
+    }
 }
