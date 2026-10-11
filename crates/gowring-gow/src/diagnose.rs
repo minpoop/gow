@@ -284,6 +284,33 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
                             }
                         }
                     }
+                    // Texture records come as a descriptor + a data record sharing a name; their tails hold stream offsets
+                    // (u32 at tail+0x10). Show the bytes both point at, assuming offsets count from the end of the table.
+                    if key == "r_ui.wad" {
+                        let base = WTOC_FIRST + count * WTOC_REC;
+                        if let Ok((big, _)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 64 << 20) {
+                            let _ = writeln!(o, "    UI textures (stream read: {} bytes; table ends at {base:#x}):", big.len());
+                            let words = ["sonhud_meter", "sonhud_icon_knockeddown", "stunicon_small", "toggleblockicon_", "toggleaimicon_", "ragedrain", "xbox_controller_buttonmasks", "worldinteract_rsbutton"];
+                            let off = |t: &[u8]| u32::from_le_bytes([t[16], t[17], t[18], t[19]]) as usize;
+                            let mut n = 0;
+                            for (i, r) in recs.iter().enumerate() {
+                                if r.a != 0x1d || !r.name.starts_with("TX_") || !words.iter().any(|k| r.name.to_lowercase().contains(k)) {
+                                    continue;
+                                }
+                                let od = base + off(&r.tail);
+                                let _ = writeln!(o, "      {} descriptor(c={:#x}) at {od:#x}: {}", r.name, r.c, big.get(od..od + 160).map(hex).unwrap_or_else(|| "(beyond what was read)".into()));
+                                if let Some(next) = recs.get(i + 1).filter(|x| x.name == r.name) {
+                                    let ox = base + off(&next.tail);
+                                    let _ = writeln!(o, "        data record(c={:#x}) at {ox:#x}: {}", next.c, big.get(ox..ox + 64).map(hex).unwrap_or_else(|| "(beyond what was read)".into()));
+                                    let _ = writeln!(o, "        data record tail: {}", hex(&next.tail));
+                                }
+                                n += 1;
+                                if n >= 12 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     // the bytes at the end of the table, where the data starts
                     let end = (WTOC_FIRST + count * WTOC_REC).min(buf.len());
                     let _ = writeln!(o, "    the 256 bytes at the end of the table (offset {end:#x}):\n{}", hexdump(&buf[end.saturating_sub(48)..(end + 208).min(buf.len())], 256));
