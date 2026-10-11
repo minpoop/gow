@@ -332,7 +332,9 @@ impl Bridge {
                     if let Some(h) = self.handles.get(target).copied() {
                         if let Some(chr) = wcm.chr_ins_by_handle_mut(&h) {
                             if let Some(d) = opt_mut(&mut chr.modules.data) {
+                                let before = d.hp;
                                 d.hp = (d.hp - amount.round() as i32).max(0);
+                                crate::log::once_u64("dmg-target", *target, "enemy_damage", &format!("order of {:.0} on {target:#x}: hp {before} -> {}", amount, d.hp));
                             }
                             chr.last_hit_by = player_handle;
                         }

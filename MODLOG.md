@@ -99,3 +99,8 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - Test 7881e51e-46af-4fa9-a39f-3c3d8c1f1a2d: passed, graduates: true. 3 of 3 runs ran the full 5:00 with all 8 self-checks (installed, started, no-crash, responding, picture, ran-to-end, stray-loaders, loader-errors, self-checks all pass; `loaded` cannot be checked by Melty for this kind of mod). Played 1:30 / 0:55 / 1:05.
 - Not done, and needs the user: publish decision, licence, remix, credits, committing melty.json, and a current real screenshot (the only real one so far is from 0.1.3: placeholder HUD, a pre-kit character).
 - Still unproven in the real game: axe/spear throws and recall, runics, Rage, finishers, stagger/damage orders, Mimir, any converted Ragnarök art or sound (0/47).
+
+## 0.1.10 (2026-10-11)
+- User decisions: go with the suggested live combat session before publishing; licence unset; remix left off ("don't care" — kept at the restrictive default); credits per my judgement (added to the listing); melty.json committed to the repo root (on the working branch; Melty reads the linked repo, presumably its default branch).
+- User screenshot of 0.1.9 on a new character (bare-chested, Leviathan-axe carrier in hand, shield on the back; HUD: health bar, empty rage bar, two runic rings, AXE/SHIELD boxes, banner `GowRing alpha 0.1.9 - Ragnarok art 0/47`) added to the draft listing (media 8493c638...).
+- 0.1.10 adds log lines for axe thrown/caught, spear thrown, weapon swaps, kills and the first damage order per enemy.
