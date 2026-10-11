@@ -140,13 +140,13 @@
    "id": "b_recall",
    "label": "Recall / detonate",
    "chord": [
-    "change_style_r"
+    "action"
    ],
    "mode": "press",
    "blocks": [
-    "change_style_r"
+    "action"
    ],
-   "purpose": "Recall the thrown axe; detonate thrown spears. Masks two-hand."
+   "purpose": "Recall the thrown axe; detonate thrown spears. This is Elden Ring's interact button (Triangle / Y on a pad), so it is only taken over while a throw is out and passes through to the game otherwise."
   },
   {
    "id": "b_swap_r",

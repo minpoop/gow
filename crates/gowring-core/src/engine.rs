@@ -77,6 +77,8 @@ pub struct Engine {
     last_block_sfx: f64,
     rage_on_at: f64,
     voice_was_playing: bool,
+    /// Last time the aim chord was seen held; aiming survives a missed frame or two (see `tick`).
+    aim_last_down: f64,
 }
 
 impl Engine {
@@ -109,6 +111,7 @@ impl Engine {
             last_block_sfx: f64::NEG_INFINITY,
             rage_on_at: f64::NEG_INFINITY,
             voice_was_playing: false,
+            aim_last_down: f64::NEG_INFINITY,
         }
     }
 
@@ -141,7 +144,13 @@ impl Engine {
         let mut logs: Vec<String> = Vec::new();
         let first = *self.first_time.get_or_insert(now);
 
-        let inp: Inputs = input::read(d, f);
+        let mut inp: Inputs = input::read(d, f);
+        // The game can drop a held button for a frame (a masked or re-evaluated input); a held aim must not flicker.
+        if inp.aim_held {
+            self.aim_last_down = now;
+        } else if now - self.aim_last_down <= 0.12 {
+            inp.aim_held = true;
+        }
         let controllable = f.player.controllable && f.player.alive;
         let hp_frac = if f.player.max_hp > 0.0 { (f.player.hp / f.player.max_hp).clamp(0.0, 1.0) } else { 0.0 };
 
@@ -321,7 +330,7 @@ impl Engine {
             mask = mask
                 .union(input::mask_if(d, "b_aim", capable, f))
                 .union(input::mask_if(d, "b_throw", self.thrown.aiming, f))
-                .union(input::mask_if(d, "b_recall", capable, f))
+                .union(input::mask_if(d, "b_recall", self.thrown.recall_available(weapon), f))
                 .union(input::mask_if(d, "b_rage", self.rage.ready() || now - self.rage_on_at <= 0.6, f))
                 .union(input::mask_if(d, "b_finisher", finisher_target.is_some(), f))
                 .union(input::mask_if(d, "b_runic_light", melee_weapon, f))

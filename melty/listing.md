@@ -14,9 +14,9 @@
 Step into the Lands Between as post-game Kratos. A new character on this mashup's own save is born with the full Ragnarök kit and a Ragnarök-style HUD, and Elden Ring's world is the sandbox.
 
 ## What you get
-- **Leviathan Axe + Guardian Shield** — hold **L2** to aim, **L2 + R1** to throw, **Triangle** to recall it through everything in its path. Raise the shield to block; start a guard just before a hit lands for a **perfect parry** that staggers the attacker.
+- **Leviathan Axe + Guardian Shield** — hold **L2** to aim, **L2 + R1** to throw, **Triangle / Y** (Elden Ring's interact button, taken over only while a throw is out) to recall it through everything in its path. Raise the shield to block; start a guard just before a hit lands for a **perfect parry** that staggers the attacker.
 - **Blades of Chaos** — long, fast, chained arcs. (The shield is stowed while they are out, as in Ragnarök.)
-- **Draupnir Spear** — throw up to three spears, then **Triangle** to detonate them together.
+- **Draupnir Spear** — throw up to three spears, then **Triangle / Y** to detonate them together.
 - **Light and heavy runic attacks** for every weapon (**D-pad up / down**), each with a cooldown ring on the HUD.
 - **Spartan Rage** — fills as you fight and take hits; **L3 + R3** when full. Hit harder, take half damage, regenerate, and shake the ground on activation.
 - **Stun meters and finishers** — build an enemy's stun bar, then press **R3** to grab and execute.
@@ -31,7 +31,7 @@ Step into the Lands Between as post-game Kratos. A new character on this mashup'
 - It plays on its **own save file** — your Elden Ring saves are not used, and a backup of them is kept anyway.
 - Kratos' *moves* are Elden Ring's own animations for now, and his weapons and body use Elden Ring's models: Ragnarök's PC animation and model formats are not readable yet. Runics and finishers do their damage and effects without a dedicated animation.
 - The HUD *layout* and Mimir's timing are in; Ragnarök's own HUD art and Mimir's recorded lines appear only where the converter can find them in your install, and flat stand-in shapes are drawn (with an "ALPHA" note on screen) where it cannot yet.
-- **How tested:** Melty's test passed 3 of 3 five-minute runs on Elden Ring 2.7.1.0 (the mod loads, plays on its own save, equips the whole kit on a new character, hides Elden Ring's HUD, draws the Ragnarök HUD layout and runs the combat rules without a crash). Seen working in real play so far: the loadout, the HUD overlay and the **perfect parry**. The axe and spear throws, recall, runics, Spartan Rage and finishers have run in simulation but have **not yet been seen in the real game**; if something is missing or wrong, `STATUS.md` in the mod folder lists exactly what, and `%LOCALAPPDATA%\GowRing\logs\gowring.log` says what happened.
+- **How tested:** Melty's test passed 3 of 3 five-minute runs on Elden Ring 2.7.1.0 (the mod loads, plays on its own save, equips the whole kit on a new character, hides Elden Ring's HUD, draws the Ragnarök HUD layout and runs the combat rules without a crash). Seen working in real play so far: the loadout, the HUD overlay, the **perfect parry**, axe and spear throws, weapon swaps, runics, and mod-dealt damage that killed enemies and the Chapel boss. Recall and the aim crosshair were found broken in a 15-minute play session and fixed afterwards; Spartan Rage and finishers have run in simulation but have **not yet been seen in the real game**; if something is missing or wrong, `STATUS.md` in the mod folder lists exactly what, and `%LOCALAPPDATA%\GowRing\logs\gowring.log` says what happened.
 
 ## Credits
 - **ModEngine2** (soulsmods, MIT) loads the mod into Elden Ring offline; it is shipped unmodified, with its licence.

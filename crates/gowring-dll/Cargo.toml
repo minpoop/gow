@@ -1,6 +1,6 @@
 [package]
 name = "gowring-dll"
-version = "0.1.10"
+version = "0.1.11"
 edition = "2021"
 description = "gowring.dll — the in-game half of Kratos in the Lands Between. Loaded by ModEngine2 into eldenring.exe."
 

@@ -75,6 +75,8 @@ struct Burn {
 pub struct Bridge {
     /// The six weapon slot param ids last read from the player (for the self-checks).
     pub last_equip: [i32; 6],
+    /// Frames L2 was masked, and in how many of them it was still visible in the game's requests (evidence for the log).
+    l2_masked: (u32, u32),
     prev_player_hp: Option<i32>,
     prev_enemy_hp: HashMap<u64, i32>,
     prev_player_last_hit: u64,
@@ -100,6 +102,7 @@ impl Bridge {
     pub fn new(scan_range: f32) -> Self {
         Bridge {
             last_equip: [0; 6],
+            l2_masked: (0, 0),
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
             prev_player_last_hit: u64::MAX,
@@ -172,6 +175,18 @@ impl Bridge {
             controllable: alive,
         };
         f.actions_down = bits_from_er(&ar.action_requests);
+        if self.my_mask.has(ErAction::L2) {
+            self.l2_masked.0 += 1;
+            if f.actions_down.has(ErAction::L2) {
+                self.l2_masked.1 += 1;
+            }
+            if self.l2_masked.0 == 30 {
+                crate::glog!("action_mask", "L2 was masked for 30 frames and still visible in {} of them (visible = the aim button can be held while its weapon art is blocked)", self.l2_masked.1);
+            }
+        } else {
+            self.l2_masked.0 = 0;
+            self.l2_masked.1 = 0;
+        }
         f.actions_pressed = bits_from_er(&ar.new_action_presses);
         f.actions_released = bits_from_er(&ar.released_actions);
         f.area = player.play_region_id;
@@ -385,8 +400,12 @@ impl Bridge {
         if let Some(p) = wcm.main_player.as_mut() {
             let ar = &mut p.chr_ins.modules.action_request;
             let stale = ActionBits(self.my_mask.0 & !new_mask.0);
+            // L2 is the aim button and must stay readable while held: a disabled input vanishes from the game's
+            // requests, so the aim would drop the moment it is masked and flicker. For L2 only the queued/pending
+            // copies are cleared (below), which is enough to keep the weapon art from starting.
+            let disable = ActionBits(new_mask.0 & !ActionBits::bit(ErAction::L2));
             set_er_bits(&mut ar.disabled_action_inputs, stale, false);
-            set_er_bits(&mut ar.disabled_action_inputs, new_mask, true);
+            set_er_bits(&mut ar.disabled_action_inputs, disable, true);
             // Our task runs after the game has worked out this frame's requests and before the behaviour
             // graph reads them, so a masked action must also be removed from what is already queued.
             if !new_mask.is_empty() {

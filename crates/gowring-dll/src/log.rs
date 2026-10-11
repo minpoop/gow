@@ -26,9 +26,12 @@ pub fn recent(n: usize, max_chars: usize) -> String {
 pub fn init(dir: &std::path::Path) {
     let _ = std::fs::create_dir_all(dir);
     let path = dir.join("gowring.log");
-    let old = dir.join("gowring.1.log");
-    let _ = std::fs::remove_file(&old);
-    let _ = std::fs::rename(&path, &old);
+    // keep the last four runs: gowring.log, .1.log, .2.log, .3.log (a three-run Melty test then leaves all three)
+    let _ = std::fs::remove_file(dir.join("gowring.3.log"));
+    for i in (1..3).rev() {
+        let _ = std::fs::rename(dir.join(format!("gowring.{i}.log")), dir.join(format!("gowring.{}.log", i + 1)));
+    }
+    let _ = std::fs::rename(&path, dir.join("gowring.1.log"));
     if let Ok(f) = File::create(&path) {
         *LOG.lock().unwrap() = Some((f, Instant::now()));
     }

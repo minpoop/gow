@@ -1,9 +1,7 @@
-Eleventh alpha. The last full run (0.1.8) passed all 8 of the mod's own checks on Elden Ring 2.7.1.0; the only failure was the game being closed by hand 10 seconds before the run's end. This build:
+Twelfth alpha. A 15-minute play session of 0.1.10 on Elden Ring 2.7.1.0 showed the kit working in real play: axe throws, weapon swaps (the axe returns when you swap away), spear throws (three at a time), all runics, and mod-dealt damage that killed the Chapel boss and other enemies. Two things did not work, both fixed here:
 
-- **Starts a fresh save again** (`ER0000.gowring3.sl2`) so your next new character is created with the final starting stats (Vigor 99). The old mod save files stay on disk and your real Elden Ring saves are never touched.
-- The log now records axe throws and catches, spear throws, weapon swaps, kills and every first damage order the mod places on an enemy, so a play session shows what the mod actually did.
-- The log now names the buttons it sees (R1, L1, R3 ...), so the controller mapping can be checked at a glance.
+- **Recall now works.** It was bound to Elden Ring's two-hand button, which never reaches the game on your controller's Triangle / Y; that button is Elden Ring's *interact* button. Recall (and spear detonation) is now Triangle / Y. It only takes over the button while a throw is out, so doors and items still work with the axe in hand.
+- **The throw crosshair no longer flickers.** Masking L2 hid it from the game, so the aim dropped the instant it was held. L2 stays visible now, and the aim also forgives a single missed frame.
+- The log keeps the last four runs instead of two, so a three-run Melty test leaves all of them.
 
-What the 0.1.8 log showed in play: the player and all four weapons were found at once, the rules ran at about 25 microseconds per frame, the facing calibration locked on, and a perfect parry fired and refunded the damage it was meant to cancel. Not yet seen in play: axe throw, recall, Rage, finishers, runics.
-
-Still an alpha: the HUD art is plain placeholder shapes until the Ragnarök art is mapped.
+Still an alpha: the HUD art is plain placeholder shapes until the Ragnarök art is mapped; runics and finishers have no animation of their own.

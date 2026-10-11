@@ -227,7 +227,7 @@ fn axe_throw_aim_recall_loop_with_masks() {
     let out = w.step(&[R1], &[]);
     assert!(out.commands.iter().any(|c| matches!(c, Command::Mask(m) if m.has(R1) && m.has(R2))));
     // recall brings it back
-    let out = w.step(&[ChangeStyleR], &[]);
+    let out = w.step(&[Action], &[]);
     assert!(out.hud.recall_available || w.engine.thrown().axe_out());
     for _ in 0..240 {
         w.step(&[], &[]);
@@ -349,9 +349,45 @@ fn spear_volley_then_detonation_in_a_crowd() {
         }
     }
     assert!(w.engine.thrown().spears.len() >= 1);
-    let out = w.step(&[ChangeStyleR], &[]);
+    let out = w.step(&[Action], &[]);
     let blasts = out.commands.iter().filter(|c| matches!(c, Command::Damage { source: DamageSource::Blast, .. })).count();
     assert!(blasts >= 1, "detonation hurt someone");
     assert!(w.sfx.contains(&"sfx_spear_blast"));
     let _ = Vec3::ZERO;
+}
+
+
+#[test]
+fn aim_survives_a_dropped_frame_but_not_a_release() {
+    let mut w = SimWorld::new();
+    for _ in 0..5 {
+        assert!(w.step(&[], &[L2]).hud.aiming);
+    }
+    // the game drops the held button for one frame (a masked / re-evaluated input): still aiming
+    assert!(w.step(&[], &[]).hud.aiming, "one missed frame must not drop the crosshair");
+    assert!(w.step(&[], &[L2]).hud.aiming);
+    // a real release ends the aim within a few frames
+    let mut still = true;
+    for _ in 0..12 {
+        still = w.step(&[], &[]).hud.aiming;
+    }
+    assert!(!still, "aim must end after a real release");
+}
+
+#[test]
+fn recall_button_is_only_taken_over_while_something_is_out() {
+    let mut w = SimWorld::new();
+    // axe in hand: the interact button belongs to Elden Ring (doors, items)
+    let out = w.step(&[Action], &[]);
+    assert!(!out.commands.iter().any(|c| matches!(c, Command::Mask(m) if m.has(Action))), "interact must pass through with nothing to recall");
+    w.step(&[], &[]);
+    // throw the axe, then the same button recalls it and is masked so ER does not also interact
+    w.step(&[], &[L2]);
+    w.step(&[R1], &[L2]);
+    for _ in 0..5 {
+        w.step(&[], &[]);
+    }
+    assert!(w.engine.thrown().axe_out());
+    let out = w.step(&[Action], &[]);
+    assert!(out.commands.iter().any(|c| matches!(c, Command::Mask(m) if m.has(Action))));
 }
