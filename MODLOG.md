@@ -94,3 +94,8 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - From gowring.log: rules tick ~25 µs avg (max ~0.4 ms), so the 60→30 fps drop is not the mod. The character loaded was the one from the 0.1.7 run (same spawn point, 522/522 HP): class params only apply to new characters, hence a fresh save name `ER0000.gowring3.sl2` so Vigor 99 takes effect.
 - First live combat evidence: at 116 s a hostile came within 3.1 m (the Chapel's Grafted Scion); the player pressed L1 (ER bit 0x4) and the rules logged `perfect parry` with a 233 damage `Taken`, issuing the refund; HP reached 1/522 at 138 s and was 522/522 again at 191 s (died and respawned). `dealt: 0`, `damage_orders: 0`: no mod attack on an enemy yet. ER bits seen: 0x1 R1, 0x20 SpMove, 0x10 Action, 0x40 Jump, 0x1000 R3, 0x4 L1 — they agree with the sheet's ChrActions bit table.
 - 0.1.9: log names the action bits; fresh save name.
+
+## 0.1.9 passed Melty's test (2026-10-11)
+- Test 7881e51e-46af-4fa9-a39f-3c3d8c1f1a2d: passed, graduates: true. 3 of 3 runs ran the full 5:00 with all 8 self-checks (installed, started, no-crash, responding, picture, ran-to-end, stray-loaders, loader-errors, self-checks all pass; `loaded` cannot be checked by Melty for this kind of mod). Played 1:30 / 0:55 / 1:05.
+- Not done, and needs the user: publish decision, licence, remix, credits, committing melty.json, and a current real screenshot (the only real one so far is from 0.1.3: placeholder HUD, a pre-kit character).
+- Still unproven in the real game: axe/spear throws and recall, runics, Rage, finishers, stagger/damage orders, Mimir, any converted Ragnarök art or sound (0/47).
