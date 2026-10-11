@@ -77,18 +77,19 @@ impl Audio {
                         Msg::Sfx { id, path, volume } => match std::fs::File::open(&path).ok().and_then(|f| Decoder::new(BufReader::new(f)).ok()) {
                             Some(dec) => {
                                 if let Ok(sink) = Sink::try_new(&handle) {
-                                    sink.set_volume(volume);
+                                    sink.set_volume(volume * crate::settings::get().sfx_volume);
                                     sink.append(dec);
                                     sink.detach();
                                 }
                             }
+                            None if !crate::settings::get().stand_in_sounds => {}
                             None => {
                                 // no converted Ragnarök sound: a short generated stand-in, so the effect is not silent
                                 match crate::synth::sfx(id) {
                                     Some(samples) => {
                                         crate::log::once_u64("sfx-standin", id.len() as u64 * 131 + id.bytes().map(|b| b as u64).sum::<u64>(), "audio", &format!("{id}: using a generated stand-in (no converted sound at {})", path.display()));
                                         if let Ok(sink) = Sink::try_new(&handle) {
-                                            sink.set_volume(volume * 0.8);
+                                            sink.set_volume(volume * 0.8 * crate::settings::get().sfx_volume);
                                             sink.append(rodio::buffer::SamplesBuffer::new(1, crate::synth::RATE, samples));
                                             sink.detach();
                                         }
@@ -109,6 +110,9 @@ impl Audio {
                             let Some(path) = pick(&dir, r, no_repeat, &mut rng) else {
                                 // No recording: speak in subtitles with a line written for the mod.
                                 let lines = crate::mimir_text::lines(&set);
+                                if !crate::settings::get().mimir_subtitles {
+                                    continue;
+                                }
                                 if lines.is_empty() {
                                     crate::log::once("voice-empty", "audio", &format!("no Mimir lines in {} (prepare did not find them)", dir.display()));
                                     continue;

@@ -49,8 +49,23 @@ pub struct TickOutput {
     pub projectiles: Vec<(&'static str, Vec3)>,
 }
 
+/// Player-adjustable multipliers (the DLL reads them from `settings.json`).
+#[derive(Clone, Copy, Debug)]
+pub struct Tuning {
+    pub rage_gain: f32,
+    pub mod_damage: f32,
+    pub mimir_chance: f32,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Tuning { rage_gain: 1.0, mod_damage: 1.0, mimir_chance: 1.0 }
+    }
+}
+
 pub struct Engine {
     d: &'static Data,
+    tuning: Tuning,
     rage: Rage,
     runics: Runics,
     thrown: Thrown,
@@ -86,6 +101,7 @@ impl Engine {
         let d = Data::get();
         Engine {
             d,
+            tuning: Tuning::default(),
             rage: Rage::new(d),
             runics: Runics::new(d),
             thrown: Thrown::new(d),
@@ -135,8 +151,14 @@ impl Engine {
         WEAPONS.iter().map(|w| w.base_damage).max().unwrap_or(1) as f32
     }
 
+    pub fn set_tuning(&mut self, t: Tuning) {
+        self.tuning = Tuning { rage_gain: t.rage_gain.clamp(0.0, 10.0), mod_damage: t.mod_damage.clamp(0.0, 20.0), mimir_chance: t.mimir_chance.clamp(0.0, 10.0) };
+    }
+
     pub fn tick(&mut self, f: &Frame) -> TickOutput {
         let d = self.d;
+        self.rage.gain_mult = self.tuning.rage_gain;
+        self.mimir.chance_mult = self.tuning.mimir_chance;
         let now = f.time;
         let mut out: Vec<Command> = Vec::new();
         let mut ev: Vec<Event> = Vec::new();
@@ -317,7 +339,12 @@ impl Engine {
         for id in std::mem::take(&mut gains.player_hit) {
             self.stun.note_player_hit(id, now);
         }
-        self.rage.gain(gains.rage);
+        if gains.rage > 0.05 && !self.rage.active {
+            self.rage.gain(gains.rage);
+            logs.push(format!("rage +{:.1} (x{:.2}) -> {:.0}/{:.0}", gains.rage, self.tuning.rage_gain, self.rage.meter, self.rage.max()));
+        } else {
+            self.rage.gain(gains.rage);
+        }
         for (id, pts) in std::mem::take(&mut gains.stun) {
             self.stun.add(d, id, pts, now, &mut out, &mut ev);
         }
@@ -341,6 +368,15 @@ impl Engine {
         }
         if !mask.is_empty() {
             out.push(Command::Mask(mask));
+        }
+
+        // the player's damage setting scales everything the mod itself deals (before the ledger counts it)
+        if (self.tuning.mod_damage - 1.0).abs() > 1e-3 {
+            for c in out.iter_mut() {
+                if let Command::Damage { amount, .. } = c {
+                    *amount *= self.tuning.mod_damage;
+                }
+            }
         }
 
         // ---- ledger: whatever we ordered will echo back as damage ----------------------------------------------------
@@ -546,6 +582,7 @@ impl Engine {
             low_health_overlay,
             in_combat,
             pulse: (now % 1.2) as f32 / 1.2,
+            ui_scale: 1.0,
         }
     }
 }

@@ -39,6 +39,7 @@ fn anti_cheat_loaded() -> Option<&'static str> {
 pub fn run(hmodule: usize) {
     let p = paths::init(module_dir(hmodule));
     crate::log::init(&p.local.join("logs"));
+    crate::settings::init(&p.local);
     // Every panic (ours or a dependency's) lands in the log with its location.
     std::panic::set_hook(Box::new(|info| {
         // a per-frame panic must not flood the log

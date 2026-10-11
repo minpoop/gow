@@ -430,3 +430,36 @@ fn spears_that_hit_earn_rage() {
     w.step(&[Action], &[]);
     assert!(w.engine.rage().meter > 0.0, "hitting enemies with spears fills Rage");
 }
+
+
+fn spear_hit_meter(t: gowring_core::Tuning) -> (f32, f32) {
+    let mut w = SimWorld::new();
+    w.engine.set_tuning(t);
+    w.right_slot = 2;
+    for i in 0..3u64 {
+        w.add_enemy(gowring_core::sim::SimEnemy::new(60 + i, -1.0 + i as f32, 10.0, 1.0e6));
+    }
+    w.step(&[], &[L2]);
+    for _ in 0..3 {
+        w.step(&[R1], &[L2]);
+        for _ in 0..30 {
+            w.step(&[], &[L2]);
+        }
+    }
+    w.step(&[Action], &[]);
+    w.idle(0.5);
+    let lost: f32 = (0..3u64).map(|i| 1.0e6 - w.enemy(60 + i).hp).sum();
+    (w.engine.rage().meter, lost)
+}
+
+#[test]
+fn player_settings_scale_rage_and_the_mods_own_damage() {
+    let base = spear_hit_meter(gowring_core::Tuning::default());
+    assert!(base.0 > 0.0 && base.1 > 0.0, "{base:?}");
+    let more_rage = spear_hit_meter(gowring_core::Tuning { rage_gain: 2.0, ..Default::default() });
+    assert!((more_rage.0 - 2.0 * base.0).abs() < 0.01 * base.0.max(1.0) + 0.01 || more_rage.0 >= base.0 * 1.9, "rage x2: {} vs {}", more_rage.0, base.0);
+    let no_rage = spear_hit_meter(gowring_core::Tuning { rage_gain: 0.0, ..Default::default() });
+    assert_eq!(no_rage.0, 0.0);
+    let double_damage = spear_hit_meter(gowring_core::Tuning { mod_damage: 2.0, ..Default::default() });
+    assert!(double_damage.1 > base.1 * 1.8, "damage x2: {} vs {}", double_damage.1, base.1);
+}

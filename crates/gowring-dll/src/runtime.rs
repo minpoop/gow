@@ -34,6 +34,8 @@ pub struct Runtime {
     stats: Stats,
     /// Effect rings still alive: (kind, position, radius in metres, engine time born).
     fx_live: Vec<(gowring_core::sheets::FxKind, gowring_core::Vec3, f32, f64)>,
+    /// When the player first appeared in the world (for the controls panel).
+    entered_at: Option<Instant>,
 }
 
 #[derive(Default, Debug)]
@@ -69,6 +71,7 @@ impl Runtime {
             banner,
             stats: Stats::default(),
             fx_live: Vec::new(),
+            entered_at: None,
         }
     }
 
@@ -158,7 +161,11 @@ impl Runtime {
         self.observe_for_tests();
         self.upkeep(&frame);
 
-        let out = self.engine.tick(&frame);
+        let st = crate::settings::get();
+        self.entered_at.get_or_insert_with(Instant::now);
+        self.engine.set_tuning(gowring_core::Tuning { rage_gain: st.rage_gain_multiplier, mod_damage: st.mod_damage_multiplier, mimir_chance: st.mimir_frequency });
+        let mut out = self.engine.tick(&frame);
+        out.hud.ui_scale = st.hud_scale;
         for l in &out.logs {
             crate::glog!("rules", "{l}");
         }
@@ -176,8 +183,9 @@ impl Runtime {
         self.stats.taken += frame.damage.iter().filter(|d| matches!(d, gowring_core::DamageEvent::Taken { .. })).count() as u64;
         for c in &out.commands {
             match c {
-                Command::Fx { kind, pos, radius, .. } => self.fx_live.push((*kind, *pos, radius.max(1.0), now)),
-                Command::Shake(a) => {
+                Command::Fx { kind, pos, radius, .. } if st.effect_rings => self.fx_live.push((*kind, *pos, radius.max(1.0), now)),
+                Command::Shake(a) if st.camera_shake > 0.0 => {
+                    let a = &(*a * st.camera_shake);
                     if let Ok(mut g) = SHAKE.lock() {
                         let amp = g.map(|(old, t0)| old * (-t0.elapsed().as_secs_f32() / 0.3).exp()).unwrap_or(0.0).max(*a);
                         *g = Some((amp, Instant::now()));
@@ -249,6 +257,16 @@ impl Runtime {
                 s.fov_rad = fov;
             }
             s.banner = self.banner.clone();
+            let cfg = crate::settings::get();
+            s.opacity = cfg.hud_opacity;
+            // the controls panel: fades in over a second, stays for `controls_hint_seconds`, fades out over two
+            s.hint = match (self.entered_at, cfg.controls_hint_seconds) {
+                (Some(t0), secs) if secs > 0.0 => {
+                    let t = t0.elapsed().as_secs_f32();
+                    ((t / 1.0).min(1.0) * ((secs - t) / 2.0).clamp(0.0, 1.0)).clamp(0.0, 1.0)
+                }
+                _ => 0.0,
+            };
             let now = self.start.elapsed().as_secs_f64();
             s.fx = self.fx_live.iter().map(|(k, p, r, born)| crate::overlay::FxMark { kind: *k, pos: *p, radius: *r, age: (now - born) as f32 }).collect();
         }

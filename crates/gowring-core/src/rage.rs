@@ -9,12 +9,14 @@ pub struct Rage {
     pub meter: f32,
     pub active: bool,
     pub time_left: f32,
+    /// Multiplier on every point of Rage earned (the player's `rage_gain_multiplier` setting).
+    pub gain_mult: f32,
     d: &'static Data,
 }
 
 impl Rage {
     pub fn new(d: &'static Data) -> Self {
-        Rage { meter: d.loadout.rage_start_value(), active: false, time_left: 0.0, d }
+        Rage { meter: d.loadout.rage_start_value(), active: false, time_left: 0.0, gain_mult: 1.0, d }
     }
 
     pub fn max(&self) -> f32 {
@@ -39,7 +41,7 @@ impl Rage {
     /// Meter gain; none while Rage is burning.
     pub fn gain(&mut self, v: f32) {
         if !self.active && v > 0.0 {
-            self.meter = (self.meter + v).min(self.max());
+            self.meter = (self.meter + v * self.gain_mult).min(self.max());
         }
     }
 

@@ -15,6 +15,7 @@ mod params;
 mod paths;
 mod runtime;
 mod savehook;
+mod settings;
 mod synth;
 mod testmode;
 

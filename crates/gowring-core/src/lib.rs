@@ -25,5 +25,5 @@ pub mod types;
 pub mod vector;
 
 pub use data::Data;
-pub use engine::{Engine, TickOutput};
+pub use engine::{Engine, TickOutput, Tuning};
 pub use types::*;

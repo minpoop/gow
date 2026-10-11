@@ -1,0 +1,214 @@
+//! Player settings: `%LOCALAPPDATA%\GowRing\settings.json`. Created with the defaults on first start and re-read
+//! about every second while the game runs, so a value can be changed in a text editor and seen straight away.
+//! Unknown keys are ignored, a missing or wrong-typed key keeps its default, and a file that does not parse
+//! leaves the last good settings in place (and says so in gowring.log).
+
+use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
+use std::time::SystemTime;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Settings {
+    /// Every point of Spartan Rage earned is multiplied by this (0 = never fills, 2 = twice as fast).
+    pub rage_gain_multiplier: f32,
+    /// Multiplies the damage the mod itself deals (axe and spear throws, runics, finishers, Rage burst).
+    pub mod_damage_multiplier: f32,
+    pub hud_scale: f32,
+    pub hud_opacity: f32,
+    pub sfx_volume: f32,
+    pub stand_in_sounds: bool,
+    pub mimir_subtitles: bool,
+    /// Multiplies how often Mimir speaks (0 = silent, 2 = twice as often).
+    pub mimir_frequency: f32,
+    pub camera_shake: f32,
+    pub effect_rings: bool,
+    /// How long the controls panel stays up after you enter the world (0 = never show it).
+    pub controls_hint_seconds: f32,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            rage_gain_multiplier: 1.0,
+            mod_damage_multiplier: 1.0,
+            hud_scale: 1.0,
+            hud_opacity: 1.0,
+            sfx_volume: 1.0,
+            stand_in_sounds: true,
+            mimir_subtitles: true,
+            mimir_frequency: 1.0,
+            camera_shake: 1.0,
+            effect_rings: true,
+            controls_hint_seconds: 25.0,
+        }
+    }
+}
+
+const DEFAULT_FILE: &str = r#"{
+  "_about": "Kratos in the Lands Between settings. Save this file while the game is running and the change applies within a second or two. Delete a line to get its default back; delete the whole file to start over.",
+
+  "rage_gain_multiplier": 1.0,
+  "_rage_gain_multiplier": "Spartan Rage earned per hit, throw, parry and so on. 0.5 = half as fast, 2 = twice as fast, 0 = it never fills.",
+
+  "mod_damage_multiplier": 1.0,
+  "_mod_damage_multiplier": "Damage the mod itself deals: axe and spear throws, runics, finishers, the Rage burst. Elden Ring's own weapon hits are not scaled.",
+
+  "hud_scale": 1.0,
+  "_hud_scale": "HUD size. 1.0 = normal, 1.3 = bigger, 0.8 = smaller (0.4 to 3.0).",
+
+  "hud_opacity": 1.0,
+  "_hud_opacity": "0.0 invisible to 1.0 solid.",
+
+  "sfx_volume": 1.0,
+  "_sfx_volume": "Volume of the mod's sound effects, 0.0 to 2.0.",
+
+  "stand_in_sounds": true,
+  "_stand_in_sounds": "Generated stand-in sounds used while the real Ragnarok sounds are not available. false = silence instead.",
+
+  "mimir_subtitles": true,
+  "_mimir_subtitles": "Mimir's stand-in subtitle lines (shown while no recording is available).",
+
+  "mimir_frequency": 1.0,
+  "_mimir_frequency": "How often Mimir speaks. 0 = never, 0.5 = half as often, 3 = three times as often.",
+
+  "camera_shake": 1.0,
+  "_camera_shake": "Strength of the screen shake on Rage and spear blasts. 0 = none.",
+
+  "effect_rings": true,
+  "_effect_rings": "The expanding rings for runics, spear blasts and the Rage burst.",
+
+  "controls_hint_seconds": 25,
+  "_controls_hint_seconds": "How long the controls panel stays on screen when you enter the world. 0 = never."
+}
+"#;
+
+static CURRENT: RwLock<Settings> = RwLock::new(Settings {
+    rage_gain_multiplier: 1.0,
+    mod_damage_multiplier: 1.0,
+    hud_scale: 1.0,
+    hud_opacity: 1.0,
+    sfx_volume: 1.0,
+    stand_in_sounds: true,
+    mimir_subtitles: true,
+    mimir_frequency: 1.0,
+    camera_shake: 1.0,
+    effect_rings: true,
+    controls_hint_seconds: 25.0,
+});
+static PATH: OnceLock<PathBuf> = OnceLock::new();
+
+/// The settings right now (a cheap copy).
+pub fn get() -> Settings {
+    CURRENT.read().map(|g| *g).unwrap_or_default()
+}
+
+fn num(v: &serde_json::Value, key: &str, lo: f32, hi: f32, into: &mut f32) {
+    if let Some(x) = v.get(key).and_then(|x| x.as_f64()) {
+        *into = (x as f32).clamp(lo, hi);
+    }
+}
+
+fn flag(v: &serde_json::Value, key: &str, into: &mut bool) {
+    if let Some(x) = v.get(key).and_then(|x| x.as_bool()) {
+        *into = x;
+    }
+}
+
+/// Parse a settings file's text; every missing key keeps its default.
+pub fn parse(text: &str) -> Result<Settings, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    if !v.is_object() {
+        return Err("the file must contain one JSON object { ... }".into());
+    }
+    let mut s = Settings::default();
+    num(&v, "rage_gain_multiplier", 0.0, 10.0, &mut s.rage_gain_multiplier);
+    num(&v, "mod_damage_multiplier", 0.0, 20.0, &mut s.mod_damage_multiplier);
+    num(&v, "hud_scale", 0.4, 3.0, &mut s.hud_scale);
+    num(&v, "hud_opacity", 0.0, 1.0, &mut s.hud_opacity);
+    num(&v, "sfx_volume", 0.0, 2.0, &mut s.sfx_volume);
+    flag(&v, "stand_in_sounds", &mut s.stand_in_sounds);
+    flag(&v, "mimir_subtitles", &mut s.mimir_subtitles);
+    num(&v, "mimir_frequency", 0.0, 10.0, &mut s.mimir_frequency);
+    num(&v, "camera_shake", 0.0, 3.0, &mut s.camera_shake);
+    flag(&v, "effect_rings", &mut s.effect_rings);
+    num(&v, "controls_hint_seconds", 0.0, 600.0, &mut s.controls_hint_seconds);
+    Ok(s)
+}
+
+fn mtime(p: &Path) -> Option<SystemTime> {
+    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+}
+
+fn reload(path: &Path, first: bool) {
+    match std::fs::read_to_string(path) {
+        Ok(text) => match parse(&text) {
+            Ok(new) => {
+                let old = get();
+                if let Ok(mut g) = CURRENT.write() {
+                    *g = new;
+                }
+                if first {
+                    crate::glog!("settings", "loaded {}: {:?}", path.display(), new);
+                } else if old != new {
+                    crate::glog!("settings", "reloaded: {:?}", new);
+                }
+            }
+            Err(e) => crate::glog!("settings", "could not read {} ({e}); keeping the last good settings", path.display()),
+        },
+        Err(e) => crate::glog!("settings", "could not open {}: {e}", path.display()),
+    }
+}
+
+/// Read (and on first run create) the settings file and watch it for edits.
+pub fn init(local_dir: &Path) {
+    let path = local_dir.join("settings.json");
+    let _ = PATH.set(path.clone());
+    if !path.exists() {
+        let _ = std::fs::create_dir_all(local_dir);
+        match std::fs::write(&path, DEFAULT_FILE) {
+            Ok(()) => crate::glog!("settings", "created {} with the defaults", path.display()),
+            Err(e) => crate::glog!("settings", "could not create {}: {e}", path.display()),
+        }
+    }
+    reload(&path, true);
+    let _ = std::thread::Builder::new().name("gowring-settings".into()).spawn(move || {
+        let mut seen = mtime(&path);
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            let now = mtime(&path);
+            if now != seen {
+                seen = now;
+                if now.is_some() {
+                    reload(&path, false);
+                }
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_default_file_parses_to_the_defaults() {
+        assert_eq!(parse(DEFAULT_FILE).unwrap(), Settings::default());
+    }
+
+    #[test]
+    fn partial_files_keep_defaults_and_values_are_clamped() {
+        let s = parse(r#"{ "rage_gain_multiplier": 0.5, "hud_scale": 99, "mimir_subtitles": false, "sfx_volume": "loud", "unknown": 1 }"#).unwrap();
+        assert_eq!(s.rage_gain_multiplier, 0.5);
+        assert_eq!(s.hud_scale, 3.0);
+        assert!(!s.mimir_subtitles);
+        assert_eq!(s.sfx_volume, 1.0, "a wrong-typed value keeps its default");
+        assert_eq!(s.mod_damage_multiplier, 1.0);
+    }
+
+    #[test]
+    fn broken_files_are_errors_not_panics() {
+        assert!(parse("{ not json").is_err());
+        assert!(parse("[1, 2]").is_err());
+        assert!(parse("").is_err());
+    }
+}

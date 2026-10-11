@@ -49,6 +49,8 @@ pub struct HudState {
     pub in_combat: bool,
     /// Pulse phase 0..1 for "ready" glows.
     pub pulse: f32,
+    /// HUD size multiplier from the player's settings (0 or unset = 1.0). Elements scale about their own anchor corner.
+    pub ui_scale: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -121,14 +123,31 @@ fn anchored(h: &HudElementDef) -> (f32, f32) {
     }
 }
 
+/// The point of the 1920x1080 canvas an anchor scales about.
+fn anchor_ref(a: HudAnchor) -> (f32, f32) {
+    match a {
+        HudAnchor::TopLeft | HudAnchor::World => (0.0, 0.0),
+        HudAnchor::TopCenter => (960.0, 0.0),
+        HudAnchor::TopRight => (1920.0, 0.0),
+        HudAnchor::BottomLeft => (0.0, 1080.0),
+        HudAnchor::BottomCenter => (960.0, 1080.0),
+        HudAnchor::BottomRight => (1920.0, 1080.0),
+        HudAnchor::Center => (960.0, 540.0),
+    }
+}
+
 /// Lay the HUD out for `screen`. `project` maps a world point to real screen pixels (None when
 /// behind the camera).
 pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) -> Option<(f32, f32)>) -> Vec<DrawCmd> {
     let (k, ox, oy) = screen.fit();
     let mut out = Vec::new();
+    let us = if s.ui_scale > 0.05 { s.ui_scale.clamp(0.4, 3.0) } else { 1.0 };
     let rect_at = |h: &HudElementDef| {
         let (vx, vy) = anchored(h);
-        Rect { x: ox + vx * k, y: oy + vy * k, w: h.w as f32 * k, h: h.h as f32 * k }
+        // scale about the element's anchor point so corner elements stay in their corners
+        let (rx, ry) = anchor_ref(h.anchor);
+        let (nx, ny) = (rx + (vx - rx) * us, ry + (vy - ry) * us);
+        Rect { x: ox + nx * k, y: oy + ny * k, w: h.w as f32 * k * us, h: h.h as f32 * k * us }
     };
     let pulse_alpha = 0.65 + 0.35 * (s.pulse * std::f32::consts::TAU).sin().abs();
 
@@ -189,7 +208,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             HudBind::EnemyHp | HudBind::EnemyStun | HudBind::EnemyStunned => {
                 for e in s.enemies.iter().filter(|e| !e.boss) {
                     let Some((px, py)) = project(e.pos + Vec3::new(0.0, 2.3, 0.0)) else { continue };
-                    let (w, hh) = (h.w as f32 * k, h.h as f32 * k);
+                    let (w, hh) = (h.w as f32 * k * us, h.h as f32 * k * us);
                     let rc = Rect { x: px - w / 2.0 + h.x as f32 * k * 0.0, y: py + h.y as f32 * k, w, h: hh };
                     match h.bind {
                         HudBind::EnemyHp => out.push(DrawCmd::Bar { rect: rc, frac: e.hp_frac, trail: e.hp_frac, frame: h.frame, fill: h.fill, color, alpha: 0.95 }),
@@ -212,10 +231,10 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             HudBind::MimirSubtitle => {
                 if let Some(text) = &s.subtitle {
                     let mut rc = rect_at(h);
-                    rc.h = rc.h.max(d.mimir.subtitle_px as f32 * k * 2.2);
+                    rc.h = rc.h.max(d.mimir.subtitle_px as f32 * k * us * 2.2);
                     out.push(DrawCmd::Text {
                         rect: rc,
-                        px: d.mimir.subtitle_px as f32 * k,
+                        px: d.mimir.subtitle_px as f32 * k * us,
                         text: text.clone(),
                         color,
                         alpha: 1.0,
@@ -268,6 +287,21 @@ mod tests {
         let DrawCmd::Bar { rect, frac, .. } = &cmds[0] else { panic!() };
         assert_eq!((rect.x, rect.y, rect.w, rect.h), (96.0, 64.0, 560.0, 26.0));
         assert_eq!(*frac, 0.8);
+    }
+
+    #[test]
+    fn ui_scale_grows_elements_about_their_own_corner() {
+        let d = Data::get();
+        let mut s = base_state();
+        s.ui_scale = 2.0;
+        let cmds = draw_list(d, &s, Screen { w: 1920.0, h: 1080.0 }, &project);
+        let DrawCmd::Bar { rect, .. } = &cmds[0] else { panic!() };
+        // top-left anchored: position and size both double
+        assert_eq!((rect.x, rect.y, rect.w, rect.h), (192.0, 128.0, 1120.0, 52.0));
+        // bottom-left anchored weapon icon keeps its distance from the bottom-left corner times the scale
+        let icon = cmds.iter().find_map(|c| if let DrawCmd::Icon { rect, .. } = c { Some(*rect) } else { None }).unwrap();
+        assert!((icon.x - 192.0).abs() < 1e-3 && ((1080.0 - (icon.y + icon.h)) - 192.0).abs() < 1e-3, "{icon:?}");
+        assert!((icon.w - 168.0).abs() < 1e-3);
     }
 
     #[test]

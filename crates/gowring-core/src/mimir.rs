@@ -11,6 +11,8 @@ pub struct Mimir {
     last_line_at: f64,
     current_priority: i32,
     rng: u32,
+    /// Multiplier on every trigger's chance (the player's `mimir_frequency` setting); 0 silences Mimir.
+    pub chance_mult: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -21,7 +23,7 @@ pub struct Context {
 
 impl Mimir {
     pub fn new(d: &'static Data) -> Self {
-        Mimir { d, last_fired: HashMap::new(), last_line_at: f64::NEG_INFINITY, current_priority: 0, rng: (d.tuning.rng_seed as u32).max(1) }
+        Mimir { d, last_fired: HashMap::new(), last_line_at: f64::NEG_INFINITY, current_priority: 0, rng: (d.tuning.rng_seed as u32).max(1), chance_mult: 1.0 }
     }
 
     fn roll(&mut self) -> f32 {
@@ -58,7 +60,7 @@ impl Mimir {
             if !busy && !t.interrupts && now - self.last_line_at < settings.min_gap_s as f64 {
                 continue;
             }
-            if self.roll() >= t.chance_pct {
+            if self.roll() >= t.chance_pct * self.chance_mult {
                 // A failed roll still burns half the cooldown so it does not re-roll every frame.
                 self.last_fired.insert(t.id, now - t.cooldown_s as f64 * 0.5);
                 continue;

@@ -23,6 +23,9 @@ pub struct Snapshot {
     pub projectiles: Vec<(&'static str, Vec3)>,
     /// Short-lived effect rings (runic shockwaves, impacts, the spear blast, Rage burst), see `FxMark`.
     pub fx: Vec<FxMark>,
+    /// Settings: overall HUD opacity (0..1) and the controls panel's current visibility (0..1).
+    pub opacity: f32,
+    pub hint: f32,
 }
 
 /// One effect: where it happened, how far it reaches (metres) and how old it is (seconds).
@@ -58,7 +61,11 @@ impl Overlay {
     }
 }
 
+/// Overall HUD opacity from the settings (f32 bits; 1.0 until the first snapshot).
+static OPACITY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3F80_0000);
+
 fn col(rgb: u32, alpha: f32) -> [f32; 4] {
+    let alpha = alpha * f32::from_bits(OPACITY.load(std::sync::atomic::Ordering::Relaxed));
     [((rgb >> 16) & 0xFF) as f32 / 255.0, ((rgb >> 8) & 0xFF) as f32 / 255.0, (rgb & 0xFF) as f32 / 255.0, alpha.clamp(0.0, 1.0)]
 }
 
@@ -89,6 +96,7 @@ impl ImguiRenderLoop for Overlay {
         }
         let dl = ui.get_background_draw_list();
         let alpha_mode = self.store.channel_alpha;
+        OPACITY.store((if snap.valid { snap.opacity } else { 1.0 }).clamp(0.0, 1.0).to_bits(), std::sync::atomic::Ordering::Relaxed);
 
         if snap.valid {
             let (right, up, fwd, pos) = (snap.cam_right, snap.cam_up, snap.cam_fwd, snap.cam_pos);
@@ -112,6 +120,7 @@ impl ImguiRenderLoop for Overlay {
             let image = |t: (TextureId, f32, f32), r: &Rect, a: f32, tint: u32| {
                 dl.add_image(t.0, [r.x, r.y], [r.x + r.w, r.y + r.h]).col(col(tint, a)).build();
             };
+            let mut ring_no = 0;
             for c in &cmds {
                 match c {
                     DrawCmd::Overlay { color, alpha } => {
@@ -145,6 +154,11 @@ impl ImguiRenderLoop for Overlay {
                     }
                     DrawCmd::Ring { cx, cy, r, remaining, ready, frame, icon, color, alpha, .. } if tex(*frame).is_none() => {
                         draw_prims(&dl, &gowring_core::vector::ring(*cx, *cy, *r, *remaining, *ready, *color, *alpha, *icon));
+                        // which runic this ring is (the sheet lists the light one first)
+                        let label = if ring_no == 0 { "LIGHT" } else { "HEAVY" };
+                        ring_no += 1;
+                        let sz = ui.calc_text_size(label);
+                        dl.add_text([cx - sz[0] / 2.0, cy + r + 6.0], col(0xE8E2C8, 0.75 * alpha), label);
                     }
                     DrawCmd::Ring { cx, cy, r, remaining, ready, frame, glow, icon, color, alpha } => {
                         let rect = Rect { x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0 };
@@ -184,6 +198,10 @@ impl ImguiRenderLoop for Overlay {
                             image(t, rect, *alpha, *color);
                         } else if let Some(v) = asset.and_then(|id| gowring_core::vector::icon_prims(id, rect, *color, *alpha)) {
                             draw_prims(&dl, &v);
+                            if matches!(*asset, Some("hud_icon_axe" | "hud_icon_blades" | "hud_icon_spear")) && !snap.hud.weapon_name.is_empty() {
+                                let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));
+                                dl.add_text([rect.x, rect.y + rect.h + 8.0], col(0xE8E2C8, 0.9 * alpha), snap.hud.weapon_name);
+                            }
                         } else {
                             dl.add_rect([rect.x, rect.y], [rect.x + rect.w, rect.y + rect.h], col(*color, 0.5 * alpha)).thickness(2.0).build();
                             if let Some(id) = asset {
@@ -219,6 +237,7 @@ impl ImguiRenderLoop for Overlay {
                                 dl.add_rect([rect.x, rect.y], [rect.x + rect.w, rect.y + rect.h], col(0x000000, 0.55 * alpha)).filled(true).rounding(8.0).build();
                             }
                         }
+                        dl.add_text([rect.x + 14.0, rect.y + 6.0], col(0xC9BB8E, 0.9 * alpha), "MIMIR");
                         let mut left = rect.x + 16.0;
                         if let Some(t) = tex(*portrait) {
                             let side = rect.h * 0.9;
@@ -292,6 +311,30 @@ impl ImguiRenderLoop for Overlay {
                     let (c0, s0) = (ang.cos(), ang.sin());
                     dl.add_line([cx + c0 * r * 0.9, cy + s0 * r * 0.9], [cx + c0 * r * (1.06 + 0.25 * grow), cy + s0 * r * (1.06 + 0.25 * grow)], col(light, 0.8 * a)).thickness(2.0).build();
                 }
+            }
+        }
+        if snap.valid && snap.hint > 0.01 {
+            const LINES: [&str; 8] = [
+                "L2 hold: aim     L2 + R1: throw",
+                "Triangle: recall axe / detonate spears",
+                "D-pad right: Axe > Blades > Spear",
+                "L1: block (tap just before a hit: parry)",
+                "D-pad up / down: light / heavy runic",
+                "L3 + R3: Spartan Rage (full bar)",
+                "R3 near a stunned enemy: finisher",
+                "Tweak things live: settings.json",
+            ];
+            let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));
+            let line_h = ui.calc_text_size("Ag")[1] + 4.0;
+            let width = LINES.iter().map(|l| ui.calc_text_size(l)[0]).fold(0.0f32, f32::max).max(ui.calc_text_size("KRATOS CONTROLS")[0]) + 44.0;
+            let height = line_h * (LINES.len() as f32 + 1.4) + 28.0;
+            let (x0, y0) = (w - width - 36.0, h * 0.09);
+            let a = snap.hint;
+            dl.add_rect([x0, y0], [x0 + width, y0 + height], col(0x000000, 0.58 * a)).filled(true).rounding(8.0).build();
+            dl.add_rect([x0, y0], [x0 + width, y0 + height], col(0xC9BB8E, 0.5 * a)).rounding(8.0).thickness(1.5).build();
+            dl.add_text([x0 + 22.0, y0 + 12.0], col(0xFFD27A, a), "KRATOS CONTROLS");
+            for (i, l) in LINES.iter().enumerate() {
+                dl.add_text([x0 + 22.0, y0 + 14.0 + line_h * (i as f32 + 1.4)], col(0xF1ECD8, 0.95 * a), l);
             }
         }
         if alpha_mode && !snap.banner.is_empty() {
