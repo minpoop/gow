@@ -53,6 +53,7 @@ pub fn run(hmodule: usize) {
     crate::glog!("boot", "GowRing {} ({}) loading; home={} cache={}", env!("CARGO_PKG_VERSION"), p.channel, p.home.display(), p.cache.display());
 
     crate::testmode::stage("boot");
+    crate::testmode::install_fault_watch();
     crate::testmode::init();
     crate::testmode::spawn_watcher();
 
@@ -140,7 +141,9 @@ pub fn run(hmodule: usize) {
         move |_: &FD4TaskData| {
             if let Ok(mut r) = rt2.try_lock() {
                 if let Err(e) = catch_unwind(AssertUnwindSafe(|| r.tick())) {
-                    crate::log::once("tick-panic", "rules_tick", &format!("PANIC in tick: {:?}", e.downcast_ref::<&str>()));
+                    let why = e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "panic".into());
+                    crate::log::once("tick-panic", "rules_tick", &format!("PANIC in tick: {why}"));
+                    crate::testmode::tick_panic(&why);
                 }
             }
         },

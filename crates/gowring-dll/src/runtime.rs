@@ -47,7 +47,7 @@ struct Stats {
 impl Runtime {
     pub fn new(shared: Shared, store: Arc<Store>, cache: PathBuf, camera_req: Arc<Mutex<gowring_core::CameraRequest>>) -> Self {
         let d = Data::get();
-        let banner = format!("GowRing alpha 0.1.0 — Ragnarök art {}/{}", store.converted, store.total);
+        let banner = format!("GowRing alpha {} - Ragnarok art {}/{}", env!("CARGO_PKG_VERSION"), store.converted, store.total);
         Runtime {
             engine: Engine::new(),
             bridge: Bridge::new(d.tuning.scan_range_m),
@@ -107,6 +107,27 @@ impl Runtime {
         }
     }
 
+    /// What the self-checks need to know about the player in the world (cheap; runs every frame).
+    fn observe_for_tests(&mut self) {
+        use std::sync::atomic::Ordering;
+        crate::testmode::PLAYER_SEEN.store(true, Ordering::SeqCst);
+        crate::testmode::TICKS_WITH_PLAYER.fetch_add(1, Ordering::Relaxed);
+        if crate::testmode::KIT_OK.load(Ordering::SeqCst) || !crate::testmode::active() {
+            return;
+        }
+        let Some(c) = self.carriers.as_ref() else { return };
+        let ids = self.bridge.last_equip;
+        // weapon param ids carry the upgrade level in the last two digits
+        let have = |row: u32| ids.iter().any(|id| *id > 0 && (*id as u32) / 100 == row / 100);
+        let missing: Vec<&str> = c.rows.iter().filter(|(_, row)| !have(**row)).map(|(n, _)| *n).collect();
+        if missing.is_empty() {
+            crate::glog!("kit", "all {} carrier weapons are equipped: {ids:?}", c.rows.len());
+            crate::testmode::KIT_OK.store(true, Ordering::SeqCst);
+        } else {
+            crate::testmode::kit_state(format!("equipped weapon ids {ids:?}; carrier rows {:?}; not equipped: {missing:?}", c.rows));
+        }
+    }
+
     pub fn tick(&mut self) {
         // The mod stays inert until Elden Ring has opened the redirected save (see savehook).
         if !crate::savehook::redirected() {
@@ -130,6 +151,7 @@ impl Runtime {
             return;
         };
         frame.rays = std::mem::take(&mut self.ray_results);
+        self.observe_for_tests();
         self.upkeep(&frame);
 
         let out = self.engine.tick(&frame);

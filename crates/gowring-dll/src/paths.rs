@@ -31,7 +31,7 @@ pub fn init(dll_dir: Option<PathBuf>) -> &'static Paths {
             cache,
             local,
             channel: std::env::var("GOWRING_CHANNEL").unwrap_or_else(|_| "alpha".into()),
-            save_file: std::env::var("GOWRING_SAVE").unwrap_or_else(|_| "ER0000.gowring.sl2".into()),
+            save_file: std::env::var("GOWRING_SAVE").unwrap_or_else(|_| "ER0000.gowring2.sl2".into()),
             from_launcher,
         }
     })

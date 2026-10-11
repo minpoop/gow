@@ -27,26 +27,43 @@ struct WtocRec {
 const WTOC_FIRST: usize = 0x40;
 const WTOC_REC: usize = 0x90;
 
+/// The record count is the u32 at +8 of the decompressed `WTOC` header (31 in a tiny WAD, 31568 in `r_ui.wad`).
+fn wtoc_count(buf: &[u8]) -> Option<usize> {
+    if buf.len() < 0x40 || &buf[..4] != b"WTOC" {
+        return None;
+    }
+    Some(u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]) as usize)
+}
+
 fn wtoc_records(buf: &[u8]) -> Vec<WtocRec> {
+    let Some(count) = wtoc_count(buf) else { return Vec::new() };
     let mut v = Vec::new();
-    let mut at = WTOC_FIRST;
-    while at + WTOC_REC <= buf.len() {
-        let r = &buf[at..at + WTOC_REC];
-        if !(r[8] == 0xaa && r[11] == 0xba) {
-            break;
-        }
+    for i in 0..count {
+        let at = WTOC_FIRST + i * WTOC_REC;
+        let Some(r) = buf.get(at..at + WTOC_REC) else { break };
         let name_raw = &r[0x18..0x68];
         let end = name_raw.iter().position(|b| *b == 0).unwrap_or(name_raw.len());
+        let printable = name_raw[..end].iter().all(|b| (0x20..0x7f).contains(b));
         v.push(WtocRec {
             a: u16::from_le_bytes([r[0], r[1]]),
             b: u16::from_le_bytes([r[2], r[3]]),
             c: u32::from_le_bytes([r[4], r[5], r[6], r[7]]),
-            name: String::from_utf8_lossy(&name_raw[..end]).into_owned(),
+            name: if printable { String::from_utf8_lossy(&name_raw[..end]).into_owned() } else { String::new() },
             tail: r[0x68..].to_vec(),
         });
-        at += WTOC_REC;
     }
     v
+}
+
+/// Bytes of decompressed stream the whole table needs (plus a little), read from the header alone.
+fn wtoc_prefix_len(head: &[u8]) -> usize {
+    wtoc_count(head).map(|c| (WTOC_FIRST + c * WTOC_REC + 0x1000).min(24 << 20)).unwrap_or(64 << 10)
+}
+
+/// Decompress the table of a WAD: header, records, and how much was read.
+fn wtoc_load(path: &Path) -> anyhow::Result<(Vec<u8>, crate::lz4::FrameInfo)> {
+    let (head, _) = crate::lz4::read_file_prefix(path, 64)?;
+    crate::lz4::read_file_prefix(path, wtoc_prefix_len(&head))
 }
 
 fn hex(b: &[u8]) -> String {
@@ -223,9 +240,16 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
         let _ = writeln!(o, "\n== LZ4-framed WADs: {} of {}", lz.len(), wads.len());
         let mut tiny: Vec<&&&scan::FileInfo> = lz.iter().collect();
         tiny.sort_by_key(|w| w.size);
-        for w in tiny.iter().take(3) {
-            if let Ok((buf, info)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 6144) {
-                let _ = writeln!(o, "  {} ({} bytes on disk) first {} decompressed bytes of {:?}:\n{}", w.path, w.size, buf.len().min(3072), info.content_size, hexdump(&buf, 3072));
+        // A whole tiny WAD: the table, then what follows it (the data the table points at).
+        for w in tiny.iter().take(2) {
+            if let Ok((buf, info)) = wtoc_load(&gow.join(&w.path)) {
+                let count = wtoc_count(&buf).unwrap_or(0);
+                let end = (WTOC_FIRST + count * WTOC_REC).min(buf.len());
+                let _ = writeln!(o, "  {} ({} bytes on disk, {} decompressed of {:?}): {} records; the {} bytes after the table:\n{}", w.path, w.size, buf.len(), info.content_size, count, buf.len() - end, hexdump(&buf[end..], 2048));
+                let recs = wtoc_records(&buf);
+                for (i, r) in recs.iter().enumerate() {
+                    let _ = writeln!(o, "    #{i:<3} a={:04x} b={:04x} c={:08x} {:<34} tail {}", r.a, r.b, r.c, r.name, hex(&r.tail));
+                }
             }
         }
         for key in ["r_ui.wad", "r_mimir00.wad"] {
@@ -233,33 +257,56 @@ pub fn report_until(gow: &Path, er: Option<&Path>, reqs: &[AssetReq], vgmstream:
             if late() {
                 break;
             }
-            match crate::lz4::read_file_prefix(&gow.join(&w.path), 1 << 20) {
+            match wtoc_load(&gow.join(&w.path)) {
                 Ok((buf, info)) => {
+                    let count = wtoc_count(&buf).unwrap_or(0);
                     let recs = wtoc_records(&buf);
-                    let _ = writeln!(o, "\n  {} content {:?} bytes; header {}; {} records in the first {} bytes", w.path, info.content_size, hex(&buf[..buf.len().min(0x40)]), recs.len(), buf.len());
-                    for (i, r) in recs.iter().take(400).enumerate() {
-                        let _ = writeln!(o, "    #{i:<4} a={:04x} b={:04x} c={:08x} {:<40} tail {}", r.a, r.b, r.c, r.name, hex(&r.tail));
+                    let _ = writeln!(o, "\n  {} content {:?} bytes; header {}; {} of {count} records read ({} bytes)", w.path, info.content_size, hex(&buf[..buf.len().min(0x40)]), recs.len(), buf.len());
+                    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+                    for r in &recs {
+                        let tag = r.name.split('_').next().unwrap_or("").to_string();
+                        *kinds.entry(if tag.len() <= 5 && !tag.is_empty() { tag } else { "(other)".into() }).or_default() += 1;
                     }
+                    let _ = writeln!(o, "    record name prefixes: {kinds:?}");
+                    for (i, r) in recs.iter().enumerate().take(40) {
+                        let _ = writeln!(o, "    #{i:<5} a={:04x} b={:04x} c={:08x} {:<44} tail {}", r.a, r.b, r.c, r.name, hex(&r.tail));
+                    }
+                    let words = ["hud", "health", "rage", "runic", "stun", "reticle", "crosshair", "btn", "button", "mimir", "leviathan", "chaos", "draupnir", "guardian", "shield", "axe", "spear", "blades", "portrait", "subtitle", "icon", "bar", "gauge", "meter"];
+                    let mut shown = 0;
+                    let _ = writeln!(o, "    records naming something the design sheets look for (up to 400):");
+                    for (i, r) in recs.iter().enumerate() {
+                        let n = r.name.to_lowercase();
+                        if words.iter().any(|k| n.contains(k)) {
+                            let _ = writeln!(o, "    #{i:<5} a={:04x} b={:04x} c={:08x} {:<56} tail {}", r.a, r.b, r.c, r.name, hex(&r.tail));
+                            shown += 1;
+                            if shown >= 400 {
+                                break;
+                            }
+                        }
+                    }
+                    // the bytes at the end of the table, where the data starts
+                    let end = (WTOC_FIRST + count * WTOC_REC).min(buf.len());
+                    let _ = writeln!(o, "    the 256 bytes at the end of the table (offset {end:#x}):\n{}", hexdump(&buf[end.saturating_sub(48)..(end + 208).min(buf.len())], 256));
                 }
                 Err(e) => {
                     let _ = writeln!(o, "  {}: {e:#}", w.path);
                 }
             }
         }
-        // Which WAD names the things the design sheets need? Search every table for the sheet's words.
-        let words = ["hud", "health", "rage", "runic", "stun", "reticle", "crosshair", "btn", "button", "mimir", "leviathan", "chaos", "draupnir", "guardian", "shield", "axe", "spear", "blades", "portrait", "subtitle"];
+        // Which WAD names the things the design sheets need? Search every table.
+        let words = ["hud", "health", "rage", "runic", "stun", "reticle", "crosshair", "btn", "button", "mimir", "leviathan", "chaos", "draupnir", "guardian"];
         let mut shown = 0usize;
         let mut scanned = 0usize;
-        let _ = writeln!(o, "\n  records whose names contain a word the design sheets look for (first 8 per WAD):");
+        let _ = writeln!(o, "\n  tables that name a word the design sheets look for (first 6 names per WAD):");
         for w in &lz {
-            if late() || shown > 2500 {
+            if late() || shown > 1500 {
                 let _ = writeln!(o, "  (stopped after {scanned} of {} WADs)", lz.len());
                 break;
             }
             scanned += 1;
-            let Ok((buf, _)) = crate::lz4::read_file_prefix(&gow.join(&w.path), 512 << 10) else { continue };
+            let Ok((buf, _)) = wtoc_load(&gow.join(&w.path)) else { continue };
             let recs = wtoc_records(&buf);
-            let hits: Vec<&WtocRec> = recs.iter().filter(|r| { let n = r.name.to_lowercase(); words.iter().any(|k| n.contains(k)) }).take(8).collect();
+            let hits: Vec<&WtocRec> = recs.iter().filter(|r| { let n = r.name.to_lowercase(); words.iter().any(|k| n.contains(k)) }).take(6).collect();
             if !hits.is_empty() {
                 shown += hits.len();
                 let _ = writeln!(o, "  {} ({} records): {}", w.path, recs.len(), hits.iter().map(|r| r.name.as_str()).collect::<Vec<_>>().join(", "));
@@ -317,6 +364,7 @@ mod tests {
         std::fs::create_dir_all(root.join("exec")).unwrap();
         let mut content = b"WTOC".to_vec();
         content.resize(WTOC_FIRST, 0);
+        content[8] = 2; // two records
         for name in ["WAD_R_UI", "TXRX_HUD_HEALTHBAR"] {
             let mut rec = vec![0u8; WTOC_REC];
             rec[0] = 1;

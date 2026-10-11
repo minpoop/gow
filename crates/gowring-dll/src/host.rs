@@ -73,6 +73,8 @@ struct Burn {
 }
 
 pub struct Bridge {
+    /// The six weapon slot param ids last read from the player (for the self-checks).
+    pub last_equip: [i32; 6],
     prev_player_hp: Option<i32>,
     prev_enemy_hp: HashMap<u64, i32>,
     prev_player_last_hit: u64,
@@ -97,6 +99,7 @@ pub struct Bridge {
 impl Bridge {
     pub fn new(scan_range: f32) -> Self {
         Bridge {
+            last_equip: [0; 6],
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
             prev_player_last_hit: u64::MAX,
@@ -181,6 +184,9 @@ impl Bridge {
             // ChrAsmSlot order: WeaponLeft1=0, WeaponRight1=1, WeaponLeft2=2, WeaponRight2=3, WeaponLeft3=4, WeaponRight3=5
             let left_idx = (asm.equipment.selected_slots.left_weapon_slot.min(2) * 2) as usize;
             f.shield_drawn = asm.equipment_param_ids[left_idx] > 0;
+            for (i, slot) in self.last_equip.iter_mut().enumerate() {
+                *slot = asm.equipment_param_ids[i] as i32;
+            }
         }
 
         // --- camera ----------------------------------------------------------------------------------------
