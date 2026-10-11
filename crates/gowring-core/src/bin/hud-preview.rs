@@ -4,6 +4,7 @@
 //!   cargo run -p gowring-core --features preview --bin hud-preview -- out.png [width height]
 
 use gowring_core::hud::{self, Align, DrawCmd, EnemyBar, HudState, RunicHud, Screen};
+use gowring_core::vector::{self, Prim};
 use gowring_core::{Data, Vec3};
 
 struct Canvas {
@@ -55,6 +56,58 @@ impl Canvas {
                     }
                 }
                 self.blend(xx, yy, rgb(c), a);
+            }
+        }
+    }
+    /// Fill a triangle with 3x3 supersampling at the edges.
+    fn tri(&mut self, p: [(f32, f32); 3], c: u32, a: f32) {
+        let (min_x, max_x) = (p.iter().map(|q| q.0).fold(f32::MAX, f32::min).floor() as i64, p.iter().map(|q| q.0).fold(f32::MIN, f32::max).ceil() as i64);
+        let (min_y, max_y) = (p.iter().map(|q| q.1).fold(f32::MAX, f32::min).floor() as i64, p.iter().map(|q| q.1).fold(f32::MIN, f32::max).ceil() as i64);
+        let area = (p[1].0 - p[0].0) * (p[2].1 - p[0].1) - (p[2].0 - p[0].0) * (p[1].1 - p[0].1);
+        if area.abs() < 1e-6 {
+            return;
+        }
+        let inside = |x: f32, y: f32| {
+            let w0 = ((p[1].0 - x) * (p[2].1 - y) - (p[2].0 - x) * (p[1].1 - y)) / area;
+            let w1 = ((p[2].0 - x) * (p[0].1 - y) - (p[0].0 - x) * (p[2].1 - y)) / area;
+            let w2 = 1.0 - w0 - w1;
+            w0 >= 0.0 && w1 >= 0.0 && w2 >= 0.0
+        };
+        for yy in min_y..=max_y {
+            for xx in min_x..=max_x {
+                let mut hit = 0;
+                for sy in 0..3 {
+                    for sx in 0..3 {
+                        if inside(xx as f32 + (sx as f32 + 0.5) / 3.0, yy as f32 + (sy as f32 + 0.5) / 3.0) {
+                            hit += 1;
+                        }
+                    }
+                }
+                if hit > 0 {
+                    self.blend(xx, yy, rgb(c), a * hit as f32 / 9.0);
+                }
+            }
+        }
+    }
+    fn prims(&mut self, v: &[Prim]) {
+        for p in v {
+            match p {
+                Prim::Tri { p, color, alpha } => self.tri(*p, *color, *alpha),
+                Prim::Line { a, b, thick, color, alpha } => {
+                    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+                    let len = (dx * dx + dy * dy).sqrt().max(1e-4);
+                    let (nx, ny) = (-dy / len * thick / 2.0, dx / len * thick / 2.0);
+                    let q = [(a.0 + nx, a.1 + ny), (b.0 + nx, b.1 + ny), (b.0 - nx, b.1 - ny), (a.0 - nx, a.1 - ny)];
+                    self.tri([q[0], q[1], q[2]], *color, *alpha);
+                    self.tri([q[0], q[2], q[3]], *color, *alpha);
+                }
+                Prim::Circle { c, r, fill, thick, color, alpha } => {
+                    if *fill {
+                        self.disc(c.0, c.1, *r, 0.0, *color, *alpha, None);
+                    } else {
+                        self.disc(c.0, c.1, *r + thick / 2.0, (*r - thick / 2.0).max(0.0), *color, *alpha, None);
+                    }
+                }
             }
         }
     }
@@ -131,30 +184,17 @@ fn main() {
     for c in hud::draw_list(d, &state, Screen { w: w as f32, h: h as f32 }, &project) {
         match c {
             DrawCmd::Overlay { color, alpha } => cv.rect(0.0, 0.0, w as f32, h as f32, color, alpha),
-            DrawCmd::Bar { rect, frac, trail, color, alpha, .. } => {
-                cv.rect(rect.x, rect.y, rect.w, rect.h, 0x101010, 0.65 * alpha);
-                if trail > frac {
-                    cv.rect(rect.x, rect.y, rect.w * trail, rect.h, 0xE8E2C8, 0.45 * alpha);
+            DrawCmd::Bar { rect, frac, trail, color, alpha, .. } => cv.prims(&vector::bar(&rect, frac, trail, color, alpha)),
+            DrawCmd::Ring { cx, cy, r, remaining, ready, icon, color, alpha, .. } => cv.prims(&vector::ring(cx, cy, r, remaining, ready, color, alpha, icon)),
+            DrawCmd::Icon { rect, asset, color, alpha } => match asset.and_then(|id| vector::icon_prims(id, &rect, color, alpha)) {
+                Some(v) => cv.prims(&v),
+                None => {
+                    cv.outline(rect.x, rect.y, rect.w, rect.h, color, 0.6 * alpha);
+                    if let Some(id) = asset {
+                        cv.text(rect.x + 4.0, rect.y + 4.0, 16.0, &id.rsplit('_').next().unwrap_or(id).to_ascii_uppercase(), color, 0.8 * alpha);
+                    }
                 }
-                cv.rect(rect.x, rect.y, rect.w * frac, rect.h, color, alpha);
-                cv.outline(rect.x, rect.y, rect.w, rect.h, 0xBBBBBB, 0.5 * alpha);
-            }
-            DrawCmd::Ring { cx, cy, r, remaining, ready, color, alpha, .. } => {
-                cv.disc(cx, cy, r, 0.0, 0x101010, 0.55 * alpha, None);
-                cv.disc(cx, cy, r, r - 3.0, color, alpha, None);
-                if remaining > 0.001 {
-                    cv.disc(cx, cy, r - 3.0, 0.0, 0x000000, 0.62, Some(remaining));
-                } else if ready {
-                    cv.disc(cx, cy, r * 1.08, r * 1.0, color, alpha, None);
-                }
-                cv.text(cx - 14.0, cy - 12.0, 24.0, "AXE", 0xFFFFFF, 0.7);
-            }
-            DrawCmd::Icon { rect, asset, color, alpha } => {
-                cv.outline(rect.x, rect.y, rect.w, rect.h, color, 0.6 * alpha);
-                if let Some(id) = asset {
-                    cv.text(rect.x + 4.0, rect.y + 4.0, 16.0, &id.rsplit('_').next().unwrap_or(id).to_ascii_uppercase(), color, 0.8 * alpha);
-                }
-            }
+            },
             DrawCmd::Prompt { rect, text, color, alpha, .. } => {
                 cv.rect(rect.x, rect.y, rect.w, rect.h, 0x000000, 0.45 * alpha);
                 if let Some(t) = text {
@@ -169,7 +209,14 @@ fn main() {
             }
         }
     }
-    let banner = "LAYOUT PREVIEW - flat placeholder shapes, not gameplay and not Ragnarok art";
+    // an icon sheet: every HUD drawing at 110 px, on the same backdrop
+    for (i, id) in ["hud_icon_axe", "hud_icon_blades", "hud_icon_spear", "hud_icon_shield", "hud_crosshair_throw", "hud_enemy_stunned"].iter().enumerate() {
+        let r = gowring_core::hud::Rect { x: 1120.0 + i as f32 * 128.0, y: 40.0, w: 110.0, h: 110.0 };
+        if let Some(v) = vector::icon_prims(id, &r, 0xFFFFFF, 1.0) {
+            cv.prims(&v);
+        }
+    }
+    let banner = "LAYOUT PREVIEW - original vector HUD art on a stand-in backdrop; not gameplay and not Ragnarok art";
     cv.text(24.0, h as f32 - 34.0, 22.0, banner, 0xFFD27A, 0.95);
     let mut buf = Vec::with_capacity(w * h * 3);
     for p in &cv.px {

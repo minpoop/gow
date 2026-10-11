@@ -105,6 +105,9 @@ impl ImguiRenderLoop for Overlay {
                             dl.add_rect([0.0, 0.0], [w, h], col(*color, *alpha)).filled(true).build();
                         }
                     }
+                    DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha } if tex(*frame).is_none() && tex(*fill).is_none() => {
+                        draw_prims(&dl, &gowring_core::vector::bar(rect, *frac, *trail, *color, *alpha));
+                    }
                     DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha } => {
                         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
                         match tex(*frame) {
@@ -125,6 +128,9 @@ impl ImguiRenderLoop for Overlay {
                                 dl.add_rect([x0, y0], [x0 + rect.w * frac, y1], col(*color, *alpha)).filled(true).build();
                             }
                         }
+                    }
+                    DrawCmd::Ring { cx, cy, r, remaining, ready, frame, icon, color, alpha, .. } if tex(*frame).is_none() => {
+                        draw_prims(&dl, &gowring_core::vector::ring(*cx, *cy, *r, *remaining, *ready, *color, *alpha, *icon));
                     }
                     DrawCmd::Ring { cx, cy, r, remaining, ready, frame, glow, icon, color, alpha } => {
                         let rect = Rect { x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0 };
@@ -159,9 +165,12 @@ impl ImguiRenderLoop for Overlay {
                             }
                         }
                     }
-                    DrawCmd::Icon { rect, asset, color, alpha } => match tex(*asset) {
-                        Some(t) => image(t, rect, *alpha, *color),
-                        None => {
+                    DrawCmd::Icon { rect, asset, color, alpha } => {
+                        if let Some(t) = tex(*asset) {
+                            image(t, rect, *alpha, *color);
+                        } else if let Some(v) = asset.and_then(|id| gowring_core::vector::icon_prims(id, rect, *color, *alpha)) {
+                            draw_prims(&dl, &v);
+                        } else {
                             dl.add_rect([rect.x, rect.y], [rect.x + rect.w, rect.y + rect.h], col(*color, 0.5 * alpha)).thickness(2.0).build();
                             if let Some(id) = asset {
                                 // stand-in label until the Ragnarök art is converted (alpha channel only)
@@ -169,7 +178,7 @@ impl ImguiRenderLoop for Overlay {
                                 dl.add_text([rect.x + 4.0, rect.y + 4.0], col(*color, 0.7 * alpha), &label);
                             }
                         }
-                    },
+                    }
                     DrawCmd::Prompt { rect, text, glyph, backing, color, alpha } => {
                         match tex(*backing) {
                             Some(t) => image(t, rect, *alpha, 0xFFFFFF),
@@ -226,6 +235,29 @@ impl ImguiRenderLoop for Overlay {
         if alpha_mode && !snap.banner.is_empty() {
             let sz = ui.calc_text_size(&snap.banner);
             dl.add_text([w - sz[0] - 14.0, h - sz[1] - 10.0], col(0xFFD27A, 0.9), &snap.banner);
+        }
+    }
+}
+
+/// Draw the shared vector art (see `gowring_core::vector`) with ImGui's draw list.
+fn draw_prims(dl: &imgui::DrawListMut<'_>, prims: &[gowring_core::vector::Prim]) {
+    use gowring_core::vector::Prim;
+    for p in prims {
+        match p {
+            Prim::Tri { p, color, alpha } => {
+                dl.add_triangle([p[0].0, p[0].1], [p[1].0, p[1].1], [p[2].0, p[2].1], col(*color, *alpha)).filled(true).build();
+            }
+            Prim::Line { a, b, thick, color, alpha } => {
+                dl.add_line([a.0, a.1], [b.0, b.1], col(*color, *alpha)).thickness(*thick).build();
+            }
+            Prim::Circle { c, r, fill, thick, color, alpha } => {
+                let b = dl.add_circle([c.0, c.1], *r, col(*color, *alpha)).num_segments(48);
+                if *fill {
+                    b.filled(true).build();
+                } else {
+                    b.thickness(*thick).build();
+                }
+            }
         }
     }
 }

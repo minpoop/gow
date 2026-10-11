@@ -22,6 +22,7 @@ pub mod sim;
 pub mod stun;
 pub mod thrown;
 pub mod types;
+pub mod vector;
 
 pub use data::Data;
 pub use engine::{Engine, TickOutput};
