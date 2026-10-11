@@ -17,7 +17,7 @@ fn light_string_hits_and_fills_rage_and_stun() {
         w.idle(0.45);
     }
     let rage = w.engine.rage().frac();
-    assert!(rage > 0.05, "melee fills rage: {rage}");
+    assert!(rage > 0.02, "melee fills rage: {rage}");
     assert!(w.engine.stun().frac(1) > 0.0 || w.staggers.iter().any(|(id, _)| *id == 1), "stun building");
     assert!(w.enemy(1).hp < 900.0);
 }

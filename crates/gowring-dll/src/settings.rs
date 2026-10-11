@@ -34,6 +34,8 @@ pub struct Settings {
     pub debug_spawn_key: u8,
     /// Health given to a summoned enemy.
     pub debug_enemy_health: f32,
+    /// How much harder a summoned enemy hits than its original.
+    pub debug_enemy_damage_multiplier: f32,
 }
 
 impl Default for Settings {
@@ -54,13 +56,14 @@ impl Default for Settings {
             finisher_when_wounded: true,
             debug_tools: true,
             debug_spawn_key: 9,
-            debug_enemy_health: 8000.0,
+            debug_enemy_health: 12000.0,
+            debug_enemy_damage_multiplier: 2.5,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 4;
+const FILE_VERSION: u32 = 5;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -115,7 +118,10 @@ fn render(s: &Settings) -> String {
   "_debug_spawn_key": "Keyboard key (F1 to F12) that summons a tough copy of a nearby enemy 5 metres in front of you, so a fight is one key away.",
 
   "debug_enemy_health": {dhp:?},
-  "_debug_enemy_health": "Health of a summoned enemy (100 to 100000)."
+  "_debug_enemy_health": "Health of a summoned enemy (100 to 100000). Summons are treated as bosses: the big health bar, a boss stun bar, and finishers that take a slice instead of killing.",
+
+  "debug_enemy_damage_multiplier": {ddm:?},
+  "_debug_enemy_damage_multiplier": "How much harder a summoned enemy hits than the enemy it copies (1 to 10). The extra damage never kills on its own."
 }}
 "#,
         ver = FILE_VERSION,
@@ -135,6 +141,7 @@ fn render(s: &Settings) -> String {
         dbg = s.debug_tools,
         dkey = s.debug_spawn_key,
         dhp = s.debug_enemy_health,
+        ddm = s.debug_enemy_damage_multiplier,
     )
 }
 
@@ -154,7 +161,8 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     finisher_when_wounded: true,
     debug_tools: true,
     debug_spawn_key: 9,
-    debug_enemy_health: 8000.0,
+    debug_enemy_health: 12000.0,
+    debug_enemy_damage_multiplier: 2.5,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -207,6 +215,7 @@ pub fn parse(text: &str) -> Result<Settings, String> {
         s.debug_spawn_key = k;
     }
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
+    num(&v, "debug_enemy_damage_multiplier", 1.0, 10.0, &mut s.debug_enemy_damage_multiplier);
     Ok(s)
 }
 
@@ -250,6 +259,10 @@ fn migrated_text(text: &str) -> Option<String> {
     }
     // version 4: summoned enemies went from 3000 to 8000 health (a summon should outlast a Rage); keep a changed value
     if version < 4 && (s.debug_enemy_health - 3000.0).abs() < 0.5 {
+        s.debug_enemy_health = Settings::default().debug_enemy_health;
+    }
+    // version 5: summons became bosses with 12000 health (8000 was "not that strong")
+    if version < 5 && (s.debug_enemy_health - 8000.0).abs() < 0.5 {
         s.debug_enemy_health = Settings::default().debug_enemy_health;
     }
     // version 3 only added keys: re-rendering the file shows them with their notes
@@ -341,6 +354,7 @@ mod tests {
             debug_tools: false,
             debug_spawn_key: 11,
             debug_enemy_health: 5000.0,
+            debug_enemy_damage_multiplier: 4.0,
         };
         assert_eq!(parse(&render(&s)).unwrap(), s);
     }
@@ -382,7 +396,9 @@ mod tests {
     #[test]
     fn a_version_3_file_gets_the_tougher_summon_unless_it_was_changed() {
         let s = parse(&migrated_text(r#"{ "settings_version": 3, "debug_enemy_health": 3000.0 }"#).unwrap()).unwrap();
-        assert_eq!(s.debug_enemy_health, 8000.0);
+        assert_eq!(s.debug_enemy_health, 12000.0, "3000 -> 8000 -> 12000 across versions 4 and 5");
+        let s = parse(&migrated_text(r#"{ "settings_version": 4, "debug_enemy_health": 8000.0 }"#).unwrap()).unwrap();
+        assert_eq!(s.debug_enemy_health, 12000.0);
         let s = parse(&migrated_text(r#"{ "settings_version": 3, "debug_enemy_health": 4500.0 }"#).unwrap()).unwrap();
         assert_eq!(s.debug_enemy_health, 4500.0, "a value the player chose is kept");
     }

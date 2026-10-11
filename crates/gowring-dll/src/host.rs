@@ -97,6 +97,10 @@ pub struct Bridge {
     summoned: HashSet<u64>,
     /// Their handles: the game keeps debug-created characters out of its by-distance list, so the scan adds them.
     summoned_handles: Vec<FieldInsHandle>,
+    /// Extra damage owed to the player from summons hitting harder (applied in `apply`, never lethal on its own).
+    pending_hurt: i32,
+    /// Where living summons stand, from the last scan (for the damage multiplier).
+    summon_positions: Vec<Vec3>,
     last_ppos: Vec3,
     last_facing: Vec3,
     /// HP we took off enemies ourselves outside the engine's ledger (burn ticks), so it is not read back as melee.
@@ -141,6 +145,8 @@ impl Bridge {
             tough: HashMap::new(),
             summoned: HashSet::new(),
             summoned_handles: Vec::new(),
+            pending_hurt: 0,
+            summon_positions: Vec::new(),
             last_ppos: Vec3::ZERO,
             last_facing: Vec3::new(0.0, 0.0, 1.0),
             own_pending: HashMap::new(),
@@ -372,6 +378,7 @@ impl Bridge {
         let mut nearest_hostile = f32::INFINITY;
         let mut seen_hp: HashMap<u64, i32> = HashMap::new();
         let mut damage: Vec<DamageEvent> = Vec::new();
+        let mut summon_pos: Vec<Vec3> = Vec::new();
         let mut cands: Vec<&ChrIns> = wcm.chr_inses_by_distance.iter().take(512).map(|entry| unsafe { entry.chr_ins.as_ref() }).collect();
         self.summoned_handles.retain(|h| wcm.chr_ins_by_handle(h).is_some());
         for h in &self.summoned_handles {
@@ -426,6 +433,9 @@ impl Bridge {
             }
             seen_hp.insert(id, ehp);
             self.handles.insert(id, e.field_ins_handle);
+            if self.summoned.contains(&id) && ealive {
+                summon_pos.push(epos);
+            }
             if f.enemies.len() < self.max_enemies {
                 f.enemies.push(EnemyView {
                     id,
@@ -433,7 +443,8 @@ impl Bridge {
                     hp: ehp.max(0) as f32,
                     max_hp: edata.max_hp.max(1) as f32,
                     alive: ealive,
-                    boss: boss_handles.contains(&id),
+                    // a summon is a test boss: the big bar, a boss stun bar, finishers that take a slice
+                    boss: boss_handles.contains(&id) || self.summoned.contains(&id),
                     engaged: dist <= 35.0,
                     radius: e.modules.physics.hit_radius.max(0.4),
                     staggered: false,
@@ -441,6 +452,7 @@ impl Bridge {
             }
         }
         self.prev_enemy_hp = seen_hp;
+        self.summon_positions = summon_pos;
         if !self.team_report_done && time - self.last_team_report > 20.0 && teams.values().sum::<usize>() > 4 {
             self.last_team_report = time;
             self.team_report_done = !f.enemies.is_empty();
@@ -461,7 +473,15 @@ impl Bridge {
                     }
                     let _ = a;
                 }
-                damage.push(DamageEvent::Taken { amount: (prev - hp) as f32, blocked: false, attacker });
+                let mut amount = prev - hp;
+                let mult = crate::settings::get().debug_enemy_damage_multiplier;
+                if mult > 1.0 && self.summon_positions.iter().any(|p| p.dist(ppos) <= 10.0) {
+                    let extra = ((amount as f32) * (mult - 1.0)).round() as i32;
+                    self.pending_hurt += extra;
+                    amount += extra;
+                    crate::log::once("summon-hurt", "debug_spawn", &format!("a summon hit for {} (x{mult:.1} -> {amount})", prev - hp));
+                }
+                damage.push(DamageEvent::Taken { amount: amount as f32, blocked: false, attacker });
             } else if hp >= prev && last_hit != self.prev_player_last_hit && !chr.last_hit_by.is_empty() && guarding {
                 damage.push(DamageEvent::Taken { amount: 0.0, blocked: true, attacker: Some(last_hit) });
             }
@@ -497,6 +517,17 @@ impl Bridge {
             None => return,
         };
         self.settle_debug_spawn(wcm, now);
+        if self.pending_hurt > 0 {
+            if let Some(p) = wcm.main_player.as_mut() {
+                if let Some(d) = opt_mut(&mut p.chr_ins.modules.data) {
+                    if d.hp > 1 {
+                        d.hp = (d.hp - self.pending_hurt).max(1);
+                        self.prev_player_hp = Some(d.hp);
+                    }
+                }
+            }
+            self.pending_hurt = 0;
+        }
         let mut new_mask = ActionBits::NONE;
         let mut anim_speed: Option<f32> = None;
         let sheets = gowring_core::Data::get();
