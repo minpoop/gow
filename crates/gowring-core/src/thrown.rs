@@ -8,6 +8,9 @@ use crate::sheets::{ProjectileDef, WeaponDef, WeaponKind, PROJECTILES};
 use crate::types::*;
 use std::collections::HashSet;
 
+/// A thrown or recalled axe that connects chills like this many melee hits (Ragnarök's throws are frost-heavy).
+const THROWN_STATUS_HITS: f32 = 2.5;
+
 pub const TAG_AXE: u32 = 1;
 pub const TAG_SPEAR_BASE: u32 = 100;
 
@@ -233,6 +236,7 @@ impl Thrown {
                     gains.stun.push((e.id, mv.stun * w.stun_rate * stun_mult));
                     gains.rage += mv.rage_gain;
                     gains.player_hit.push(e.id);
+                    gains.status.push((e.id, w.status, w.status_per_hit * THROWN_STATUS_HITS, w.status_s));
                     out.push(Command::Fx { kind: def.fx, pos: pos + dir * (step * t), dir, radius: 1.5 });
                     AxeState::Stuck { pos: pos + dir * (step * t), on: Some(e.id) }
                 } else if traveled + step >= def.max_range_m {
@@ -267,6 +271,7 @@ impl Thrown {
                     gains.stun.push((e.id, mv.stun * w.stun_rate * stun_mult));
                     gains.rage += mv.rage_gain;
                     gains.player_hit.push(e.id);
+                    gains.status.push((e.id, w.status, w.status_per_hit * THROWN_STATUS_HITS, w.status_s));
                 }
                 if next.dist(target) <= def.catch_dist_m {
                     if let Some(s) = mv.sfx_end {

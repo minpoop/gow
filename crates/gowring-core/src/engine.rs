@@ -3,6 +3,7 @@
 use crate::camera::Camera;
 use crate::data::Data;
 use crate::hud::{EnemyBar, HudState, RunicHud};
+use crate::status::StatusMeters;
 use crate::input::{self, Inputs};
 use crate::melee::{Ledger, Melee};
 use crate::mimir::{Context as MimirCtx, Mimir};
@@ -38,6 +39,8 @@ pub struct Gains {
     pub stun: Vec<(EnemyId, f32)>,
     /// Enemies the player damaged by non-melee means (kill credit).
     pub player_hit: Vec<EnemyId>,
+    /// Elemental build-up from thrown weapons: (enemy, element, points, seconds the status lasts).
+    pub status: Vec<(EnemyId, WeaponStatus, f32, f32)>,
 }
 
 pub struct TickOutput {
@@ -76,6 +79,7 @@ pub struct Engine {
     melee: Melee,
     ledger: Ledger,
     stun: StunTracker,
+    status: StatusMeters,
     mimir: Mimir,
     camera: Camera,
     weapon: &'static WeaponDef,
@@ -104,6 +108,7 @@ pub struct Engine {
     hit_logs: u32,
     /// When the last finisher landed (drives the camera punch-in).
     finisher_at: f64,
+    status_gc_at: f64,
 }
 
 impl Engine {
@@ -118,6 +123,7 @@ impl Engine {
             melee: Melee::default(),
             ledger: Ledger::default(),
             stun: StunTracker::default(),
+            status: StatusMeters::default(),
             mimir: Mimir::new(d),
             camera: Camera::new(d),
             weapon: d.right_weapon(0),
@@ -141,6 +147,7 @@ impl Engine {
             scaled: HashSet::new(),
             hit_logs: 0,
             finisher_at: f64::NEG_INFINITY,
+            status_gc_at: 0.0,
         }
     }
 
@@ -162,6 +169,22 @@ impl Engine {
 
     fn all_base_damage_max(&self) -> f32 {
         WEAPONS.iter().map(|w| w.base_damage).max().unwrap_or(1) as f32
+    }
+
+    /// Add elemental build-up to an enemy; a full meter freezes or burns it (with a ring of frost or fire).
+    fn build_status(&mut self, f: &Frame, enemy: EnemyId, kind: WeaponStatus, pts: f32, secs: f32, out: &mut Vec<Command>, logs: &mut Vec<String>) {
+        if !self.status.add(enemy, kind, pts, f.time) {
+            return;
+        }
+        let (status, fx, word) = match kind {
+            WeaponStatus::Frozen => (RunicStatus::Frozen, FxKind::Frost, "frozen"),
+            _ => (RunicStatus::Burning, FxKind::Fire, "burning"),
+        };
+        out.push(Command::Status { target: enemy, status, seconds: secs });
+        if let Some(e) = f.enemies.iter().find(|e| e.id == enemy) {
+            out.push(Command::Fx { kind: fx, pos: e.pos, dir: f.player.facing, radius: 1.6 + e.radius });
+        }
+        logs.push(format!("{word} {enemy:#x} for {secs:.1} s"));
     }
 
     pub fn set_tuning(&mut self, t: Tuning) {
@@ -261,6 +284,7 @@ impl Engine {
                         };
                         gains.stun.push((*enemy, stun_pts * self.rage.stun_mult()));
                         gains.rage += rage_pts;
+                        self.build_status(f, *enemy, weapon.status, weapon.status_per_hit, weapon.status_s, &mut out, &mut logs);
                         if self.rage.active {
                             out.push(Command::Damage { target: *enemy, amount: native * (self.rage.damage_mult() - 1.0), source: DamageSource::Melee });
                         }
@@ -382,6 +406,9 @@ impl Engine {
         } else {
             self.rage.gain(gains.rage);
         }
+        for (id, kind, pts, secs) in std::mem::take(&mut gains.status) {
+            self.build_status(f, id, kind, pts, secs, &mut out, &mut logs);
+        }
         for (id, pts) in std::mem::take(&mut gains.stun) {
             self.stun.add(d, id, pts, now, &mut out, &mut ev);
         }
@@ -389,6 +416,12 @@ impl Engine {
             self.stun.wounded_check(d, f, now, &mut out, &mut ev);
         }
         self.stun.update(d, f.dt, now);
+        self.status.update(f.dt, now, d.tuning.status_decay_after_s, d.tuning.status_decay_per_s);
+        if self.status_gc_at + 2.0 < now {
+            self.status_gc_at = now;
+            let live: HashSet<EnemyId> = f.enemies.iter().filter(|e| e.alive).map(|e| e.id).collect();
+            self.status.keep_only(&live);
+        }
 
         // ---- masks (keep ER from reacting to chords we own) -------------------------------------------------------
         let capable = matches!(weapon.kind, WeaponKind::Axe | WeaponKind::Spear);
@@ -577,6 +610,12 @@ impl Engine {
             stun_frac: st.frac(e.id),
             stunned: st.is_stunned(e.id, now),
             boss: e.boss,
+            status_frac: self.status.frac(e.id).0,
+            status_color: match self.status.frac(e.id).1 {
+                WeaponStatus::Frozen => 0x7FD8FF,
+                WeaponStatus::Burning => 0xFF8A3A,
+                WeaponStatus::None => 0,
+            },
         };
         let mut enemies = Vec::new();
         let mut boss = None;

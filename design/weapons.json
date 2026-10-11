@@ -1,7 +1,7 @@
 {
  "sheet": "weapons",
  "struct": "WeaponDef",
- "about": "Kratos' kit. slot = the Elden Ring equipment slot that carries it (right 1-3, left 1). template = the vanilla ER category whose moveset it borrows. base_damage is per motion-value 1.0 hit in ER damage terms for a post-game Kratos.",
+ "about": "Kratos' kit. slot = the Elden Ring equipment slot that carries it (right 1-3, left 1). template = the vanilla ER category whose moveset it borrows. base_damage is per motion-value 1.0 hit in ER damage terms for a post-game Kratos. status / status_per_hit / status_s: ordinary hits fill an enemy's status meter (100 = full); full applies the status for status_s (the axe freezes, the Blades burn), as in Ragnarök.",
  "columns": {
   "id": {
    "type": "id"
@@ -84,6 +84,24 @@
   },
   "notes": {
    "type": "text"
+  },
+  "status": {
+   "type": "enum",
+   "values": [
+    "none",
+    "frozen",
+    "burning"
+   ]
+  },
+  "status_per_hit": {
+   "type": "float",
+   "min": 0,
+   "max": 100
+  },
+  "status_s": {
+   "type": "float",
+   "min": 0,
+   "max": 30
   }
  },
  "rows": [
@@ -118,7 +136,10 @@
    "heavy_runic": "axe_runic_heavy",
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
-   "notes": "Frost axe: balanced, throw-and-recall."
+   "notes": "Frost axe: balanced, throw-and-recall.",
+   "status": "frozen",
+   "status_per_hit": 12,
+   "status_s": 2.5
   },
   {
    "id": "blades_of_chaos",
@@ -148,7 +169,10 @@
    "heavy_runic": "blades_runic_heavy",
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
-   "notes": "Chained fire blades: wide, fast, hit many. Shield is stowed while out."
+   "notes": "Chained fire blades: wide, fast, hit many. Shield is stowed while out.",
+   "status": "burning",
+   "status_per_hit": 10,
+   "status_s": 5.0
   },
   {
    "id": "draupnir_spear",
@@ -179,7 +203,10 @@
    "heavy_runic": "spear_runic_heavy",
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
-   "notes": "Throw up to three spears and detonate them."
+   "notes": "Throw up to three spears and detonate them.",
+   "status": "none",
+   "status_per_hit": 0,
+   "status_s": 0
   },
   {
    "id": "guardian_shield",
@@ -203,7 +230,10 @@
    "heavy_runic": null,
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
-   "notes": "Block, parry, bash, charge."
+   "notes": "Block, parry, bash, charge.",
+   "status": "none",
+   "status_per_hit": 0,
+   "status_s": 0
   },
   {
    "id": "kratos_hands",
@@ -226,7 +256,10 @@
    "heavy_runic": null,
    "swap_sfx": null,
    "post_game": "max",
-   "notes": "Finishers and Rage."
+   "notes": "Finishers and Rage.",
+   "status": "none",
+   "status_per_hit": 0,
+   "status_s": 0
   }
  ]
 }

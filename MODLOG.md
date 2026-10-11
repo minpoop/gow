@@ -167,3 +167,9 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - Settings version 3 (new keys only): migration re-renders the file keeping values (Rage divided only for version 1 files); backup `settings.v<old>.json`.
 - `debug_tools` defaults to true during the alpha; M3 (release polish) must decide whether players get it.
 - Unverified in real play: that the debug creator spawns in retail offline at the requested place, the template choice, the health hold.
+
+## 0.1.18 — weapon elements (2026-10-11, user away; asked for 30 min of progress)
+- M2 "Blades identity": `status.rs` StatusMeters (one meter per enemy, 0-100, element replaces element, drains after `status_decay_after_s` 2.5 at `status_decay_per_s` 25). Sheet weapons.json gains `status` (none/frozen/burning), `status_per_hit`, `status_s`: axe frozen 12/hit 2.5 s, Blades burning 10/hit 5 s, spear/shield/hands none. Native hits add per Dealt event; thrown/recalled axe hits add 2.5x (`THROWN_STATUS_HITS`) through `Gains.status`. Full -> `Command::Status` (host: Frozen = freeze up to 8 s, Burning = max_hp/120 every 0.5 s) + a Frost/Fire FX ring + log line. HUD: `EnemyBar.status_frac/status_color`, a thin bar under the stun bar.
+- Tests: status meter unit test; scenario "Blades hits set enemies burning and axe hits freeze them" (Blades burn on hit >= 5, HUD shows the build-up, spear none).
+- Research started in parallel: Ragnarök PC asset formats, and how Elden Ring could take a custom player model and animations (for roadmap R1-R3).
+- Unverified in real play: everything in 0.1.16-0.1.18.

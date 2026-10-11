@@ -19,6 +19,7 @@ pub mod mimir;
 pub mod rage;
 pub mod runic;
 pub mod sim;
+pub mod status;
 pub mod stun;
 pub mod thrown;
 pub mod types;

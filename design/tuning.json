@@ -105,6 +105,16 @@
    "type": "int",
    "min": 1,
    "max": 2147483647
+  },
+  "status_decay_after_s": {
+   "type": "float",
+   "min": 0,
+   "max": 30
+  },
+  "status_decay_per_s": {
+   "type": "float",
+   "min": 0,
+   "max": 200
   }
  },
  "rows": [
@@ -129,7 +139,9 @@
    "rng_seed": 7031,
    "wounded_hp_pct": 25,
    "bar_range_m": 22,
-   "enemy_scale_hp_ceiling": 1000
+   "enemy_scale_hp_ceiling": 1000,
+   "status_decay_after_s": 2.5,
+   "status_decay_per_s": 25
   }
  ]
 }
