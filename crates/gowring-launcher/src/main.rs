@@ -229,8 +229,14 @@ fn background_diagnose(ctx: &Ctx) {
             gowring_gow::diagnose::report_until(&gow, c.er.as_deref(), &requests(), vg.as_deref(), Some(deadline))
         }));
         match r {
-            Ok(text) => {
+            Ok(mut text) => {
                 let _ = std::fs::create_dir_all(&c.local);
+                // Ragnarök's own UI textures, decoded from the player's install for a look (not used in game yet).
+                let ui = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| export_ui_textures(&gow, &c.local.join("ragnarok_ui"))));
+                text.push_str(&match ui {
+                    Ok(t) => t,
+                    Err(_) => "\n== Ragnarök UI textures\n(the export panicked)\n".into(),
+                });
                 match std::fs::write(c.local.join("diagnose.txt"), text) {
                     Ok(()) => c.log("diagnose: wrote diagnose.txt"),
                     Err(e) => c.log(&format!("diagnose: could not write the report: {e}")),
@@ -239,6 +245,54 @@ fn background_diagnose(ctx: &Ctx) {
             Err(_) => c.log("diagnose: the report panicked"),
         }
     });
+}
+
+/// Find a file by name under `root` (a few folders deep).
+fn find_file(root: &std::path::Path, name: &str, depth: u32) -> Option<std::path::PathBuf> {
+    let rd = std::fs::read_dir(root).ok()?;
+    let mut dirs = Vec::new();
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            dirs.push(p);
+        } else if p.file_name().map(|n| n.to_string_lossy().eq_ignore_ascii_case(name)).unwrap_or(false) {
+            return Some(p);
+        }
+    }
+    if depth == 0 {
+        return None;
+    }
+    dirs.into_iter().find_map(|d| find_file(&d, name, depth - 1))
+}
+
+/// Decode the textures inside Ragnarök's r_ui.wad to PNG files in `out` (at most 90 s of work). Returns a report.
+fn export_ui_textures(gow: &std::path::Path, out: &std::path::Path) -> String {
+    let mut o = String::from("\n== Ragnarök UI textures (decoded to PNG for a look; not used in game yet)\n");
+    let Some(wad) = find_file(gow, "r_ui.wad", 5) else {
+        o.push_str("r_ui.wad not found\n");
+        return o;
+    };
+    let buf = match gowring_gow::lz4::read_file_prefix(&wad, 768 << 20) {
+        Ok((b, _)) => b,
+        Err(e) => {
+            o.push_str(&format!("{}: {e:#}\n", wad.display()));
+            return o;
+        }
+    };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    let report = gowring_gow::wadtex::export(&buf, out, 1500, || std::time::Instant::now() < until);
+    o.push_str(&format!("{} ({} decompressed bytes) -> {}\n", wad.display(), buf.len(), out.display()));
+    // the summary first, then the first 300 lines
+    if let Some(sum) = report.lines().last() {
+        o.push_str(sum);
+        o.push('\n');
+    }
+    for l in report.lines().take(300) {
+        o.push_str("  ");
+        o.push_str(l);
+        o.push('\n');
+    }
+    o
 }
 
 fn diagnose(ctx: &Ctx) -> Result<()> {

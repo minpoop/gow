@@ -1,4 +1,4 @@
-Twentieth alpha: Spartan Rage becomes a tide-turner, the Blades burn and the axe freezes, and a fight is one key away. From your play-test of 0.1.15 (stuns, wounded staggers and finishers all worked).
+Twenty-first alpha: Spartan Rage becomes a tide-turner, the Blades burn and the axe freezes, and a fight is one key away. From your play-test of 0.1.15 (stuns, wounded staggers and finishers all worked).
 
 - **Rage takes longer to earn.** A full bar now takes roughly twice as long as in 0.1.15 (about 3 minutes of fighting instead of about 85 seconds). For quick testing, set `rage_gain_multiplier` to 2 in `settings.json` to get the old speed back.
 - **Turning Rage on swings the fight.** It heals 20% of your health at once and knocks down every enemy within 10 metres for 3 seconds (was 8 metres, 1.5 seconds).
@@ -8,7 +8,7 @@ Twentieth alpha: Spartan Rage becomes a tide-turner, the Blades burn and the axe
 - **The Blades burn, the axe freezes.** As in Ragnarök, ordinary hits fill an enemy's status meter, a thin bar under its stun bar (orange for heat, pale blue for frost). About ten Blades hits set an enemy burning for 5 seconds; about eight axe hits freeze it in place for 2.5 seconds. A thrown or recalled axe chills as much as two or three swings. A ring of fire or frost marks the moment.
 - **Summon a tough enemy (testing aid).** Press **F9** on the keyboard and a copy of the toughest regular enemy nearby appears 5 metres in front of you with 3,000 health, so you can test Rage and finishers without hunting for a fight. It uses the game's own debug character creator; `debug_tools`, `debug_spawn_key` and `debug_enemy_health` in `settings.json` turn it off or change it. The controls card lists the key.
 - **Settings file updated for you.** Your `settings.json` gains the three new keys, with notes, and keeps your values (the old file is saved as `settings.v2.json`).
-- **Groundwork for Ragnarök's own art.** The background check that runs a few minutes after launch now reads Ragnarök's WAD files with the layout public tools have documented, checks it against your install, and records where the HUD textures and Kratos's model sit. Nothing changes in game yet; the findings guide the next step.
+- **First look at Ragnarök's own HUD art.** A few minutes after launch, the background check reads Ragnarök's `r_ui.wad` from your install, using the file layout public tools have documented, and saves its textures as PNG pictures in `%LOCALAPPDATA%\GowRing\ragnarok_ui`. They are not used in game yet: they are there so we can pick which Ragnarök images replace the mod's drawn HUD. Nothing is shipped; everything is read from your own copy.
 - **Fix:** an enemy killed by a single blow did not count as your kill, so Mimir's kill lines and kill streaks missed them. It counts now.
 
 Still an alpha: Elden Ring's own animations play for every move, the HUD is the mod's own drawing, and nothing from Ragnarök's own art or sound is in use yet.

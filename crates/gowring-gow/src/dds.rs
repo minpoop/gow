@@ -67,7 +67,14 @@ pub fn decode(b: &[u8]) -> Result<Image> {
             }
         }
     };
-    let data = &b[data_at..];
+    decode_raw(format, w, h, &b[data_at..])
+}
+
+/// Decode tightly packed texture data (BC blocks row by row, or 32-bit pixels) of a known format.
+pub fn decode_raw(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> {
+    if w == 0 || h == 0 || w > 16384 || h > 16384 {
+        bail!("implausible size {w}x{h}");
+    }
     let (wz, hz) = (w as usize, h as usize);
     let mut px = vec![0u32; wz * hz];
     match format {
