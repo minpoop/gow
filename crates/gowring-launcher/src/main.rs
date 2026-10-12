@@ -373,7 +373,62 @@ fn export_kratos(gow: &std::path::Path, out: &std::path::Path) -> String {
     o.push_str(&format!("{} ({} decompressed bytes read); .as files beside it: {:?}\n", wad.display(), buf.len(), sets.iter().map(|(n, b)| (n.as_str(), b.len())).collect::<Vec<_>>()));
     let until = std::time::Instant::now() + std::time::Duration::from_secs(90);
     o.push_str(&gowring_gow::kratos::export_from(&buf, &sets, "heroa00", out, || std::time::Instant::now() < until));
+    o.push_str(&walk_kratos_sets(&wad, out));
     o.push_str(&format!("written to {}\n", out.display()));
+    o
+}
+
+/// Walk each of Kratos's `.as` files end to end once (until its size changes): `as_index_<file>.tsv` lists every
+/// animation set, and a few whole sets of everyday moves go under `as_full/` for working out the bone motion.
+fn walk_kratos_sets(wad: &std::path::Path, out: &std::path::Path) -> String {
+    let mut o = String::from("\n-- every animation set in Kratos's .as files\n");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(300);
+    let full = out.join("as_full");
+    let _ = std::fs::create_dir_all(&full);
+    let mut pick = gowring_gow::kratos::study_picker(3, 64 << 20);
+    for p in gowring_gow::kratos::sibling_sets(wad) {
+        let Some(file) = p.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+        let len = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        let index = out.join(format!("as_index_{}.tsv", file.replace('.', "_")));
+        let done = std::fs::read_to_string(&index).ok().and_then(|t| t.lines().next().map(|l| l.contains(&format!("\t{len} bytes")) && l.contains("complete=true"))).unwrap_or(false);
+        if done {
+            o.push_str(&format!("{file}: already indexed ({})\n", index.display()));
+            continue;
+        }
+        if std::time::Instant::now() >= until {
+            o.push_str(&format!("{file}: skipped (out of time)\n"));
+            continue;
+        }
+        let started = std::time::Instant::now();
+        let mut saved: Vec<String> = Vec::new();
+        let walked = gowring_gow::kratos::walk_set_file(
+            &p,
+            &mut pick,
+            |s, b| {
+                let name = format!("{}_{}.bin", file.replace('.', "_"), s.name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' }).collect::<String>());
+                if std::fs::write(full.join(&name), b).is_ok() {
+                    saved.push(format!("{} ({} bytes)", s.name, b.len()));
+                }
+            },
+            || std::time::Instant::now() < until,
+        );
+        match walked {
+            Ok(idx) => {
+                let own = idx.sets.iter().filter(|(_, _, own)| *own).count();
+                let _ = std::fs::write(&index, gowring_gow::kratos::index_tsv(&file, len, &idx));
+                o.push_str(&format!(
+                    "{file}: {len} bytes, lz4={}, walked {} bytes in {:.1}s (complete={}); {} set headers ({own} name their own place); saved whole: {:?}\n",
+                    idx.lz4,
+                    idx.bytes,
+                    started.elapsed().as_secs_f32(),
+                    idx.complete,
+                    idx.sets.len(),
+                    saved
+                ));
+            }
+            Err(e) => o.push_str(&format!("{file}: {e:#}\n")),
+        }
+    }
     o
 }
 

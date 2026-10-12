@@ -157,6 +157,29 @@ pub fn export_from(wad: &[u8], sets: &[(String, Vec<u8>)], focus: &str, out: &Pa
         let _ = writeln!(o, "  first 256 bytes: {}", hex(&b[..b.len().min(256)]));
     }
 
+    // the character's model: mesh group, GPU buffers, mesh, model and game-object chunks named for it, and every
+    // material (they are named by hash, so which are its own is worked out from the mesh)
+    let _ = std::fs::create_dir_all(out.join("model"));
+    let lc = focus.to_ascii_lowercase();
+    let mut model_bytes = 0usize;
+    for (k, e) in es.iter().enumerate() {
+        let name = e.name.to_ascii_lowercase();
+        let own = name.contains(&lc) && ["mg_", "mesh_", "mdl_", "go"].iter().any(|p| name.starts_with(p)) && !name.starts_with("goproto");
+        if !(own || name.starts_with("mat_")) {
+            continue;
+        }
+        if let Some(b) = bytes_of(e) {
+            let sub = if own { "model" } else { "model/mat" };
+            let _ = std::fs::create_dir_all(out.join(sub));
+            let _ = std::fs::write(out.join(sub).join(format!("{k:05}_{}_id{}.bin", safe(&e.name), e.id)), b);
+            model_bytes += b.len();
+            if own {
+                let _ = writeln!(o, "model chunk {k} {} id={} server={} len={:#x}: {}", e.name, e.id, e.server, e.length, hex(&b[..b.len().min(64)]));
+            }
+        }
+    }
+    let _ = writeln!(o, "  saved {model_bytes} bytes of model and material chunks under model/");
+
     // animation chunks: ANM_* and everything on server 2 (the streamed sets' stubs)
     let anim: Vec<&crate::wtoc::Entry> = es.iter().filter(|e| e.name.starts_with("ANM_") || e.server == 2).collect();
     let _ = writeln!(o, "animation chunks: {} (ANM_ named: {}, on server 2: {})", anim.len(), anim.iter().filter(|e| e.name.starts_with("ANM_")).count(), anim.iter().filter(|e| e.server == 2).count());
@@ -252,6 +275,136 @@ pub fn set_inventory(dir: &Path) -> String {
     o
 }
 
+/// Words in a set's name that mark Kratos's everyday moves: such sets are saved whole for working out how bone motion
+/// is stored (the smallest sets are single curves, not bones).
+pub const STUDY_WORDS: &[&str] = &["Idle", "attAxe", "attBlade", "attSpear", "attFist", "Rage", "Dodge", "Evade", "Roll", "Block", "Parry", "Walk", "Run", "Turn", "Throw", "Recall", "Hit"];
+
+/// What a walk through a whole `.as` file found.
+#[derive(Debug, Default)]
+pub struct SetIndex {
+    pub lz4: bool,
+    /// Bytes walked (decompressed) and whether the end was reached.
+    pub bytes: u64,
+    pub complete: bool,
+    /// Every set header found on a 64 KiB boundary: where it starts, the header, and whether the header's own offset
+    /// field names that place.
+    pub sets: Vec<(u64, AnimSet, bool)>,
+}
+
+/// Header bytes looked at for a set (the header and up to 64 file offsets).
+const SET_HEAD_NEED: u64 = (SET_HEADER + 64 * 8) as u64;
+
+/// Walk the `.as` file at `path` from start to end (an LZ4 frame or plain bytes) with little memory, noting every
+/// set header; `keep` is asked about each set, and the bytes of those it wants are handed to `save`. `more` is
+/// asked between reads and stops the walk when false.
+pub fn walk_set_file(path: &Path, mut keep: impl FnMut(&AnimSet) -> bool, mut save: impl FnMut(&AnimSet, &[u8]), mut more: impl FnMut() -> bool) -> anyhow::Result<SetIndex> {
+    use std::io::Read;
+    let file = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?);
+    let lz4 = crate::lz4::is_frame(path);
+    let mut idx = SetIndex { lz4, ..Default::default() };
+    enum Src<R: Read> {
+        Lz(crate::lz4::FrameReader<R>),
+        Raw(R),
+    }
+    let mut src = if lz4 { Src::Lz(crate::lz4::FrameReader::open(file)?) } else { Src::Raw(file) };
+    let mut fill = |buf: &mut Vec<u8>| -> anyhow::Result<bool> {
+        match &mut src {
+            Src::Lz(f) => f.next_block(buf),
+            Src::Raw(r) => {
+                let at = buf.len();
+                buf.resize(at + (1 << 20), 0);
+                let n = r.read(&mut buf[at..])?;
+                buf.truncate(at + n);
+                Ok(n > 0)
+            }
+        }
+    };
+    let (mut buf, mut base, mut next) = (Vec::<u8>::new(), 0u64, 0u64);
+    let mut pending: Option<(u64, u64, AnimSet)> = None;
+    let mut eof = false;
+    loop {
+        loop {
+            let end = base + buf.len() as u64;
+            if let Some((st, en, _)) = &pending {
+                if end < *en && !eof {
+                    break;
+                }
+                let (a, b) = ((st - base) as usize, (en.min(&end) - base) as usize);
+                let (_, _, set) = pending.take().unwrap();
+                save(&set, &buf[a..b]);
+                continue;
+            }
+            if next >= end || (next + SET_HEAD_NEED > end && !eof) {
+                break;
+            }
+            let at = (next - base) as usize;
+            match parse_set(&buf[at..]) {
+                Some(s) => {
+                    let own = s.off as u64 == next && s.size as usize >= SET_HEADER;
+                    if own && keep(&s) {
+                        pending = Some((next, next + s.size as u64, s.clone()));
+                    }
+                    // a header that names its own place says how far its set reaches; anything else steps one boundary
+                    let step = if own { (s.size as u64).div_ceil(SET_ALIGN as u64).max(1) * SET_ALIGN as u64 } else { SET_ALIGN as u64 };
+                    idx.sets.push((next, s, own));
+                    next += step;
+                }
+                None => next += SET_ALIGN as u64,
+            }
+        }
+        if eof {
+            idx.complete = true;
+            break;
+        }
+        if !more() {
+            break;
+        }
+        // keep what is still needed, and 64 KiB behind it for an LZ4 block's matches
+        let keep_from = pending.as_ref().map(|p| p.0).unwrap_or(next).min(next).saturating_sub(64 << 10).max(base);
+        let cut = (keep_from - base) as usize;
+        if cut >= 8 << 20 {
+            buf.drain(..cut);
+            base = keep_from;
+        }
+        if !fill(&mut buf)? {
+            eof = true;
+        }
+        idx.bytes = base + buf.len() as u64;
+    }
+    Ok(idx)
+}
+
+/// The study picks for `walk_set_file`: sets with one of `STUDY_WORDS` in the name, between 16 KiB and 2 MiB, at most
+/// `per_word` for each word and `budget` bytes in all. Returns the chooser (call it once per set, in file order).
+pub fn study_picker(per_word: usize, budget: usize) -> impl FnMut(&AnimSet) -> bool {
+    let mut taken = std::collections::HashMap::<&'static str, usize>::new();
+    let mut used = 0usize;
+    move |s: &AnimSet| {
+        let size = s.size as usize;
+        if !(16 << 10..=2 << 20).contains(&size) || used + size > budget {
+            return false;
+        }
+        let Some(w) = STUDY_WORDS.iter().find(|w| s.name.contains(*w)) else { return false };
+        let n = taken.entry(w).or_default();
+        if *n >= per_word {
+            return false;
+        }
+        *n += 1;
+        used += size;
+        true
+    }
+}
+
+/// The index as a table: one row per set header found.
+pub fn index_tsv(file: &str, file_len: u64, idx: &SetIndex) -> String {
+    let mut o = format!("# {file}\t{file_len} bytes\tlz4={}\twalked={}\tcomplete={}\theaders={}\n", idx.lz4, idx.bytes, idx.complete, idx.sets.len());
+    o.push_str("at\town\tname\tid\tflags\tfiles\tsize\thash\ttype_hash\tfirst_file_offsets\n");
+    for (at, s, own) in &idx.sets {
+        let _ = writeln!(o, "{at:#x}\t{}\t{}\t{}\t{}\t{}\t{:#x}\t{:016x}\t{:08x}\t{:?}", *own as u8, s.name, s.id, s.flags, s.files, s.size, s.hash, s.type_hash, &s.file_offs[..s.file_offs.len().min(8)]);
+    }
+    o
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,13 +475,16 @@ mod tests {
         let mut wad = vec![0u8; HEADER_LEN];
         wad[0..4].copy_from_slice(&MAGIC.to_le_bytes());
         wad[4..8].copy_from_slice(&2u32.to_le_bytes());
-        wad[8..12].copy_from_slice(&2u32.to_le_bytes());
+        wad[8..12].copy_from_slice(&4u32.to_le_bytes());
         wad.extend(entry(1, "goProtoheroa00", 1, proto.len(), 0));
         let mut e2 = entry(7, "ANM_heroa00_locomotion", 2, stub.len(), 1);
         e2[0x78..0x80].copy_from_slice(&(proto.len() as u64).to_le_bytes());
         wad.extend(e2);
+        wad.extend(entry(1, "MESH_heroa00_0", 12, 8, 0));
+        wad.extend(entry(1, "MAT_B9FDF91541174798", 12, 8, 0));
         wad.extend(&proto);
         wad.extend(&stub);
+        wad.extend([7u8; 16]); // the mesh's and the material's 8 bytes each, in the next block
         let mut set_file = set_header("heroa00_locomotion", 3, 0, 0x400, 1, &[0x100]);
         set_file.resize(0x400, 0xAB);
         let dir = std::env::temp_dir().join(format!("gowring-kratos-{}", std::process::id()));
@@ -341,6 +497,64 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("goProtoheroa00.bin")).unwrap(), proto);
         assert_eq!(std::fs::read(dir.join("as_sets").join("r_heroa00_as_heroa00_locomotion.bin")).unwrap().len(), 0x400);
         assert_eq!(std::fs::read_dir(dir.join("chunks")).unwrap().count(), 1);
+        // the model's own chunks, and every material
+        assert!(report.contains("model chunk 2 MESH_heroa00_0"), "{report}");
+        assert!(dir.join("model").join("00002_MESH_heroa00_0_id1.bin").exists());
+        assert!(dir.join("model").join("mat").join("00003_MAT_B9FDF91541174798_id1.bin").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_whole_set_file_is_walked_plain_or_lz4_and_chosen_sets_are_saved() {
+        // three sets: a small curve, an "Idle" clip of 80 KiB (crossing a boundary whose bytes look like nothing),
+        // and an attack; then a stray name at a boundary that does not name its place
+        let mut f = Vec::new();
+        let put = |f: &mut Vec<u8>, name: &str, size: usize, fill: u8| {
+            let at = f.len();
+            let mut b = set_header(name, 3, at as u32, size as u32, 1, &[0xA0]);
+            b.resize(size, fill);
+            f.extend(b);
+            f.resize(f.len().div_ceil(SET_ALIGN) * SET_ALIGN, 0);
+        };
+        put(&mut f, "curveOnly", 0x180, 1);
+        put(&mut f, "BladeMeltIdle01", 80 << 10, 2);
+        put(&mut f, "attAxeLight01", 20 << 10, 3);
+        let stray = set_header("strayName", 3, 0x1234, 0x400, 1, &[]);
+        let at = f.len();
+        f.extend(stray);
+        f.resize(at + SET_ALIGN, 0);
+        let dir = std::env::temp_dir().join(format!("gowring-walk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // plain, then as an LZ4 frame of stored (raw) 64 KiB blocks
+        let plain = dir.join("r_heroa00.as");
+        std::fs::write(&plain, &f).unwrap();
+        let mut lz = crate::lz4::MAGIC.to_vec();
+        lz.extend_from_slice(&[0x60, 0x40, 0x82]);
+        for c in f.chunks(64 << 10) {
+            lz.extend_from_slice(&(c.len() as u32 | 0x8000_0000).to_le_bytes());
+            lz.extend_from_slice(c);
+        }
+        lz.extend_from_slice(&0u32.to_le_bytes());
+        let packed = dir.join("r_heroa00_lz.as");
+        std::fs::write(&packed, &lz).unwrap();
+        for (path, lz4) in [(&plain, false), (&packed, true)] {
+            let mut saved: Vec<(String, usize, u8)> = Vec::new();
+            let idx = walk_set_file(path, study_picker(3, 64 << 20), |s, b| saved.push((s.name.clone(), b.len(), b[b.len() - 1])), || true).unwrap();
+            assert_eq!(idx.lz4, lz4);
+            assert!(idx.complete);
+            let names: Vec<(&str, bool)> = idx.sets.iter().map(|(_, s, own)| (s.name.as_str(), *own)).collect();
+            assert_eq!(names, vec![("curveOnly", true), ("BladeMeltIdle01", true), ("attAxeLight01", true), ("strayName", false)]);
+            assert_eq!(saved, vec![("BladeMeltIdle01".to_string(), 80 << 10, 2), ("attAxeLight01".to_string(), 20 << 10, 3)]);
+            let tsv = index_tsv("r_heroa00.as", f.len() as u64, &idx);
+            assert!(tsv.contains("BladeMeltIdle01\t1\t3\t1\t0x14000"), "{tsv}");
+        }
+        // the picker keeps to its limits
+        let mut pick = study_picker(1, 64 << 20);
+        let s = |name: &str, size: u32| AnimSet { flags: 3, off: 0, size, hash: 0, name: name.into(), type_hash: 0, id: 0, files: 0, file_offs: vec![] };
+        assert!(pick(&s("attAxeA", 20 << 10)));
+        assert!(!pick(&s("attAxeB", 20 << 10)), "one per word");
+        assert!(!pick(&s("RageStart", 4 << 20)), "too big");
+        assert!(!pick(&s("narSomething", 20 << 10)), "not a study word");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

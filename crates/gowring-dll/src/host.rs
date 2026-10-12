@@ -77,11 +77,15 @@ struct SkillCast {
     category: Option<i32>,
     at: f64,
     frames: u32,
+    /// How long the button is held waiting for the animation to start.
+    wait: f64,
 }
 
 /// How long the skill button is held waiting for the skill's animation, and how many misses in a row make the
 /// bridge stop trying a runic's animation for the session.
 const SKILL_WAIT_S: f64 = 0.6;
+/// Spartan Rage's roar waits longer: in 0.1.37 it was missed while Kratos was still staggered from a hit (about 1.9 s).
+const ROAR_WAIT_S: f64 = 2.0;
 const SKILL_GIVE_UP: u32 = 3;
 
 /// Whether `id` is one of the skill's animations (aXXX_YYYYYY ids are XXX * 1 000 000 + YYYYYY; a skill's are in
@@ -708,12 +712,12 @@ impl Bridge {
                     // Kratos plays the runic's Elden Ring skill: put it on the weapon and press the skill button
                     // (held below until the skill's animation starts)
                     match RUNICS.iter().find(|r| r.id == *runic).filter(|r| r.er_skill > 0) {
-                        Some(r) => self.start_skill(r.id, r.weapon, r.er_skill, false, now),
+                        Some(r) => self.start_skill(r.id, r.weapon, r.er_skill, false, SKILL_WAIT_S, now),
                         None => crate::log::once("cast-visual", "enemy_damage", &format!("runic `{runic}`: effects applied; no animation set for it")),
                     }
                 }
                 // Spartan Rage's roar: the same path, and the weapon gets its own skill back once it has played
-                Command::Skill { tag, weapon, skill } => self.start_skill(tag, weapon, *skill, true, now),
+                Command::Skill { tag, weapon, skill } => self.start_skill(tag, weapon, *skill, true, ROAR_WAIT_S, now),
                 Command::Raycast { .. } | Command::Fx { .. } | Command::Shake(_) => {}
             }
         }
@@ -780,7 +784,7 @@ impl Bridge {
                         self.skill_restore = Some((std::mem::take(&mut sc.restore), self.skill_quiet_until));
                     }
                     self.skill_cast = None;
-                } else if age > SKILL_WAIT_S {
+                } else if age > sc.wait {
                     let n = self.skill_misses.entry(sc.tag).or_default();
                     *n += 1;
                     crate::glog!("skill_anim", "`{}`: no skill animation after {age:.2}s (playing a{:03}_{:06}); miss {n} of {SKILL_GIVE_UP}", sc.tag, cur / 1_000_000, cur % 1_000_000);
@@ -789,10 +793,11 @@ impl Bridge {
                     }
                     self.skill_cast = None;
                 } else {
-                    // one press, then held: nothing left queued for the game to read as a second press
+                    // one press, then held: nothing left queued for the game to read as a second press. The roar's
+                    // longer wait presses again every 12 frames, since a press made while Kratos is staggered is dropped
                     let ar = &mut p.chr_ins.modules.action_request;
                     set_er_bits(&mut ar.action_requests, l2, true);
-                    if sc.frames == 1 {
+                    if sc.frames == 1 || (sc.wait > SKILL_WAIT_S && sc.frames % 12 == 1) {
                         set_er_bits(&mut ar.new_action_presses, l2, true);
                         set_er_bits(&mut ar.readback_new_presses, l2, true);
                     }
@@ -819,9 +824,9 @@ impl Bridge {
         self.tick_statuses(wcm, now, player_handle);
     }
 
-    /// Put `skill` on every row carrying `weapon` and start pressing the skill button (see `apply`); `restore`: give the
-    /// rows their own skill back once it has played.
-    fn start_skill(&mut self, tag: &'static str, weapon: &'static str, skill: i32, restore: bool, now: f64) {
+    /// Put `skill` on every row carrying `weapon` and start pressing the skill button for up to `wait` seconds (see
+    /// `apply`); `restore`: give the rows their own skill back once it has played.
+    fn start_skill(&mut self, tag: &'static str, weapon: &'static str, skill: i32, restore: bool, wait: f64, now: f64) {
         let misses = self.skill_misses.get(tag).copied().unwrap_or(0);
         if misses >= SKILL_GIVE_UP {
             crate::log::once("skill-gave-up", tag, &format!("`{tag}`: skill {skill} showed no animation {SKILL_GIVE_UP} times in a row; played without one for the rest of the session"));
@@ -839,7 +844,7 @@ impl Bridge {
         let category = crate::params::skill_category(skill);
         crate::glog!("skill_anim", "{now:.2}s `{tag}`: skill {skill} (animations a{}) on carrier rows (row, skill it had) {rows:?}; pressing the skill button", category.map(|c| format!("{c:03}")).unwrap_or_else(|| "?".into()));
         let restore = if restore { rows.into_iter().filter(|(_, was)| *was != skill).collect() } else { Vec::new() };
-        self.skill_cast = Some(SkillCast { tag, skill, restore, category, at: now, frames: 0 });
+        self.skill_cast = Some(SkillCast { tag, skill, restore, category, at: now, frames: 0, wait });
     }
 
     fn freeze(&mut self, wcm: &mut WorldChrMan, target: u64, now: f64, seconds: f32) {

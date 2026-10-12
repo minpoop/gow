@@ -59,58 +59,82 @@ pub struct FrameInfo {
     pub complete: bool,
 }
 
-/// Read and decompress the first `max_out` bytes (rounded up to a block) of the LZ4 frame in `r`.
-pub fn read_prefix(mut r: impl Read, max_out: usize) -> Result<(Vec<u8>, FrameInfo)> {
-    let mut head = [0u8; 6];
-    r.read_exact(&mut head)?;
-    if head[..4] != MAGIC {
-        bail!("not an LZ4 frame");
+/// An LZ4 frame read one block at a time, so a file of any size can be walked through with little memory.
+pub struct FrameReader<R: Read> {
+    r: R,
+    pub info: FrameInfo,
+    block_checksum: bool,
+    done: bool,
+}
+
+impl<R: Read> FrameReader<R> {
+    /// Read the frame header.
+    pub fn open(mut r: R) -> Result<Self> {
+        let mut head = [0u8; 6];
+        r.read_exact(&mut head)?;
+        if head[..4] != MAGIC {
+            bail!("not an LZ4 frame");
+        }
+        let (flg, bd) = (head[4], head[5]);
+        if flg >> 6 != 1 {
+            bail!("lz4: unsupported frame version");
+        }
+        let mut info = FrameInfo { independent: flg & 0x20 != 0, block_max: match (bd >> 4) & 7 { 4 => 64 << 10, 5 => 256 << 10, 6 => 1 << 20, 7 => 4 << 20, _ => bail!("lz4: bad block size code") }, ..Default::default() };
+        if flg & 0x08 != 0 {
+            let mut b = [0u8; 8];
+            r.read_exact(&mut b)?;
+            info.content_size = Some(u64::from_le_bytes(b));
+        }
+        if flg & 0x01 != 0 {
+            let mut b = [0u8; 4];
+            r.read_exact(&mut b)?;
+        }
+        let mut hc = [0u8; 1];
+        r.read_exact(&mut hc)?;
+        Ok(FrameReader { r, info, block_checksum: flg & 0x10 != 0, done: false })
     }
-    let (flg, bd) = (head[4], head[5]);
-    if flg >> 6 != 1 {
-        bail!("lz4: unsupported frame version");
-    }
-    let mut info = FrameInfo { independent: flg & 0x20 != 0, block_max: match (bd >> 4) & 7 { 4 => 64 << 10, 5 => 256 << 10, 6 => 1 << 20, 7 => 4 << 20, _ => bail!("lz4: bad block size code") }, ..Default::default() };
-    let block_checksum = flg & 0x10 != 0;
-    if flg & 0x08 != 0 {
-        let mut b = [0u8; 8];
-        r.read_exact(&mut b)?;
-        info.content_size = Some(u64::from_le_bytes(b));
-    }
-    if flg & 0x01 != 0 {
-        let mut b = [0u8; 4];
-        r.read_exact(&mut b)?;
-    }
-    let mut hc = [0u8; 1];
-    r.read_exact(&mut hc)?;
-    let mut out = Vec::new();
-    while out.len() < max_out {
+
+    /// Decompress the next block onto the end of `out` (a dependent block's matches reach up to 64 KiB back into
+    /// what `out` already holds). False at the frame's end.
+    pub fn next_block(&mut self, out: &mut Vec<u8>) -> Result<bool> {
+        if self.done {
+            return Ok(false);
+        }
         let mut sz = [0u8; 4];
-        r.read_exact(&mut sz)?;
+        self.r.read_exact(&mut sz)?;
         let sz = u32::from_le_bytes(sz);
         if sz == 0 {
-            info.complete = true;
-            break;
+            self.info.complete = true;
+            self.done = true;
+            return Ok(false);
         }
         let raw = sz >> 31 == 1;
         let n = (sz & 0x7fff_ffff) as usize;
-        if n > info.block_max {
-            bail!("lz4: block of {n} bytes exceeds the frame's maximum {}", info.block_max);
+        if n > self.info.block_max {
+            bail!("lz4: block of {n} bytes exceeds the frame's maximum {}", self.info.block_max);
         }
         let mut buf = vec![0u8; n];
-        r.read_exact(&mut buf)?;
-        if block_checksum {
+        self.r.read_exact(&mut buf)?;
+        if self.block_checksum {
             let mut c = [0u8; 4];
-            r.read_exact(&mut c)?;
+            self.r.read_exact(&mut c)?;
         }
         if raw {
             out.extend_from_slice(&buf);
         } else {
-            block_decode(&buf, &mut out)?;
+            block_decode(&buf, out)?;
         }
-        info.blocks_read += 1;
+        self.info.blocks_read += 1;
+        Ok(true)
     }
-    Ok((out, info))
+}
+
+/// Read and decompress the first `max_out` bytes (rounded up to a block) of the LZ4 frame in `r`.
+pub fn read_prefix(r: impl Read, max_out: usize) -> Result<(Vec<u8>, FrameInfo)> {
+    let mut f = FrameReader::open(r)?;
+    let mut out = Vec::new();
+    while out.len() < max_out && f.next_block(&mut out)? {}
+    Ok((out, f.info))
 }
 
 /// Read a prefix from a file on disk.
