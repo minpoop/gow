@@ -662,6 +662,12 @@ pub fn rbar(rect: &Rect, frac: f32, trail: f32, mid: u32, lead: u32, segments: u
     rbar_fx(rect, frac, trail, 0xF4EBD0, 0.5, mid, lead, segments, 0.0, alpha, None)
 }
 
+/// How far a full Rage segment's red is pushed toward the bright lead colour: the front segment, the one behind it, and
+/// (darkened instead) the older ones.
+const WARM_FRONT: f32 = 0.5;
+const WARM_NEXT: f32 = 0.06;
+const WARM_BACK: f32 = 0.06;
+
 /// A repeatable 0..1 value for particle `i` (no state is kept between frames).
 fn hash01(i: u32) -> f32 {
     let mut x = i.wrapping_mul(0x9E37_79B9) ^ 0x85EB_CA6B;
@@ -673,9 +679,10 @@ fn hash01(i: u32) -> f32 {
 
 /// `rbar` with the lost chunk (`trail`) drawn in `trail_color` at `trail_alpha`, and a white-hot `flash` over the fill.
 /// `live`: the HUD clock in seconds for Kratos' own bars, whose fill is alive the way Ragnarök's is (measured on the
-/// player's Hrolf Kraki clips): soft patches of light and shade flowing back through the health fill from its tip and
-/// churning in the Rage segments, a soft glow around the fill and light spilling from its tip. `None`: a still bar (the
-/// patches stand still). The clips show no sharp sparks: a time slice of the bars has only broad, slow bands.
+/// player's own 1440p recording): soft patches of light and shade flowing back through the fill from its tip toward its
+/// start, in the health bar and in each full Rage segment, and the Rage segment still filling slowly breathing. At rest
+/// there is no halo outside the bars and no sparks: the glowing look is the fill itself (bright lower edge, white tip).
+/// `None`: a still bar (the patches stand still).
 pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, mid: u32, lead: u32, segments: u32, flash: f32, alpha: f32, live: Option<f32>) -> Vec<Prim> {
     let mut c = Canvas { out: Vec::new() };
     let (x0, y0, y1) = (rect.x, rect.y, rect.y + rect.h);
@@ -693,16 +700,7 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
         seg_x(i) + (u - i as f32) * sw
     };
     let fill_end = at(frac);
-    // the glow around what is filled (bars big enough to show it), breathing slowly, strongest at the leading end
-    let (alive, t) = (live.is_some(), live.unwrap_or(0.0));
-    let fill_to = fill_end;
-    if alive && frac > 0.002 {
-        let breathe = 0.85 + 0.15 * (t * 2.2).sin();
-        let glow = mix(mid, lead, 0.6);
-        for (d, a) in [(h * 0.75, 0.04f32), (h * 0.45, 0.06), (h * 0.22, 0.08)] {
-            c.poly(&[(x0 - d * 0.3, y0 - d), (fill_to + d, y0 - d), (fill_to + d, y1 + d), (x0 - d * 0.3, y1 + d)], glow, a * breathe * alpha);
-        }
-    }
+    let t = live.unwrap_or(0.0);
     // housing: one piece per segment, so the gaps stay dark
     let rim = (h * 0.08).max(1.0);
     for i in 0..n {
@@ -767,19 +765,18 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                 // the glowing head of the bar pales to white at its tip
                 mix(col, 0xFFFFFF, ((x - (fill_end - head)) / head.max(1.0)).clamp(0.0, 1.0).powi(3) * 0.8)
             });
-            // The fill's texture (measured on the player's 1080p clip): soft light and dark patches about two bar heights
-            // wide and the bar's full height, swelling and fading, flowing back from the tip toward the start at about
-            // 1.4 bar heights a second (25-28 px/s on the 19 px bar), about 9 levels lighter or darker (up to 15).
-            // Laid out over the whole bar, so they do not jump when health changes.
+            // The fill's texture (measured on the player's 1440p and 4K recordings, in 1080p pixels): soft light and dark
+            // patches about 14-16 px in half-width and the bar's full height, slowly changing shape, flowing back from
+            // the tip toward the start at about 26-27 px/s (1.4 bar heights a second), 12 levels darker to 14-16
+            // lighter. Laid out over the whole bar, so they do not jump when health changes.
             let speed = h * 1.4;
             let period = rect.w + h * 4.0;
             let count = ((period / (h * 2.4)) as u32).max(3);
             for k in 0..count {
-                // each patch also changes shape and strength as it goes, as the clip's do
-                let rx = h * (0.8 + 0.5 * hash01(k * 4 + 21)) * (1.0 + 0.3 * (t * 1.9 + k as f32 * 2.9).sin());
+                let rx = h * (0.95 + 0.6 * hash01(k * 4 + 21)) * (1.0 + 0.25 * (t * 1.2 + k as f32 * 2.9).sin());
                 let u = (period * k as f32 / count as f32 + h * hash01(k * 4 + 22) - t * speed * (0.9 + 0.2 * hash01(k * 4 + 23))).rem_euclid(period);
-                let swell = 0.55 + 0.45 * (t * 2.2 + k as f32 * 1.7).sin();
-                let (col, al) = if hash01(k * 4 + 24) > 0.5 { (0xFFFFFF, 0.13) } else { (0x000000, 0.19) };
+                let swell = 0.55 + 0.45 * (t * 1.4 + k as f32 * 1.7).sin();
+                let (col, al) = if hash01(k * 4 + 24) > 0.5 { (0xFFFFFF, 0.22) } else { (0x000000, 0.3) };
                 patch(&mut c, x0 - h * 2.0 + u, rx, col, al * swell, x0, fill_end);
             }
             band(&mut c, x0, fill_end, 0.0, 0.14, 0xFFFFFF, 0.12);
@@ -796,27 +793,35 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                 break;
             }
             if end >= b - 0.01 {
-                // a full segment: dark core, bright upper band, glowing ends, warmer the further along it is
-                // a full segment: bright red, a smoky dark core, glowing ends, warmer the further along it is
-                let warm = mix(mid, lead, 0.14 * i as f32);
+                // a full segment: red with a smoky dark core and glowing ends. The one at the front of the meter burns a
+                // bright salmon red and those behind it deepen (measured on the player's screenshot and recordings:
+                // about (180, 60, 48), then (130, 32, 28), then (115, 23, 20) and darker)
+                let full_count = ((frac * n as f32) + 1e-4).floor() as u32;
+                let behind = full_count.saturating_sub(1).saturating_sub(i);
+                let warm = match behind {
+                    0 => mix(mid, lead, WARM_FRONT),
+                    1 => mix(mid, lead, WARM_NEXT),
+                    _ => shade(mid, WARM_BACK),
+                };
                 let glow = mix(warm, 0xFF5A4C, 0.55);
                 slices(&mut c, a, b, &|x| {
                     let t = (x - a) / sw;
                     let e = ((t - 0.8) / 0.2).clamp(0.0, 1.0).max(((0.12 - t) / 0.12).clamp(0.0, 1.0) * 0.7);
                     mix(warm, glow, e)
                 });
-                // a smoky core, and smaller light and dark patches churning in it (measured: about one bar height wide,
-                // the light ones warm, +13 / -9 levels, no steady drift)
+                // a smoky core, and light and dark patches flowing back through it like the health bar's (measured at
+                // 1440p and 4K: about 11-13 px half-width, the light ones warm, -13 / +12 levels, ~23 px/s toward the
+                // start, changing slowly)
                 let wob = (t * 1.3 + i as f32 * 1.7).sin();
-                blot(&mut c, a + sw * (0.45 + 0.03 * wob), sw * (0.38 + 0.02 * (t * 0.9 + i as f32).cos()), h * 0.4, shade(warm, 0.75), 0.5 - 0.1 * i as f32, a, b);
-                let period = sw + h * 2.0;
+                blot(&mut c, a + sw * (0.45 + 0.03 * wob), sw * (0.38 + 0.02 * (t * 0.9 + i as f32).cos()), h * 0.4, shade(warm, 0.75), if behind == 0 { 0.26 } else { 0.5 }, a, b);
+                let period = sw + h * 3.0;
                 for k in 0..5u32 {
                     let id = i * 16 + k * 4;
-                    let rx = h * (0.45 + 0.25 * hash01(id + 31));
-                    let u = (period * k as f32 / 5.0 + t * h * 0.6 * (0.85 + 0.3 * hash01(id + 32)) + h * 0.8 * (t * 1.7 + k as f32).sin()).rem_euclid(period);
-                    let swell = 0.5 + 0.5 * (t * 4.0 + k as f32 * 2.3 + i as f32).sin();
-                    let (col, al) = if hash01(id + 33) > 0.45 { (0xFFE4DA, 0.2) } else { (0x000000, 0.12) };
-                    patch(&mut c, a - h + u, rx, col, al * swell, a, b);
+                    let rx = h * (1.1 + 0.5 * hash01(id + 31)) * (1.0 + 0.2 * (t * 1.1 + k as f32 * 2.3).sin());
+                    let u = (period * k as f32 / 5.0 + h * hash01(id + 34) - t * h * 1.8 * (0.9 + 0.2 * hash01(id + 32))).rem_euclid(period);
+                    let swell = 0.55 + 0.45 * (t * 1.4 + k as f32 * 2.3 + i as f32).sin();
+                    let (col, al) = if hash01(id + 33) > 0.45 { (0xFFE4DA, 0.15) } else { (0x000000, 0.18) };
+                    patch(&mut c, a - h * 1.5 + u, rx, col, al * swell, a, b);
                 }
                 band(&mut c, a, b, 0.0, 0.1, lighten(warm, 0.3), 0.45);
                 band(&mut c, a, b, 0.9, 1.0, 0x000000, 0.2);
@@ -829,22 +834,11 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                 });
                 band(&mut c, a, end, 0.0, 0.35, lighten(fire, 0.1), 0.35);
                 band(&mut c, a, end, 0.5, 1.0, mix(fire, 0xE8A040, 0.6), 0.45);
+                // it breathes slowly (measured: about 5 % brighter and back, every ~5 s)
+                if live.is_some() {
+                    band(&mut c, a, end, 0.0, 1.0, 0xFFFFFF, 0.05 * (0.5 + 0.5 * (t * std::f32::consts::TAU / 4.85).sin()));
+                }
             }
-        }
-    }
-    if alive && frac > 0.002 {
-        // light spilling from the leading edge: soft rings that fade outward
-        let breathe = 0.8 + 0.2 * (t * 2.2 + 0.7).sin();
-        // many faint layers, so the light fades smoothly instead of in rings
-        for k in 0..8 {
-            let (sc, a) = (1.6 - 0.16 * k as f32, 0.035f32);
-            let ring: Vec<(f32, f32)> = (0..20)
-                .map(|i| {
-                    let ang = i as f32 * std::f32::consts::TAU / 20.0;
-                    (fill_end + h * sc * 0.9 * ang.cos(), (y0 + y1) / 2.0 + h * sc * 0.75 * ang.sin())
-                })
-                .collect();
-            c.poly(&ring, lighten(lead, 0.5), a * breathe * alpha);
         }
     }
     if n > 1 && frac > 0.002 && frac < 0.999 {
@@ -1244,7 +1238,6 @@ mod tests {
         let (a, b) = (at(Some(1.0)), at(Some(1.4)));
         assert_ne!(format!("{a:?}"), format!("{b:?}"), "the patches of light and shade move");
         assert_eq!(format!("{:?}", at(None)), format!("{:?}", at(None)));
-        assert!(at(None).len() < a.len(), "a still bar has no glow");
         // the patches of light stay inside the fill
         for p in &a {
             if let Prim::Poly { pts, color: 0xFFFFFF, .. } = p {
