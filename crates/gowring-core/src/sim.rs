@@ -60,6 +60,8 @@ pub struct SimWorld {
     pub last_mask: ActionBits,
     pub all_commands: Vec<Command>,
     pub anim_speed: f32,
+    /// Elden Ring animations the rules asked Kratos to play.
+    pub anims: Vec<i32>,
     pub staggers: Vec<(EnemyId, f64)>,
     pub finishers: Vec<EnemyId>,
     pub casts: Vec<&'static str>,
@@ -90,6 +92,7 @@ impl SimWorld {
             last_mask: ActionBits::NONE,
             all_commands: vec![],
             anim_speed: 1.0,
+            anims: Vec::new(),
             staggers: vec![],
             finishers: vec![],
             casts: vec![],
@@ -221,6 +224,7 @@ impl SimWorld {
                 Command::Refund { amount } => self.player.hp = (self.player.hp + amount).min(self.player.max_hp),
                 Command::Mask(m) => self.last_mask = *m,
                 Command::AnimSpeed(s) => self.anim_speed = *s,
+                Command::PlayAnim(id) => self.anims.push(*id),
                 Command::Sfx(s) => self.sfx.push(s),
                 Command::Voice { set, .. } => {
                     self.voices.push(set);

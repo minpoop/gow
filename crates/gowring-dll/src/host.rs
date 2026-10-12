@@ -9,7 +9,7 @@ use crate::audio::Audio;
 use eldenring::cs::{CSCamExt, CSCamera, CSFeManImp, CSHavokMan, ChrActions, ChrDebugSpawnRequest, ChrIns, EnemyIns, FieldInsHandle, WorldChrMan};
 use eldenring::position::{HavokPosition, PositionDelta};
 use fromsoftware_shared::{FromStatic, Superclass};
-use gowring_core::sheets::{ErAction, RunicStatus};
+use gowring_core::sheets::{ErAction, RunicStatus, RUNICS};
 use gowring_core::{ActionBits, Command, DamageEvent, EnemyView, Frame, PlayerView, RayResult, Vec3, VoiceInfo};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -65,6 +65,25 @@ struct Frozen {
     saved_speed: f32,
 }
 
+/// A runic's animation being started: the skill (Ash of War) put on the weapon, when its button went down and for
+/// how many frames it has been held.
+struct SkillCast {
+    runic: &'static str,
+    skill: i32,
+    at: f64,
+    frames: u32,
+}
+
+/// How long the skill button is held waiting for the skill's animation, and how many misses in a row make the
+/// bridge stop trying a runic's animation for the session.
+const SKILL_WAIT_S: f64 = 0.6;
+const SKILL_GIVE_UP: u32 = 3;
+
+/// Elden Ring's animation categories for skills (aXXX_YYYYYY ids are XXX * 1 000 000 + YYYYYY).
+fn is_skill_anim(id: i32) -> bool {
+    (600..700).contains(&(id / 1_000_000))
+}
+
 struct Burn {
     id: u64,
     until: f64,
@@ -84,6 +103,11 @@ pub struct Bridge {
     anim_seen: (i32, u32),
     anim_tally: HashMap<i32, u32>,
     anim_tally_at: f64,
+    /// The runic animation being started, the misses in a row per runic, and the last animation asked for by id
+    /// (with when, so the log can say whether it played).
+    skill_cast: Option<SkillCast>,
+    skill_misses: HashMap<&'static str, u32>,
+    anim_asked: Option<(i32, f64)>,
     prev_player_hp: Option<i32>,
     prev_enemy_hp: HashMap<u64, i32>,
     prev_player_last_hit: u64,
@@ -141,6 +165,9 @@ impl Bridge {
             anim_seen: (i32::MIN, 0),
             anim_tally: HashMap::new(),
             anim_tally_at: 0.0,
+            skill_cast: None,
+            skill_misses: HashMap::new(),
+            anim_asked: None,
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
             prev_player_last_hit: u64::MAX,
@@ -336,6 +363,11 @@ impl Bridge {
             if last.anim_id != self.anim_seen.0 && last.anim_id > 0 {
                 self.anim_seen.0 = last.anim_id;
                 *self.anim_tally.entry(last.anim_id).or_default() += 1;
+                if let Some((asked, at)) = self.anim_asked {
+                    if time - at < 1.5 {
+                        crate::glog!("player_anim", "{:.2}s after asking for animation {asked}: now a{:03}_{:06}{}", time - at, last.anim_id / 1_000_000, last.anim_id % 1_000_000, if last.anim_id == asked { " (the one asked for)" } else { "" });
+                    }
+                }
                 if self.anim_seen.1 < 600 {
                     self.anim_seen.1 += 1;
                     crate::glog!("player_anim", "{time:.2}s a{:03}_{:06} ({} s long), buttons {:?}", last.anim_id / 1_000_000, last.anim_id % 1_000_000, (last.anim_length * 100.0).round() / 100.0, bits_from_er(&ar.new_action_presses));
@@ -654,7 +686,29 @@ impl Bridge {
                     crate::log::once("finisher-visual", "enemy_damage", &format!("finisher on {target:#x}: damage applied; no execution animation in this build"));
                 }
                 Command::Cast { runic } => {
-                    crate::log::once("cast-visual", "enemy_damage", &format!("runic `{runic}`: effects applied; no cast animation in this build"));
+                    // Kratos plays the runic's Elden Ring skill: put it on the weapon and press the skill button
+                    // (held below until the skill's animation starts)
+                    let def = RUNICS.iter().find(|r| r.id == *runic);
+                    let misses = self.skill_misses.get(runic).copied().unwrap_or(0);
+                    match def.filter(|r| r.er_skill > 0) {
+                        Some(r) if misses >= SKILL_GIVE_UP => crate::log::once("skill-gave-up", r.id, &format!("runic `{}`: skill {} showed no animation {SKILL_GIVE_UP} times in a row; cast without one for the rest of the session", r.id, r.er_skill)),
+                        Some(r) => match crate::params::carrier_row(r.weapon) {
+                            Some(row) => {
+                                let was = crate::params::set_weapon_skill(row, r.er_skill);
+                                crate::glog!("skill_anim", "{now:.2}s runic `{}`: skill {} on carrier {row} (was {was:?}); pressing the skill button", r.id, r.er_skill);
+                                self.skill_cast = Some(SkillCast { runic: r.id, skill: r.er_skill, at: now, frames: 0 });
+                            }
+                            None => crate::log::once("skill-no-carrier", r.weapon, &format!("runic `{}`: no carrier row for {} yet; no animation", r.id, r.weapon)),
+                        },
+                        None => crate::log::once("cast-visual", "enemy_damage", &format!("runic `{runic}`: effects applied; no animation set for it")),
+                    }
+                }
+                Command::PlayAnim(id) => {
+                    if let Some(p) = wcm.main_player.as_mut() {
+                        p.chr_ins.modules.event.request_animation_id = *id;
+                        self.anim_asked = Some((*id, now));
+                        crate::glog!("player_anim", "{now:.2}s asked the game to play animation {id} (a{:03}_{:06})", id / 1_000_000, id % 1_000_000);
+                    }
                 }
                 Command::Raycast { .. } | Command::Fx { .. } | Command::Shake(_) => {}
             }
@@ -682,6 +736,34 @@ impl Bridge {
                 crate::log::once_u64("mask", new_mask.0, "action_mask", &format!("masked ER action bits {:#x}", new_mask.0));
             }
             self.my_mask = new_mask;
+            // a runic's skill: hold the skill button (after the masks, so it gets through) until the skill's
+            // animation starts or the wait runs out
+            if let Some(sc) = self.skill_cast.as_mut() {
+                sc.frames += 1;
+                let ta = &p.chr_ins.modules.time_act;
+                let cur = ta.anim_queue[ta.read_idx as usize % ta.anim_queue.len()].anim_id;
+                let age = now - sc.at;
+                if is_skill_anim(cur) {
+                    crate::glog!("skill_anim", "runic `{}`: skill {} animation a{:03}_{:06} started after {age:.2}s ({} frames held)", sc.runic, sc.skill, cur / 1_000_000, cur % 1_000_000, sc.frames);
+                    self.skill_misses.insert(sc.runic, 0);
+                    self.skill_cast = None;
+                } else if age > SKILL_WAIT_S {
+                    let n = self.skill_misses.entry(sc.runic).or_default();
+                    *n += 1;
+                    crate::glog!("skill_anim", "runic `{}`: no skill animation after {age:.2}s (playing a{:03}_{:06}); miss {n} of {SKILL_GIVE_UP}", sc.runic, cur / 1_000_000, cur % 1_000_000);
+                    self.skill_cast = None;
+                } else {
+                    let ar = &mut p.chr_ins.modules.action_request;
+                    let l2 = ActionBits(ActionBits::bit(ErAction::L2));
+                    set_er_bits(&mut ar.action_requests, l2, true);
+                    set_er_bits(&mut ar.queued_action_inputs, l2, true);
+                    set_er_bits(&mut ar.readback_queued_inputs, l2, true);
+                    if sc.frames == 1 {
+                        set_er_bits(&mut ar.new_action_presses, l2, true);
+                        set_er_bits(&mut ar.readback_new_presses, l2, true);
+                    }
+                }
+            }
             if let Some(s) = anim_speed {
                 p.chr_ins.modules.behavior.animation_speed = s;
             }

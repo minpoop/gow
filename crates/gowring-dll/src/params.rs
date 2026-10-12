@@ -3,10 +3,30 @@
 //! ten starting classes are rewritten to start with them: a new character on the mashup's own save is
 //! born as Kratos, with the engine itself granting and equipping the kit.
 
-use eldenring::cs::{CharaInitParam, EquipParamWeapon, SoloParam, SoloParamRepository};
+use eldenring::cs::{CharaInitParam, EquipParamWeapon, SoloParam, SoloParamRepository, SwordArtsParam};
 use fromsoftware_shared::FromStatic;
-use gowring_core::sheets::{WeaponKind, ER_TEMPLATES, WEAPONS};
+use gowring_core::sheets::{WeaponKind, ER_TEMPLATES, RUNICS, WEAPONS};
 use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Elden Ring's "No Skill": the shield gets it, so the skill button reaches the weapon in Kratos' right hand.
+const NO_SKILL: i32 = 10;
+
+/// Sheet weapon id → carrier row, once the patch has run (read by the bridge when a runic needs its animation).
+static CARRIER_ROWS: OnceLock<HashMap<&'static str, u32>> = OnceLock::new();
+
+pub fn carrier_row(weapon: &str) -> Option<u32> {
+    CARRIER_ROWS.get()?.get(weapon).copied()
+}
+
+/// Give a carrier weapon row another skill (Ash of War); returns the one it had.
+pub fn set_weapon_skill(row: u32, skill: i32) -> Option<i32> {
+    let repo = unsafe { SoloParamRepository::instance_mut() }.ok()?;
+    let r = repo.get_mut::<EquipParamWeapon>(row)?;
+    let was = r.sword_arts_param_id();
+    r.set_sword_arts_param_id(skill);
+    Some(was)
+}
 
 pub struct Carriers {
     /// Sheet weapon id → the EquipParamWeapon row id that carries it.
@@ -17,7 +37,7 @@ pub struct Carriers {
 /// The game fills the param holders some time after start-up; reading one before that panics inside the
 /// library, so look first (a missing table is "not ready yet", not an error worth a panic).
 fn tables_ready(repo: &SoloParamRepository) -> Result<(), String> {
-    for (name, index) in [("EquipParamWeapon", EquipParamWeapon::INDEX), ("CharaInitParam", CharaInitParam::INDEX)] {
+    for (name, index) in [("EquipParamWeapon", EquipParamWeapon::INDEX), ("CharaInitParam", CharaInitParam::INDEX), ("SwordArtsParam", SwordArtsParam::INDEX)] {
         let ready = repo.solo_param_holders.get(index as usize).and_then(|h| h.get_res_cap(0)).is_some();
         if !ready {
             return Err(format!("{name} is not loaded yet"));
@@ -66,6 +86,12 @@ pub fn apply() -> Result<Carriers, String> {
         r.set_attack_base_fire(0);
         r.set_attack_base_thunder(0);
         r.set_attack_base_stamina(0);
+        // Skills (Ashes of War) carry Kratos' runic animations: the weapon starts with its first light runic's skill
+        // (the bridge swaps in the skill of each runic as it is cast); the shield has none, so the skill button
+        // reaches the weapon in the right hand
+        let skill = if w.kind == WeaponKind::Shield { NO_SKILL } else { w.light_runic.and_then(|id| RUNICS.iter().find(|r| r.id == id)).map(|r| r.er_skill).filter(|s| *s > 0).unwrap_or(r.sword_arts_param_id()) };
+        notes.push(format!("{}: skill {} -> {skill}", w.name, r.sword_arts_param_id()));
+        r.set_sword_arts_param_id(skill);
         if w.kind == WeaponKind::Shield {
             // keep the shield's own guard values; Kratos' block is the vanilla block with full cut rates
             r.set_phys_guard_cut_rate(100.0);
@@ -73,6 +99,23 @@ pub fn apply() -> Result<Carriers, String> {
             r.set_fire_guard_cut_rate(100.0);
             r.set_thun_guard_cut_rate(100.0);
             r.set_stamina_guard_def(255);
+        }
+    }
+
+    // ---- the runics' skills cost no FP (Kratos' runics run on their own cooldowns) -----------------------------------------
+    let mut skills: Vec<i32> = RUNICS.iter().map(|r| r.er_skill).filter(|s| *s > 0).collect();
+    skills.sort();
+    skills.dedup();
+    for id in skills {
+        match repo.get_mut::<SwordArtsParam>(id as u32) {
+            Some(a) => {
+                notes.push(format!("skill {id}: animation type {} (a{:03}), FP {} -> 0", a.sword_arts_type_new(), 600 + a.sword_arts_type_new() as u32, a.use_magic_point_l2()));
+                a.set_use_magic_point_l1(0);
+                a.set_use_magic_point_l2(0);
+                a.set_use_magic_point_r1(0);
+                a.set_use_magic_point_r2(0);
+            }
+            None => notes.push(format!("skill {id}: no SwordArtsParam row (its runics play no animation)")),
         }
     }
 
@@ -102,5 +145,6 @@ pub fn apply() -> Result<Carriers, String> {
     if classes == 0 {
         return Err("no CharaInitParam rows 3000..3009 found".into());
     }
+    let _ = CARRIER_ROWS.set(rows.clone());
     Ok(Carriers { rows, notes })
 }

@@ -31,8 +31,8 @@ a Linux container that has neither game. This page says exactly what was checked
 ## Not in this version at all
 * **Kratos' body and weapon models.** Needs Elden Ring's skeleton/FLVER pipeline and Ragnarök's PC mesh/skeleton
   formats; the Tarnished (bare-chested, no armour) stands in. Weapons look like the vanilla Elden Ring weapons they borrow movesets from.
-* **Ragnarök's animations.** No PC animation extractor exists in the community tooling; every swing is Elden Ring's.
-* **Cast/execution animations** for runics and finishers (their effects and damage happen; the character does not animate for them).
+* **Ragnarök's animations.** No public decoder exists for Ragnarök's animation sets (`.as` files, Santa Monica's own codec); every swing is Elden Ring's. Since 0.1.33 the background report writes Kratos's skeleton and animation samples to `kratos_probe/` for study.
+* **Execution animations** for finishers, and throw / recall animations (their effects and damage happen; the character does not animate for them). Since 0.1.33 runics play an Elden Ring skill's animation (unverified in play) and Spartan Rage starts with a roar gesture.
 * **Renaming items** (the inventory shows the vanilla names; the HUD shows Kratos' names).
 * **Atreus, co-op, multiplayer** — out of scope by design.
 

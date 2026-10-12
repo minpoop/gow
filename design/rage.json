@@ -1,7 +1,7 @@
 {
  "sheet": "rage",
  "struct": "RageDef",
- "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost): 3.0 filled the bar in about 85 s of fighting in 0.1.15 (good for testing); the release pace is 0.8 (1.5 in 0.1.21 was 'still a bit fast', 1.25 in 0.1.22 'feels the same': 0 -> 87 in about 30 s against a summon), with gain_per_pct_hp_lost 0.45. Turning Rage on heals activation_heal_pct of max HP and knocks down everything within burst_radius_m for burst_stagger_s; each kill while raging adds kill_extend_s (up to duration_s).",
+ "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost): 3.0 filled the bar in about 85 s of fighting in 0.1.15 (good for testing); the release pace is 0.8 (1.5 in 0.1.21 was 'still a bit fast', 1.25 in 0.1.22 'feels the same': 0 -> 87 in about 30 s against a summon), with gain_per_pct_hp_lost 0.45. Turning Rage on heals activation_heal_pct of max HP and knocks down everything within burst_radius_m for burst_stagger_s; each kill while raging adds kill_extend_s (up to duration_s). er_anim: the Elden Ring animation Kratos plays as Rage starts (81000 = the Rallying Cry gesture, a roar; 0 = none).",
  "columns": {
   "id": {
    "type": "id"
@@ -102,6 +102,11 @@
    "type": "float",
    "min": 0,
    "max": 30
+  },
+  "er_anim": {
+   "type": "int",
+   "min": 0,
+   "max": 999999999
   }
  },
  "rows": [
@@ -127,7 +132,8 @@
    "burst_radius_m": 10,
    "burst_stagger_s": 3.0,
    "activation_heal_pct": 20,
-   "kill_extend_s": 2.0
+   "kill_extend_s": 2.0,
+   "er_anim": 81000
   }
  ]
 }

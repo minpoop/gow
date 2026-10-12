@@ -55,10 +55,10 @@
   {
    "id": "tpl_whip",
    "name": "Whip",
-   "wep_type": 35,
+   "wep_type": 39,
    "hands": "dual_chain",
    "left_hand": "none",
-   "why": "Long lashing arcs with reach: the native moveset nearest to chained blades. Shield is stowed while the Blades are out, as in Ragnarök.",
+   "why": "Long lashing arcs with reach: the native moveset nearest to chained blades. Shield is stowed while the Blades are out, as in Ragnarök. (Weapon type 39 = whips; 0.1.0-0.1.32 used 35, which is fists, so the Blades swung the Caestus.)",
    "status": "unverified"
   },
   {

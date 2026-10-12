@@ -58,6 +58,10 @@ impl Rage {
         out.push(Command::AnimSpeed(self.d.rage.anim_speed));
         out.push(Command::Shake(1.0));
         let r = self.d.rage;
+        if r.er_anim > 0 {
+            // Kratos roars as Rage takes hold
+            out.push(Command::PlayAnim(r.er_anim));
+        }
         if f.player.alive && r.activation_heal_pct > 0.0 {
             out.push(Command::Heal { amount: f.player.max_hp * r.activation_heal_pct / 100.0 });
         }
@@ -135,6 +139,8 @@ mod tests {
         let hits: Vec<_> = out.iter().filter(|c| matches!(c, Command::Damage { .. })).collect();
         assert_eq!(hits.len(), 1);
         assert!(matches!(ev[0], Event::RageOn));
+        // Kratos roars as it starts (the sheet's Elden Ring animation)
+        assert!(d.rage.er_anim > 0 && out.iter().any(|c| matches!(c, Command::PlayAnim(id) if *id == d.rage.er_anim)));
         assert_eq!(r.damage_mult(), d.rage.damage_mult);
         // gains are ignored while burning
         let before = r.meter;
