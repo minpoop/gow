@@ -275,6 +275,73 @@ pub fn set_inventory(dir: &Path) -> String {
     o
 }
 
+/// A character skeleton read from its `goProto` chunk (layout worked out from Kratos's `goProtoheroa00`, 1458 joints):
+/// a u16 joint count at +0x10; from +0x18 one 8-byte record per joint (flags, first child, next sibling, parent: i16,
+/// -1 for none); then a u64 name hash per joint, then 16 bytes per joint; then a table header H (u64 0, the count
+/// twice, a u64 offset R): the inverse bind matrices start at H + 8 + R and the joints' rest transforms (relative to
+/// their parent) fill the `count` x 64 bytes just before them. Matrices are 4x4 floats stored column by column (the
+/// translation in the last 16 bytes), Y up, in metres.
+#[derive(Clone, Debug)]
+pub struct Skeleton {
+    pub parent: Vec<i16>,
+    pub flags: Vec<u16>,
+    pub name_hash: Vec<u64>,
+    /// Rest transform relative to the parent, and inverse bind matrix, each as 16 floats column by column.
+    pub local: Vec<[f32; 16]>,
+    pub inverse_bind: Vec<[f32; 16]>,
+}
+
+impl Skeleton {
+    pub fn parse(b: &[u8]) -> Option<Skeleton> {
+        let n = u16_at(b, 0x10)? as usize;
+        if n == 0 || n > 8192 {
+            return None;
+        }
+        let mut parent = Vec::with_capacity(n);
+        let mut flags = Vec::with_capacity(n);
+        for i in 0..n {
+            let o = 0x18 + i * 8;
+            flags.push(u16_at(b, o)?);
+            let p = i16_at(b, o + 6)?;
+            // every parent comes before its child
+            if !((p == -1 && i == 0) || (p >= 0 && (p as usize) < i)) {
+                return None;
+            }
+            parent.push(p);
+        }
+        let hashes = 0x18 + n * 8;
+        let name_hash = (0..n).map(|i| u64_at(b, hashes + i * 8)).collect::<Option<Vec<_>>>()?;
+        let head = hashes + n * 8 + n * 16;
+        if u32_at(b, head + 8)? as usize != n {
+            return None;
+        }
+        let ib = head + 8 + u64_at(b, head + 0x10)? as usize;
+        let local_at = ib.checked_sub(n * 64)?;
+        if local_at < head + 0x18 || ib + n * 64 > b.len() {
+            return None;
+        }
+        let mat = |at: usize| -> [f32; 16] { std::array::from_fn(|k| f32::from_le_bytes(b[at + 4 * k..at + 4 * k + 4].try_into().unwrap())) };
+        Some(Skeleton {
+            parent,
+            flags,
+            name_hash,
+            local: (0..n).map(|i| mat(local_at + i * 64)).collect(),
+            inverse_bind: (0..n).map(|i| mat(ib + i * 64)).collect(),
+        })
+    }
+
+    /// Each joint's rest position in model space, from the rest transforms composed down the hierarchy.
+    pub fn rest_positions(&self) -> Vec<[f32; 3]> {
+        let mul = |a: &[f32; 16], c: &[f32; 16]| -> [f32; 16] { std::array::from_fn(|k| (0..4).map(|j| a[j * 4 + k % 4] * c[(k / 4) * 4 + j]).sum()) };
+        let mut world: Vec<[f32; 16]> = Vec::with_capacity(self.local.len());
+        for (i, l) in self.local.iter().enumerate() {
+            let w = if self.parent[i] < 0 { *l } else { mul(&world[self.parent[i] as usize], l) };
+            world.push(w);
+        }
+        world.iter().map(|w| [w[12], w[13], w[14]]).collect()
+    }
+}
+
 /// Words in a set's name that mark Kratos's everyday moves: such sets are saved whole for working out how bone motion
 /// is stored (the smallest sets are single curves, not bones).
 pub const STUDY_WORDS: &[&str] = &["Idle", "attAxe", "attBlade", "attSpear", "attFist", "Rage", "Dodge", "Evade", "Roll", "Block", "Parry", "Walk", "Run", "Turn", "Throw", "Recall", "Hit"];
@@ -359,8 +426,9 @@ pub fn walk_set_file(path: &Path, mut keep: impl FnMut(&AnimSet) -> bool, mut sa
         if !more() {
             break;
         }
-        // keep what is still needed, and 64 KiB behind it for an LZ4 block's matches
-        let keep_from = pending.as_ref().map(|p| p.0).unwrap_or(next).min(next).saturating_sub(64 << 10).max(base);
+        // keep what is still needed, and 64 KiB behind it for an LZ4 block's matches (a big set can put `next` past
+        // what has been read so far: then nothing read is needed; 0.1.38 cut beyond the buffer there and panicked)
+        let keep_from = pending.as_ref().map(|p| p.0).unwrap_or(next).min(next).saturating_sub(64 << 10).clamp(base, base + buf.len() as u64);
         let cut = (keep_from - base) as usize;
         if cut >= 8 << 20 {
             buf.drain(..cut);
@@ -556,5 +624,108 @@ mod tests {
         assert!(!pick(&s("RageStart", 4 << 20)), "too big");
         assert!(!pick(&s("narSomething", 20 << 10)), "not a study word");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_set_bigger_than_what_was_read_is_stepped_over_without_a_panic() {
+        // a 20 MiB set: its header sends the walk 20 MiB ahead while 1 MiB has been read (0.1.38 panicked here)
+        let mut f = set_header("BigCinematic", 3, 0, 20 << 20, 1, &[]);
+        f.resize(20 << 20, 0);
+        let at = f.len();
+        f.extend(set_header("attAxeAfter", 3, at as u32, 20 << 10, 1, &[]));
+        f.resize(at + (20 << 10), 9);
+        let dir = std::env::temp_dir().join(format!("gowring-walk-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("r_heroa00.as");
+        std::fs::write(&path, &f).unwrap();
+        let mut saved = Vec::new();
+        let idx = walk_set_file(&path, study_picker(3, 64 << 20), |s, b| saved.push((s.name.clone(), b.len())), || true).unwrap();
+        assert!(idx.complete);
+        assert_eq!(idx.sets.iter().map(|(_, s, own)| (s.name.as_str(), *own)).collect::<Vec<_>>(), vec![("BigCinematic", true), ("attAxeAfter", true)]);
+        assert_eq!(saved, vec![("attAxeAfter".to_string(), 20 << 10)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_goproto_skeleton_reads_with_its_rest_pose_and_inverse_binds() {
+        // root, a hip 1 m up, a knee 0.5 m below the hip (local), laid out as in Kratos's goProto
+        let n = 3usize;
+        let mut b = vec![0u8; 0x18];
+        b[0x10..0x12].copy_from_slice(&(n as u16).to_le_bytes());
+        for (f, fc, ns, p) in [(0u16, 1i16, -1i16, -1i16), (97, 2, -1, 0), (65, -1, -1, 1)] {
+            b.extend(f.to_le_bytes());
+            b.extend(fc.to_le_bytes());
+            b.extend(ns.to_le_bytes());
+            b.extend(p.to_le_bytes());
+        }
+        for i in 0..n {
+            b.extend((0xABC0 + i as u64).to_le_bytes());
+        }
+        b.extend(vec![0x5A; n * 16]);
+        let head = b.len();
+        let gap = 0x58usize; // header and one spare matrix before the rest transforms, as in the real file
+        let local_at = head + gap;
+        let ib = local_at + n * 64;
+        b.extend(0u64.to_le_bytes());
+        b.extend((n as u32).to_le_bytes());
+        b.extend((n as u32).to_le_bytes());
+        b.extend(((ib - head - 8) as u64).to_le_bytes());
+        b.resize(local_at, 0);
+        let m = |t: [f32; 3]| -> Vec<u8> {
+            let v: [f32; 16] = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., t[0], t[1], t[2], 1.];
+            v.iter().flat_map(|x| x.to_le_bytes()).collect()
+        };
+        for t in [[0., 0., 0.], [0., 1., 0.], [0., -0.5, 0.]] {
+            b.extend(m(t));
+        }
+        for t in [[0., 0., 0.], [0., -1., 0.], [0., -0.5, 0.]] {
+            b.extend(m(t));
+        }
+        let sk = Skeleton::parse(&b).expect("parses");
+        assert_eq!(sk.parent, vec![-1, 0, 1]);
+        assert_eq!(sk.flags, vec![0, 97, 65]);
+        assert_eq!(sk.name_hash[2], 0xABC2);
+        assert_eq!(sk.rest_positions(), vec![[0., 0., 0.], [0., 1., 0.], [0., 0.5, 0.]]);
+        assert_eq!(sk.inverse_bind[1][13], -1.0);
+        // a child listed before its parent is not a skeleton
+        let mut bad = b.clone();
+        bad[0x18 + 8 + 6..0x18 + 8 + 8].copy_from_slice(&2i16.to_le_bytes());
+        assert!(Skeleton::parse(&bad).is_none());
+    }
+
+    /// Run against a player's own probe file: `GOWRING_GOPROTO=path cargo test -p gowring-gow real_goproto -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_goproto_reads_as_a_standing_figure() {
+        let Ok(path) = std::env::var("GOWRING_GOPROTO") else { return };
+        let sk = Skeleton::parse(&std::fs::read(path).unwrap()).expect("parses");
+        let pos = sk.rest_positions();
+        let (lo, hi) = pos.iter().fold((f32::MAX, f32::MIN), |(l, h), p| (l.min(p[1]), h.max(p[1])));
+        println!("{} joints, rest height {lo:.3}..{hi:.3}", sk.parent.len());
+        // the composed rest pose matches the inverse binds where they are set
+        let (mut checked, mut off) = (0, 0);
+        for (i, ib) in sk.inverse_bind.iter().enumerate() {
+            let identity = ib.iter().enumerate().all(|(k, v)| (v - if k % 5 == 0 { 1.0 } else { 0.0 }).abs() < 1e-5);
+            if identity {
+                continue;
+            }
+            // inverse bind maps the joint's own position to the origin
+            let p = pos[i];
+            let x: Vec<f32> = (0..3).map(|r| ib[r] * p[0] + ib[4 + r] * p[1] + ib[8 + r] * p[2] + ib[12 + r]).collect();
+            if x.iter().all(|v| v.abs() < 1e-2) {
+                checked += 1;
+            } else {
+                println!("joint {i}: rest pose and bind differ by {x:?}");
+                off += 1;
+            }
+        }
+        println!("{checked} inverse binds agree with the rest pose, {off} differ");
+        // Kratos: 9 of 826, mirrored pairs of corrective joints 1-4 cm from their bind
+        assert!(off * 50 <= checked, "the rest pose should match the binds for nearly every joint");
+        // the skinned joints stand between the floor and head height (helpers that skin nothing may sit anywhere)
+        let skinned: Vec<f32> = sk.inverse_bind.iter().zip(&pos).filter(|(ib, _)| ib.iter().enumerate().any(|(k, v)| (v - if k % 5 == 0 { 1.0 } else { 0.0 }).abs() >= 1e-5)).map(|(_, p)| p[1]).collect();
+        let (slo, shi) = skinned.iter().fold((f32::MAX, f32::MIN), |(l, h), y| (l.min(*y), h.max(*y)));
+        println!("skinned joints stand {slo:.3}..{shi:.3}");
+        assert!(shi > 1.5 && shi < 2.5 && slo > -0.1, "{slo}..{shi}");
     }
 }
