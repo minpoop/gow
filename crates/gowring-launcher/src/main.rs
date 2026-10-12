@@ -375,161 +375,134 @@ fn export_kratos(gow: &std::path::Path, out: &std::path::Path) -> String {
     o.push_str(&gowring_gow::kratos::export_from(&buf, &sets, "heroa00", out, || std::time::Instant::now() < until));
     // each step on its own, so one that fails keeps the others' report (0.1.38 lost it all to one panic)
     let step = |name: &str, f: &dyn Fn() -> String| std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| format!("\n-- {name}: panicked\n"));
-    o.push_str(&step("mesh stream probe", &|| probe_mesh_stream(gow, &buf, out)));
+    let model = out.parent().unwrap_or(out).join("kratos_model");
+    o.push_str(&step("model export", &|| {
+        let _ = std::fs::create_dir_all(&model);
+        export_kratos_model(gow, &buf, &model) + &format!("written to {}\n", model.display())
+    }));
     o.push_str(&step(".as walk", &|| walk_kratos_sets(&wad, out)));
     o.push_str(&format!("written to {}\n", out.display()));
     o
 }
 
-/// Kratos's mesh: only its lowest levels of detail are in his WAD; the draws' offsets address a 545 MB buffer kept
-/// elsewhere. List the install's files (`install_files.tsv`, names and sizes only) and look for that buffer: in each
-/// candidate file, read where a few draws' offsets point, and search the start of the file for a draw's positions.
-fn probe_mesh_stream(gow: &std::path::Path, buf: &[u8], out: &std::path::Path) -> String {
-    use gowring_gow::kratos::mesh_records;
-    use std::io::{Read, Seek, SeekFrom};
-    let mut o = String::from("\n-- Kratos's mesh: where the detailed levels are kept\n");
-    fn walk(dir: &std::path::Path, depth: usize, files: &mut Vec<(std::path::PathBuf, u64)>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        for e in rd.flatten() {
-            let p = e.path();
-            match e.metadata() {
-                Ok(m) if m.is_dir() && depth > 0 => walk(&p, depth - 1, files),
-                Ok(m) if m.is_file() => files.push((p, m.len())),
-                _ => {}
-            }
-        }
-    }
-    let mut files = Vec::new();
-    walk(gow, 8, &mut files);
-    files.sort();
-    let rel = |p: &std::path::Path| p.strip_prefix(gow).unwrap_or(p).to_string_lossy().replace('\\', "/");
-    let mut tsv = String::from("path\tbytes\n");
-    for (p, n) in &files {
-        tsv.push_str(&format!("{}\t{n}\n", rel(p)));
-    }
-    let _ = std::fs::write(out.join("install_files.tsv"), tsv);
-    let mut by_ext: std::collections::BTreeMap<String, (usize, u64, Vec<String>)> = Default::default();
-    for (p, n) in &files {
-        let ext = p.extension().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_else(|| "(none)".into());
-        let e = by_ext.entry(ext).or_default();
-        e.0 += 1;
-        e.1 += n;
-        if e.2.len() < 3 {
-            e.2.push(rel(p));
-        }
-    }
-    let mut exts: Vec<_> = by_ext.into_iter().collect();
-    exts.sort_by_key(|(_, (_, n, _))| std::cmp::Reverse(*n));
-    o.push_str(&format!("{} files listed in install_files.tsv; by extension (largest first):\n", files.len()));
-    for (ext, (c, n, ex)) in exts.iter().take(25) {
-        o.push_str(&format!("  .{ext:<12} {c:>6} files {:>10.1} MB  e.g. {ex:?}\n", *n as f64 / 1e6));
-    }
-    // the draws, from the WAD, and its GPU chunk (the lowest level of each part)
+/// Kratos's model at its most detailed: each part's first level of detail, read from `root.lodpack` (or the WAD's GPU
+/// chunk for the few parts whose best level lives there), written compactly to `kratos_model/detail.grkm` with a list
+/// of every part and level (`parts.tsv`) and a few whole resources (`samples/`) for checking the other streams.
+/// Once per pack size and version (`done.txt`).
+fn export_kratos_model(gow: &std::path::Path, buf: &[u8], out: &std::path::Path) -> String {
+    let o = String::from("\n-- Kratos's model at its most detailed (kratos_model)\n");
     let Some(es) = gowring_gow::wtoc::read(buf) else { return o + "no chunk table\n" };
     let chunk = |name: &str, id: u16| es.iter().find(|e| e.name == name && e.id == id).and_then(|e| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize));
-    let (Some(mesh), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
-        return o + "MESH_heroa00_0 or MG_heroa00_0_gpu not in the bytes read\n";
+    let (Some(mesh), Some(mg), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
+        return o + "MESH_heroa00_0, MG_heroa00_0 or MG_heroa00_0_gpu not in the bytes read\n";
+    };
+    let Some(pack) = find_file(gow, "root.lodpack", 5) else { return o + "root.lodpack not found\n" };
+    let size = std::fs::metadata(&pack).map(|m| m.len()).unwrap_or(0);
+    let stamp = format!("v1 {size}\n");
+    if std::fs::read_to_string(out.join("done.txt")).is_ok_and(|d| d == stamp) {
+        return o + "already written for this install\n";
+    }
+    let o = o + &write_kratos_model(&pack, mesh, mg, gpu, out);
+    if out.join("detail.grkm").exists() {
+        let _ = std::fs::write(out.join("done.txt"), stamp);
+    }
+    o
+}
+
+fn write_kratos_model(pack: &std::path::Path, mesh: &[u8], mg: &[u8], gpu: &[u8], out: &std::path::Path) -> String {
+    use gowring_gow::kratos::{compact_geometry, draw_geometry, mesh_records, mg_parts};
+    use gowring_gow::lodpack::Toc;
+    let mut o = String::new();
+    let t0 = std::time::Instant::now();
+    let toc = match Toc::read_from_pack(pack) {
+        Ok(t) => t,
+        Err(e) => return o + &format!("{e:#}\n"),
     };
     let rs = mesh_records(mesh);
-    let span = rs.iter().map(|r| r.vertex_offset + r.vertex_bytes as u64).max().unwrap_or(0);
-    // resident draws: their positions sit at their (absolute) first stream start in the WAD's GPU chunk
-    let mut resident: Vec<usize> = (0..rs.len())
-        .filter(|k| {
-            let r = &rs[*k];
-            r.vertices >= 64 && r.streams.first().is_some_and(|s| s.0 == 0) && gpu.get(r.streams[0].3 as usize..).is_some_and(|b| r.positions_inside(b) == r.vertices as usize)
-        })
-        .collect();
-    resident.sort_by_key(|k| std::cmp::Reverse(rs[*k].vertices));
-    o.push_str(&format!("MESH_heroa00_0: {} draws, buffer spans {span} bytes; the WAD's GPU chunk ({} bytes) holds {} of them\n", rs.len(), gpu.len(), resident.len()));
-    if resident.len() < 2 {
-        return o;
-    }
-    let sig = |k: usize| -> &[u8] {
-        let at = rs[k].streams[0].3 as usize;
-        &gpu[at..at + (rs[k].vertices as usize * 12).min(192)]
-    };
-    let (a, b) = (resident[0], resident[1]);
-    // the packs' small index files and the heads of the shared packs, for working out the pack format
-    let packs = out.join("packs");
-    let _ = std::fs::create_dir_all(&packs);
-    let mut copied = 0u64;
-    for (p, n) in &files {
-        let l = p.to_string_lossy().to_ascii_lowercase();
-        let small_index = (l.ends_with(".lodpack.toc") || l.ends_with(".texpack.toc") || l.ends_with("filehashes.csv") || l.ends_with("resource_dependency_graph.json")) && *n <= 8 << 20;
-        let head = l.ends_with("root.lodpack") || l.ends_with("valhalla.lodpack");
-        if !(small_index || head) {
-            continue;
-        }
-        let name = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-        let mut b = Vec::new();
-        if std::fs::File::open(p).and_then(|f| f.take(if head { 4 << 20 } else { 8 << 20 }).read_to_end(&mut b)).is_ok() {
-            copied += b.len() as u64;
-            let _ = std::fs::write(packs.join(if head { format!("{name}.head") } else { name }), &b);
+    let parts = mg_parts(mg);
+    let covered: usize = parts.iter().flatten().map(|l| l.draws as usize).sum();
+    o.push_str(&format!("root.lodpack: {} blocks, {} resources; MESH_heroa00_0: {} draws; MG_heroa00_0: {} parts covering {covered} draws\n", toc.blocks.len(), toc.resources.len(), rs.len(), parts.len()));
+    let _ = std::fs::create_dir_all(out.join("samples"));
+    let mut tsv = String::from("part\tlevel\tdistance\trecord\tvertices\ttriangles\thash\twhere\tpack_offset\tbytes\n");
+    for (p, levels) in parts.iter().enumerate() {
+        for (l, lv) in levels.iter().enumerate() {
+            for k in lv.first as usize..lv.first as usize + lv.draws as usize {
+                let Some(r) = rs.get(k) else { continue };
+                let (place, at, n) = match (r.hash, toc.find(r.hash)) {
+                    (0, _) => ("wad".to_string(), 0, gpu.len() as u32),
+                    (_, Some((at, n))) => ("root.lodpack".to_string(), at, n),
+                    _ => ("missing".to_string(), 0, 0),
+                };
+                tsv.push_str(&format!("{p}\t{l}\t{}\t{k}\t{}\t{}\t{:016x}\t{place}\t{at}\t{n}\n", lv.distance, r.vertices, r.triangles, r.hash));
+            }
         }
     }
-    o.push_str(&format!("saved {copied} bytes of pack indexes and pack heads under packs/\n"));
-    // candidates: named for him, then the shared level-of-detail pack, then the other level-of-detail packs, then
-    // anything else that could hold meshes (not textures, shaders, video, sound, programs, his WAD or animation sets)
-    let wad_dir = files.iter().find(|(p, _)| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("r_heroa00.wad"))).and_then(|(p, _)| p.parent().map(|d| d.to_path_buf()));
-    let skip = [".wad", ".as", ".texpack", ".shaderpack", ".bk2", ".msi", ".sbp", ".dcb", ".dll", ".exe", ".toc", ".audiopack"];
-    let mut cands: Vec<&(std::path::PathBuf, u64)> = files
-        .iter()
-        .filter(|(p, n)| {
-            let l = p.to_string_lossy().to_ascii_lowercase();
-            *n >= 1 << 20 && !skip.iter().any(|x| l.ends_with(x)) && !l.contains("audiopack")
-        })
-        .collect();
-    let rank = |p: &std::path::Path| {
-        let n = p.file_name().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        if n.contains("heroa00") {
-            0
-        } else if n == "root.lodpack" {
-            1
-        } else if n.ends_with(".lodpack") {
-            2
-        } else if n.contains("hero") || n.contains("kratos") {
-            3
-        } else if wad_dir.as_deref() == p.parent() {
-            4
-        } else {
-            5
-        }
+    let _ = std::fs::write(out.join("parts.tsv"), tsv);
+    // the most detailed level of every part
+    let mut f = match std::fs::File::open(pack) {
+        Ok(f) => f,
+        Err(e) => return o + &format!("{}: {e}\n", pack.display()),
     };
-    cands.sort_by_key(|(p, n)| (rank(p), *n));
-    o.push_str(&format!("searching up to {} files for draw {a}'s first positions ({} vertices, buffer offset {})\n", cands.len(), rs[a].vertices, rs[a].vertex_offset));
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(240);
-    let mut searched = 0;
-    for (p, n) in &cands {
-        if std::time::Instant::now() >= until {
-            o.push_str(&format!("  out of time after {searched} files\n"));
-            break;
-        }
-        searched += 1;
-        match gowring_gow::kratos::find_bytes_in_file(p, sig(a), || std::time::Instant::now() < until) {
-            Ok(Some(at)) => {
-                let base = at as i64 - rs[a].vertex_offset as i64;
-                o.push_str(&format!("  FOUND in {} ({n} bytes, lz4={}): at {at}, so the buffer starts at {base}\n", rel(p), gowring_gow::lz4::is_frame(p)));
-                // confirm with the second resident draw and a detailed one, where the base says they are
-                if !gowring_gow::lz4::is_frame(p) && base >= 0 {
-                    if let Ok(mut f) = std::fs::File::open(p) {
-                        let mut check = |k: usize| {
-                            let r = &rs[k];
-                            let mut v = vec![0u8; r.vertices as usize * 12];
-                            let ok = f.seek(SeekFrom::Start(base as u64 + r.vertex_offset)).is_ok() && f.read_exact(&mut v).is_ok();
-                            format!("draw {k} ({} vertices at {}): {}/{} inside", r.vertices, r.vertex_offset, if ok { r.positions_inside(&v) } else { 0 }, r.vertices)
-                        };
-                        let detailed = (0..rs.len()).filter(|k| !resident.contains(k)).max_by_key(|k| rs[*k].vertices).unwrap_or(0);
-                        o.push_str(&format!("    {}; {}\n", check(b), check(detailed)));
+    let mut cache: std::collections::HashMap<u64, Vec<u8>> = Default::default();
+    let mut geo = Vec::new();
+    let (mut bad, mut missing, mut read) = (Vec::new(), 0, 0u64);
+    for (p, levels) in parts.iter().enumerate() {
+        let Some(lv) = levels.first() else { continue };
+        for k in lv.first as usize..lv.first as usize + lv.draws as usize {
+            let Some(r) = rs.get(k) else { continue };
+            let res: &[u8] = if r.hash == 0 {
+                gpu
+            } else {
+                if !cache.contains_key(&r.hash) {
+                    match toc.read(&mut f, r.hash) {
+                        Ok(Some(b)) => {
+                            read += b.len() as u64;
+                            cache.insert(r.hash, b);
+                        }
+                        _ => {
+                            missing += 1;
+                            continue;
+                        }
                     }
                 }
-                let _ = std::fs::write(out.join("mesh_stream.txt"), format!("{}\t{base}\n", rel(p)));
-                return o;
+                &cache[&r.hash]
+            };
+            match draw_geometry(res, r) {
+                Some((pos, tri)) => geo.push((k as u32, p as u32, r, pos, tri)),
+                None => bad.push(k),
             }
-            Ok(None) => {}
-            Err(e) => o.push_str(&format!("  {}: {e:#}\n", rel(p))),
         }
     }
-    o.push_str(&format!("  not found in the {searched} files searched\n"));
+    let view: Vec<_> = geo.iter().map(|(k, p, r, pos, tri)| (*k, *p, *r, pos.as_slice(), tri.as_slice())).collect();
+    let bytes = compact_geometry(&view);
+    if !geo.is_empty() {
+        let _ = std::fs::write(out.join("detail.grkm"), &bytes);
+    }
+    let (verts, tris): (usize, usize) = geo.iter().fold((0, 0), |(v, t), g| (v + g.3.len(), t + g.4.len()));
+    o.push_str(&format!(
+        "most detailed level: {} draws decoded ({verts} vertices, {tris} triangles) from {read} bytes of the pack; {} would not decode {:?}; {missing} missing; detail.grkm is {} bytes\n",
+        geo.len(),
+        bad.len(),
+        &bad[..bad.len().min(12)],
+        bytes.len()
+    ));
+    // whole resources for checking the other streams: the largest detailed draw, one shared by several, one small
+    let mut by_size: Vec<(&u64, &Vec<u8>)> = cache.iter().collect();
+    by_size.sort_by_key(|(h, b)| (std::cmp::Reverse(b.len()), **h));
+    let shared = cache.keys().find(|h| rs.iter().filter(|r| r.hash == **h).count() > 1).copied();
+    let mut picks: Vec<u64> = by_size.first().map(|(h, _)| **h).into_iter().chain(shared).chain(by_size.iter().rev().find(|(_, b)| b.len() > 4096).map(|(h, _)| **h)).collect();
+    picks.dedup();
+    let mut saved = 0;
+    for h in picks {
+        let b = &cache[&h];
+        if saved + b.len() > 6 << 20 {
+            continue;
+        }
+        saved += b.len();
+        let recs: Vec<String> = rs.iter().enumerate().filter(|(_, r)| r.hash == h).map(|(k, _)| k.to_string()).collect();
+        let _ = std::fs::write(out.join("samples").join(format!("{h:016x}_records_{}.bin", recs.join("_"))), b);
+    }
+    o.push_str(&format!("{saved} bytes of whole resources under samples/; took {:.1}s\n", t0.elapsed().as_secs_f32()));
     o
 }
 
@@ -643,3 +616,75 @@ fn main() {
 
 #[allow(dead_code)]
 fn _unused(_: &Path) {}
+
+#[cfg(test)]
+mod tests {
+    /// Kratos's real draw and part tables with a stand-in pack whose resources are made to fit them:
+    /// `GOWRING_MESH=... GOWRING_MG=... GOWRING_MG_GPU=... cargo test -p gowring-launcher model -- --ignored`.
+    #[test]
+    #[ignore]
+    fn model_export_reads_each_parts_best_level_from_the_pack() {
+        let (Ok(mesh), Ok(mg), Ok(gpu)) = (std::env::var("GOWRING_MESH"), std::env::var("GOWRING_MG"), std::env::var("GOWRING_MG_GPU")) else { return };
+        let (mesh, mg, gpu) = (std::fs::read(mesh).unwrap(), std::fs::read(mg).unwrap(), std::fs::read(gpu).unwrap());
+        let rs = gowring_gow::kratos::mesh_records(&mesh);
+        // every streamed resource, sized to its draws, with positions at each draw's centre and a fan of triangles
+        let mut res: std::collections::BTreeMap<u64, Vec<u8>> = Default::default();
+        for r in rs.iter().filter(|r| r.hash != 0) {
+            let b = res.entry(r.hash).or_default();
+            let pos = r.streams.iter().find(|s| s.0 == 0).unwrap().3 as usize;
+            let end = (r.vertex_bytes as usize + 2 * r.indices as usize).max(pos + 12 * r.vertices as usize);
+            if b.len() < end {
+                b.resize(end, 0);
+            }
+            for v in 0..r.vertices as usize {
+                for c in 0..3 {
+                    b[pos + 12 * v + 4 * c..pos + 12 * v + 4 * c + 4].copy_from_slice(&r.centre[c].to_le_bytes());
+                }
+            }
+            for i in 0..r.indices as usize {
+                let at = r.vertex_bytes as usize + 2 * i;
+                b[at..at + 2].copy_from_slice(&((i % r.vertices as usize) as u16).to_le_bytes());
+            }
+        }
+        // one block per resource
+        let n = res.len();
+        let table = 16 + 24 * 2 * n;
+        let mut pack = Vec::new();
+        for v in [n as u32, n as u32, 0, 1] {
+            pack.extend(v.to_le_bytes());
+        }
+        let mut at = table as u64;
+        for (h, b) in &res {
+            pack.extend(at.to_le_bytes());
+            pack.extend(h.to_le_bytes());
+            pack.extend((b.len() as u32).to_le_bytes());
+            pack.extend(1u32.to_le_bytes());
+            at += b.len() as u64;
+        }
+        for (k, (h, b)) in res.iter().enumerate() {
+            for v in [k as u32, 0] {
+                pack.extend(v.to_le_bytes());
+            }
+            pack.extend(h.to_le_bytes());
+            pack.extend((b.len() as u32).to_le_bytes());
+            pack.extend(0u32.to_le_bytes());
+        }
+        for b in res.values() {
+            pack.extend_from_slice(b);
+        }
+        let dir = std::env::temp_dir().join(format!("gowring-model-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("root.lodpack"), &pack).unwrap();
+        let out = dir.join("kratos_model");
+        std::fs::create_dir_all(&out).unwrap();
+        let report = super::write_kratos_model(&dir.join("root.lodpack"), &mesh, &mg, &gpu, &out);
+        println!("{report}");
+        assert!(report.contains("451 draws decoded"), "{report}");
+        assert!(report.contains("0 would not decode") && report.contains("0 missing"), "{report}");
+        let grkm = std::fs::read(out.join("detail.grkm")).unwrap();
+        assert_eq!(&grkm[..4], b"GRKM");
+        assert_eq!(std::fs::read_to_string(out.join("parts.tsv")).unwrap().lines().count(), 1 + rs.len());
+        assert!(std::fs::read_dir(out.join("samples")).unwrap().count() >= 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

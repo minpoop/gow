@@ -1,7 +1,7 @@
-Forty-first alpha: another look at your Ragnarök install for Kratos's detailed model.
+Forty-second alpha: Kratos's detailed model, read straight from your Ragnarök install.
 
-- **Searching the right files first.** Last time the search for Kratos's detailed model spent its time on the big texture packs and stopped before reaching the level-of-detail packs (`.lodpack`), where his detailed model most likely is. It now searches `root.lodpack` first, then the other level-of-detail packs, and skips textures, shaders, video and sound.
-- **The packs' contents lists.** It also copies the small contents lists of the packs (`.toc` files, about 5 MB together), two small index files from the install, and the first 4 MB of the two shared level-of-detail packs into `%LOCALAPPDATA%\GowRing\kratos_probe\packs`, so the pack format can be worked out. Nothing leaves your PC unless you send it.
-- Your last run listed all 1,052 animation sets in Kratos's main animation file: they are mostly cutscene, story and traversal animations; his combat moves are kept elsewhere.
+- **Found it.** Kratos's detailed model is in your install's shared level-of-detail pack (`root.lodpack`), stored as one small piece per part of him. The earlier searches looked for one big block of data that is never stored that way. The mod now reads the pack's table of contents and takes his pieces directly.
+- **What it writes.** About three minutes into play, the background check reads the most detailed version of each of Kratos's 281 parts (about 60 MB of your pack, a few seconds) and writes a compact copy to `%LOCALAPPDATA%\GowRing\kratos_model` (about 21 MB): `detail.grkm` (shapes only), `parts.tsv` (a list of his parts) and a few whole pieces under `samples`. It runs once. Nothing leaves your PC unless you send it.
+- The search through your install's files and the copying of the packs' tables of contents are gone, since they are no longer needed.
 
 Nothing changes in game in this build.

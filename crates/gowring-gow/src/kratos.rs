@@ -347,11 +347,13 @@ impl Skeleton {
 /// distance (+0x00), a bounding radius (+0x0C), half extents (+0x10) and centre (+0x1C), then from +0x30: vertex
 /// bytes, index offset (+0x38), vertex offset (+0x40), vertex count, triangle count, a format code, the record's
 /// index, index count (+0x5C); at +0x80 the stream count (+0x84); at the offset in +0x60 one 8-byte entry per stream
-/// (semantic, format, components) and at the offset in +0x64 each stream's start within the vertex bytes. Streams
-/// are stored one after another, not interleaved. The vertex and index offsets address the character's whole GPU
-/// buffer, most of which is streamed from outside the WAD; the WAD's `MG_<name>_gpu` holds only the lowest level of
-/// each part, and for those the stream starts are absolute offsets in that chunk, the vertex-bytes field is where the
-/// streams end, and the u16 indices follow there. Stream formats (bytes per component): 0 f32, 1 16-bit, 2 32-bit,
+/// (semantic, format, components) and at the offset in +0x64 each stream's start; +0x68 the hash of the resource
+/// holding the draw (0 when it is in the WAD). Streams are stored one after another, not interleaved. A draw's bytes
+/// sit in a resource: the WAD's `MG_<name>_gpu` for the coarsest level of a part, a level-of-detail pack's resource
+/// (see [`crate::lodpack`]) for the others; one resource can hold several draws back to back. In its resource, the
+/// stream starts are offsets from the resource's start, and the u16 indices start at the vertex-bytes field (+0x30),
+/// so for a draw alone in its resource that field is its vertex bytes. The index and vertex offsets (+0x38, +0x40)
+/// address a whole-character buffer that is never stored as such. Stream formats (bytes per component): 0 f32, 1 16-bit, 2 32-bit,
 /// 3 packed 10:10:10:2 (one per vertex), 4 u16, 6 f16, 7 unorm16, 8 u8. Semantics: 0 position, 1 normal, 2 tangent,
 /// 3/4/5 UV sets, 9 bone indices (global joint numbers), 10 bone weights.
 #[derive(Clone, Debug, PartialEq)]
@@ -368,6 +370,8 @@ pub struct MeshRecord {
     pub indices: u32,
     /// (semantic, format, components, start within the vertex bytes) for each stream.
     pub streams: Vec<(u8, u8, u8, u32)>,
+    /// The resource holding the draw in a level-of-detail pack; 0 when it is in the WAD's GPU chunk.
+    pub hash: u64,
 }
 
 /// The draws in a `MESH_<name>` chunk.
@@ -397,6 +401,7 @@ pub fn mesh_records(b: &[u8]) -> Vec<MeshRecord> {
                 format: u32_at(b, o + 0x4C)?,
                 indices: u32_at(b, o + 0x5C)?,
                 streams,
+                hash: u64_at(b, o + 0x68)?,
             })
         })();
         match rec {
@@ -446,6 +451,83 @@ pub fn find_positions(bytes: &[u8], rec: &MeshRecord) -> Option<usize> {
         o += 4;
     }
     None
+}
+
+/// One level of detail of a part: `draws` records of the `MESH_` chunk from `first`, shown up to `distance`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Level {
+    pub draws: u16,
+    pub distance: f32,
+    pub first: u16,
+}
+
+/// The parts of a character mesh, from its `MG_<name>` chunk (worked out from Kratos's `MG_heroa00_0`): a u16 part
+/// count at +0x30 and from +0x44 one u32 offset per part. A part holds its level count at +2 and from +56 one u32
+/// offset (from the part's start) per level; a level is a u32 draw count, the f32 distance it is shown to, and at +10
+/// a u16 first record. Levels run from most to least detailed; the last has no draws.
+pub fn mg_parts(b: &[u8]) -> Vec<Vec<Level>> {
+    let n = u16_at(b, 0x30).unwrap_or(0) as usize;
+    (0..n.min(1 << 14))
+        .map_while(|p| {
+            let a = u32_at(b, 0x44 + 4 * p)? as usize;
+            let levels = *b.get(a + 2)? as usize;
+            (0..levels)
+                .map(|i| {
+                    let e = a + u32_at(b, a + 56 + 4 * i)? as usize;
+                    Some(Level { draws: u32_at(b, e)?.min(u16::MAX as u32) as u16, distance: f32::from_bits(u32_at(b, e + 4)?), first: u16_at(b, e + 10)? })
+                })
+                .collect::<Option<Vec<_>>>()
+        })
+        .collect()
+}
+
+/// A draw's positions and triangles, from the resource holding it; `None` unless every position is inside the
+/// record's bounds and every index names a vertex.
+pub fn draw_geometry(res: &[u8], rec: &MeshRecord) -> Option<(Vec<[f32; 3]>, Vec<[u16; 3]>)> {
+    let (_, fmt, comps, start) = *rec.streams.iter().find(|s| s.0 == 0)?;
+    if fmt != 0 || comps != 3 || rec.indices % 3 != 0 {
+        return None;
+    }
+    let nv = rec.vertices as usize;
+    let at = start as usize;
+    let pos = res.get(at..at + nv * 12)?;
+    if rec.positions_inside(pos) != nv {
+        return None;
+    }
+    let p = pos.chunks_exact(12).map(|c| [0, 4, 8].map(|k| f32::from_le_bytes(c[k..k + 4].try_into().unwrap()))).collect();
+    let ia = rec.vertex_bytes as usize;
+    let idx = res.get(ia..ia + rec.indices as usize * 2)?;
+    let t: Vec<[u16; 3]> = idx.chunks_exact(6).map(|c| [0, 2, 4].map(|k| u16::from_le_bytes([c[k], c[k + 1]]))).collect();
+    t.iter().flatten().all(|i| (*i as usize) < nv).then_some((p, t))
+}
+
+/// A compact copy of some draws' geometry, for a look at a model away from the player's PC: "GRKM", u32 version 1,
+/// u32 draws; per draw u32 record, u32 part, u32 vertices, u32 triangles, f32 centre[3], f32 half extents[3], then
+/// i16 positions scaled to the bounds (x, y, z per vertex), then u16 indices.
+pub fn compact_geometry(draws: &[(u32, u32, &MeshRecord, &[[f32; 3]], &[[u16; 3]])]) -> Vec<u8> {
+    let mut o = b"GRKM".to_vec();
+    o.extend(1u32.to_le_bytes());
+    o.extend((draws.len() as u32).to_le_bytes());
+    for (record, part, r, p, t) in draws {
+        for v in [*record, *part, p.len() as u32, t.len() as u32] {
+            o.extend(v.to_le_bytes());
+        }
+        let half = r.half_extent.map(|h| h + 0.01);
+        for v in r.centre.iter().chain(half.iter()) {
+            o.extend(v.to_le_bytes());
+        }
+        for v in p.iter() {
+            for c in 0..3 {
+                o.extend(((((v[c] - r.centre[c]) / half[c]).clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes());
+            }
+        }
+        for tri in t.iter() {
+            for i in tri {
+                o.extend(i.to_le_bytes());
+            }
+        }
+    }
+    o
 }
 
 /// Where `needle` first occurs in the file at `path` (its decompressed bytes when it is an LZ4 frame), read start to
@@ -963,8 +1045,119 @@ mod tests {
     }
 
     #[test]
+    fn parts_list_their_levels_most_detailed_first() {
+        // two parts: one with levels (1 draw from 0, then 1 from 1, then the empty last), one with 2 draws from 2
+        let mut b = vec![0u8; 0x44 + 8];
+        b[0x30..0x32].copy_from_slice(&2u16.to_le_bytes());
+        let part = |levels: &[(u32, f32, u16)]| {
+            let mut p = vec![0u8; 56 + 4 * levels.len()];
+            p[2] = levels.len() as u8;
+            let head = p.len();
+            for i in 0..levels.len() {
+                p[56 + 4 * i..60 + 4 * i].copy_from_slice(&((head + 16 * i) as u32).to_le_bytes());
+            }
+            for (n, d, first) in levels {
+                let mut e = vec![0u8; 16];
+                e[0..4].copy_from_slice(&n.to_le_bytes());
+                e[4..8].copy_from_slice(&d.to_le_bytes());
+                e[10..12].copy_from_slice(&first.to_le_bytes());
+                p.extend(e);
+            }
+            p
+        };
+        for (k, levels) in [vec![(1, 1280.0, 0), (1, 2560.0, 1), (0, 32767.0, 0)], vec![(2, 8.0, 2), (0, 32767.0, 0)]].iter().enumerate() {
+            let at = b.len() as u32;
+            b[0x44 + 4 * k..0x48 + 4 * k].copy_from_slice(&at.to_le_bytes());
+            b.extend(part(levels));
+        }
+        let ps = mg_parts(&b);
+        assert_eq!(ps.len(), 2);
+        assert_eq!(ps[0][1], Level { draws: 1, distance: 2560.0, first: 1 });
+        assert_eq!(ps[1][0], Level { draws: 2, distance: 8.0, first: 2 });
+        assert_eq!(ps[1][1].draws, 0);
+    }
+
+    #[test]
+    fn draws_sharing_a_resource_decode_from_their_own_streams_and_indices() {
+        // two triangles' worth of draws back to back, each: positions, a normal stream, then u16 indices
+        let rec = |at: u32, nv: u32, idx_at: u32| MeshRecord {
+            lod_distance: 1.0,
+            centre: [0.0, 1.0, 0.0],
+            half_extent: [0.5, 0.5, 0.5],
+            vertex_bytes: idx_at,
+            index_offset: 0,
+            vertex_offset: 0,
+            vertices: nv,
+            triangles: 1,
+            format: 0,
+            indices: 3,
+            streams: vec![(0, 0, 3, at), (1, 3, 1, at + nv * 12)],
+            hash: 0x1234,
+        };
+        let mut res = Vec::new();
+        let mut put = |pts: &[[f32; 3]], tri: [u16; 3]| {
+            let at = res.len() as u32;
+            for p in pts {
+                res.extend(p.iter().flat_map(|x| x.to_le_bytes()));
+            }
+            res.extend(vec![0u8; pts.len() * 4]);
+            let idx_at = res.len() as u32;
+            res.extend(tri.iter().flat_map(|i| i.to_le_bytes()));
+            while res.len() % 16 != 0 {
+                res.push(0);
+            }
+            rec(at, pts.len() as u32, idx_at)
+        };
+        let a = put(&[[0.1, 1.0, 0.0], [0.2, 1.1, 0.0], [0.0, 1.2, 0.1]], [0, 1, 2]);
+        let b = put(&[[-0.1, 0.9, 0.0], [-0.2, 0.8, 0.1], [0.0, 0.7, 0.2], [0.3, 0.6, 0.0]], [3, 1, 0]);
+        let (pa, ta) = draw_geometry(&res, &a).unwrap();
+        let (pb, tb) = draw_geometry(&res, &b).unwrap();
+        assert_eq!((pa[1], ta[0]), ([0.2, 1.1, 0.0], [0, 1, 2]));
+        assert_eq!((pb.len(), pb[3], tb[0]), (4, [0.3, 0.6, 0.0], [3, 1, 0]));
+        // read from the wrong place, the bounds check refuses it
+        let mut off = b.clone();
+        off.streams[0].3 += 4;
+        assert!(draw_geometry(&res, &off).is_none());
+        // a compact copy: header, then the first draw's scaled positions
+        let c = compact_geometry(&[(7, 3, &a, &pa, &ta)]);
+        assert_eq!(&c[..4], b"GRKM");
+        assert_eq!(u32::from_le_bytes(c[8..12].try_into().unwrap()), 1);
+        assert_eq!(u32::from_le_bytes(c[12..16].try_into().unwrap()), 7);
+        assert_eq!(c.len(), 12 + 16 + 24 + 3 * 6 + 3 * 2);
+        let x0 = i16::from_le_bytes([c[52], c[53]]) as f32 / 32767.0 * 0.51;
+        assert!((x0 - 0.1).abs() < 1e-3);
+    }
+
+    /// With a player's `MESH_heroa00_0`, `MG_heroa00_0`, `MG_heroa00_0_gpu` and decompressed `root.lodpack.toc`:
+    /// `GOWRING_MESH=... GOWRING_MG=... GOWRING_MG_GPU=... GOWRING_LODPACK_TOC=... cargo test -p gowring-gow
+    /// real_parts -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_parts_and_their_resources() {
+        let (Ok(mesh), Ok(mg), Ok(gpu), Ok(toc)) = (std::env::var("GOWRING_MESH"), std::env::var("GOWRING_MG"), std::env::var("GOWRING_MG_GPU"), std::env::var("GOWRING_LODPACK_TOC")) else { return };
+        let rs = mesh_records(&std::fs::read(mesh).unwrap());
+        let ps = mg_parts(&std::fs::read(mg).unwrap());
+        let gpu = std::fs::read(gpu).unwrap();
+        let toc = crate::lodpack::Toc::parse(&std::fs::read(toc).unwrap()).unwrap();
+        let mut seen = vec![0; rs.len()];
+        for l in ps.iter().flatten() {
+            for k in l.first..l.first + l.draws {
+                seen[k as usize] += 1;
+            }
+        }
+        assert!(seen.iter().all(|n| *n == 1), "every record in exactly one level");
+        let streamed = rs.iter().filter(|r| r.hash != 0).count();
+        let found = rs.iter().filter(|r| r.hash != 0 && toc.find(r.hash).is_some()).count();
+        let detail: Vec<usize> = ps.iter().flat_map(|l| (l[0].first..l[0].first + l[0].draws).map(|k| k as usize)).collect();
+        let resident_ok = detail.iter().filter(|k| rs[**k].hash == 0 && draw_geometry(&gpu, &rs[**k]).is_some()).count();
+        println!("{} parts, {} records ({streamed} streamed, {found} in the pack), {} most detailed ({resident_ok} decoded from the WAD)", ps.len(), rs.len(), detail.len());
+        assert_eq!(found, streamed);
+        assert!(resident_ok > 0);
+    }
+
+    #[test]
     fn a_records_positions_are_found_after_unrelated_bytes() {
-        let rec = MeshRecord { lod_distance: 1.0, centre: [0.0, 1.0, 0.0], half_extent: [0.1, 0.1, 0.1], vertex_bytes: 36, index_offset: 0, vertex_offset: 0, vertices: 3, triangles: 1, format: 0, indices: 3, streams: vec![] };
+        let rec = MeshRecord { lod_distance: 1.0, centre: [0.0, 1.0, 0.0], half_extent: [0.1, 0.1, 0.1], vertex_bytes: 36, index_offset: 0, vertex_offset: 0, vertices: 3, triangles: 1, format: 0, indices: 3, streams: vec![], hash: 0 };
         let mut b = vec![0xFFu8; 20]; // not floats in range
         for p in [[0.05f32, 1.02, -0.03], [0.0, 0.95, 0.01], [-0.08, 1.07, 0.09]] {
             b.extend(p.iter().flat_map(|x| x.to_le_bytes()));

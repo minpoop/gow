@@ -11,6 +11,7 @@ pub mod bnk;
 pub mod catalog;
 pub mod convert;
 pub mod dds;
+pub mod lodpack;
 pub mod lz4;
 pub mod diagnose;
 pub mod hudmap;
