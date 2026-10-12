@@ -99,6 +99,8 @@ pub struct Bridge {
     summoned_handles: Vec<FieldInsHandle>,
     /// Extra damage owed to the player from summons hitting harder (applied in `apply`, never lethal on its own).
     pending_hurt: i32,
+    /// Scaled enemies the game reset to their original health (respawned): (id, max HP to give back).
+    rescale: Vec<(u64, i32)>,
     /// Where living summons stand, from the last scan (for the damage multiplier).
     summon_positions: Vec<Vec3>,
     last_ppos: Vec3,
@@ -146,6 +148,7 @@ impl Bridge {
             summoned: HashSet::new(),
             summoned_handles: Vec::new(),
             pending_hurt: 0,
+            rescale: Vec::new(),
             summon_positions: Vec::new(),
             last_ppos: Vec3::ZERO,
             last_facing: Vec3::new(0.0, 0.0, 1.0),
@@ -415,6 +418,10 @@ impl Bridge {
             if let Some(want) = self.scaled.get(&id) {
                 if edata.max_hp < *want {
                     crate::log::once_u64("scale-reverted", id, "enemy_health", &format!("{id:#x}: max hp is back to {} (wrote {want}); the game resets it", edata.max_hp));
+                    // a respawned enemy (after a death or a rest) comes back at full, original health: scale it again
+                    if edata.hp > 0 && edata.hp >= edata.max_hp && !self.rescale.iter().any(|(i, _)| *i == id) {
+                        self.rescale.push((id, *want));
+                    }
                 }
             }
             let ealive = ehp > 0 && !e.chr_flags1c5.death_flag();
@@ -517,6 +524,21 @@ impl Bridge {
             None => return,
         };
         self.settle_debug_spawn(wcm, now);
+        for (id, want) in std::mem::take(&mut self.rescale) {
+            let Some(h) = self.handles.get(&id).copied() else { continue };
+            if let Some(chr) = wcm.chr_ins_by_handle_mut(&h) {
+                if let Some(d) = opt_mut(&mut chr.modules.data) {
+                    if d.hp > 0 && d.hp >= d.max_hp && d.max_hp < want {
+                        let before = d.max_hp;
+                        d.max_hp = want;
+                        d.max_uncapped_hp = d.max_uncapped_hp.max(want);
+                        d.base_hp = d.base_hp.max(want);
+                        d.hp = want;
+                        crate::log::once_u64("rescaled", id, "enemy_health", &format!("{id:#x}: respawned at {before} hp, scaled back to {want}"));
+                    }
+                }
+            }
+        }
         if self.pending_hurt > 0 {
             if let Some(p) = wcm.main_player.as_mut() {
                 if let Some(d) = opt_mut(&mut p.chr_ins.modules.data) {

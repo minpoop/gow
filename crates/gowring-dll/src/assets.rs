@@ -12,6 +12,41 @@ pub struct Texture {
     pub mask: bool,
 }
 
+/// Ragnarök's UI shapes sit inside textures with empty space around them and often top out below full alpha:
+/// crop to the visible shape and stretch its alpha to full, so the shape fills the HUD element and reads as solid.
+pub fn trim_mask(t: Texture) -> Texture {
+    let (w, h) = (t.w as usize, t.h as usize);
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
+    let mut top = 0u8;
+    for y in 0..h {
+        for x in 0..w {
+            let a = t.rgba[(y * w + x) * 4 + 3];
+            top = top.max(a);
+            if a > 8 {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x + 1);
+                y1 = y1.max(y + 1);
+            }
+        }
+    }
+    if x1 <= x0 || y1 <= y0 {
+        return t;
+    }
+    let (nw, nh) = (x1 - x0, y1 - y0);
+    let gain = if top > 0 { 255.0 / top as f32 } else { 1.0 };
+    let mut rgba = Vec::with_capacity(nw * nh * 4);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) * 4;
+            // stretched to full and boosted, so a faint interior reads as a solid shape; soft edges stay soft
+            let a = (t.rgba[i + 3] as f32 * gain * 3.0).round().min(255.0) as u8;
+            rgba.extend_from_slice(&[255, 255, 255, a]);
+        }
+    }
+    Texture { w: nw as u32, h: nh as u32, rgba, mask: true }
+}
+
 /// Every visible pixel near white and without colour.
 pub fn is_mask(rgba: &[u8]) -> bool {
     let mut seen = false;
@@ -54,7 +89,8 @@ fn decode_png(path: &Path) -> Result<Texture, String> {
         other => return Err(format!("unsupported PNG colour type {other:?}")),
     };
     let mask = is_mask(&rgba);
-    Ok(Texture { w: info.width, h: info.height, rgba, mask })
+    let t = Texture { w: info.width, h: info.height, rgba, mask };
+    Ok(if mask { trim_mask(t) } else { t })
 }
 
 pub fn load(cache: &Path, channel: &str) -> Store {
@@ -84,4 +120,26 @@ pub fn load(cache: &Path, channel: &str) -> Store {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mask_is_cropped_to_its_shape_and_made_solid() {
+        // 8x4 texture, shape in columns 2..6 of row 1..3 at alpha 128
+        let mut rgba = vec![0u8; 8 * 4 * 4];
+        for y in 1..3 {
+            for x in 2..6 {
+                let i = (y * 8 + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 128]);
+            }
+        }
+        assert!(is_mask(&rgba));
+        let t = trim_mask(Texture { w: 8, h: 4, rgba, mask: true });
+        assert_eq!((t.w, t.h), (4, 2));
+        assert!(t.rgba.chunks_exact(4).all(|p| p[3] == 255));
+        assert!(!is_mask(&[200, 40, 40, 255]), "a coloured picture is not a mask");
+    }
 }

@@ -155,7 +155,12 @@ impl ImguiRenderLoop for Overlay {
                         };
                         match tex(*frame) {
                             // Ragnarök's housing shapes are white masks: a dark body in that shape, the fill in the same shape
-                            Some(t) if frame_mask => image(t, rect, 0.82 * alpha, 0x17140F),
+                            Some(t) if frame_mask => {
+                                // a bronze edge (the same shape a little larger), then a solid dark body
+                                let edge = Rect { x: rect.x - 2.0, y: rect.y - 2.0, w: rect.w + 4.0, h: rect.h + 4.0 };
+                                image(t, &edge, 0.9 * alpha, 0xC9A15A);
+                                image(t, rect, 0.95 * alpha, 0x17140F);
+                            }
                             Some(t) => image(t, rect, *alpha, 0xFFFFFF),
                             None => {
                                 dl.add_rect([x0, y0], [x1, y1], col(0x101010, 0.65 * alpha)).filled(true).build();
