@@ -46,6 +46,12 @@ fn apply_hud_choices(ctx: &Ctx) {
             text = filled;
         }
     }
+    if let Some(grown) = gowring_gow::hudmap::add_new_pieces(&text, &pieces) {
+        if std::fs::write(&path, &grown).is_ok() {
+            ctx.log("ragnarok_hud: new HUD pieces listed (your choices kept)");
+            text = grown;
+        }
+    }
     match gowring_gow::hudmap::parse(&text) {
         Ok(choices) => {
             let outputs: Vec<(&str, &str)> = hud_pieces().iter().map(|(id, _, out)| (*id, *out)).collect();

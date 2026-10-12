@@ -54,6 +54,23 @@ pub fn fill_suggestions(text: &str, pieces: &[(&str, &str)], suggestions: &[(&st
     (added > 0).then(|| render(pieces, &values, true))
 }
 
+/// List HUD pieces a newer version added (for example the runic icons) in a file that predates them, keeping every
+/// choice and the starter-choices marker. `None` when nothing is missing or the file cannot be read.
+pub fn add_new_pieces(text: &str, pieces: &[(&str, &str)]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(text).ok()?;
+    let obj = v.as_object()?;
+    if pieces.iter().all(|(id, _)| obj.contains_key(*id)) {
+        return None;
+    }
+    let values: Vec<(String, String)> = obj
+        .iter()
+        .filter(|(k, _)| !k.starts_with('_'))
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.trim().to_string())))
+        .filter(|(_, s)| !s.is_empty())
+        .collect();
+    Some(render(pieces, &values, obj.contains_key("_suggestions_applied")))
+}
+
 /// The non-empty choices: (HUD piece id, texture name).
 pub fn parse(text: &str) -> Result<Vec<(String, String)>> {
     let v: serde_json::Value = serde_json::from_str(text)?;
@@ -144,6 +161,18 @@ mod tests {
         let r = apply(&[("hud_rage_fill".into(), "TX_missing".into())], &ui, &cache, &outputs);
         assert!(r.contains("not found"), "{r}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_pieces_are_listed_without_touching_choices() {
+        let old = [("hud_health_frame", "health frame")];
+        let now = [("hud_health_frame", "health frame"), ("hud_icon_runic_glacial", "Glacial Cleave icon")];
+        let mine = render(&old, &[("hud_health_frame".into(), "TX_mine".into())], true);
+        let grown = add_new_pieces(&mine, &now).expect("a piece to add");
+        assert!(grown.contains("\"hud_icon_runic_glacial\": \"\""), "{grown}");
+        assert!(grown.contains("_suggestions_applied"), "the marker stays");
+        assert_eq!(parse(&grown).unwrap(), vec![("hud_health_frame".to_string(), "TX_mine".to_string())]);
+        assert!(add_new_pieces(&grown, &now).is_none(), "nothing more to add");
     }
 
     #[test]

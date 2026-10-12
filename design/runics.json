@@ -116,7 +116,7 @@
    "fx": "frost",
    "rage_gain": 4.0,
    "sfx": "sfx_runic_ready",
-   "icon": "hud_icon_axe",
+   "icon": "hud_icon_runic_frost_wave",
    "effect": "A frost shockwave in front of Kratos that freezes what it hits.",
    "windup_s": 0.35
   },
@@ -136,7 +136,7 @@
    "fx": "frost",
    "rage_gain": 8.0,
    "sfx": "sfx_runic_ready",
-   "icon": "hud_icon_axe",
+   "icon": "hud_icon_runic_glacial",
    "effect": "A long ice blade that cleaves a line and freezes it.",
    "windup_s": 0.6
   },
@@ -156,7 +156,7 @@
    "fx": "fire",
    "rage_gain": 4.0,
    "sfx": "sfx_runic_ready",
-   "icon": "hud_icon_blades",
+   "icon": "hud_icon_runic_flame_lash",
    "effect": "A ring of fire that sets surrounding enemies alight.",
    "windup_s": 0.3
   },
@@ -176,7 +176,7 @@
    "fx": "fire",
    "rage_gain": 8.0,
    "sfx": "sfx_runic_ready",
-   "icon": "hud_icon_blades",
+   "icon": "hud_icon_runic_inferno",
    "effect": "A spinning wall of fire that keeps burning.",
    "windup_s": 0.55
   },
@@ -196,7 +196,7 @@
    "fx": "blast",
    "rage_gain": 4.0,
    "sfx": "sfx_runic_ready",
-   "icon": "hud_icon_spear",
+   "icon": "hud_icon_runic_spark",
    "effect": "A volley of explosive spears down a line.",
    "windup_s": 0.35
   },
@@ -216,7 +216,7 @@
    "fx": "blast",
    "rage_gain": 8.0,
    "sfx": "sfx_runic_ready",
-   "icon": "hud_icon_spear",
+   "icon": "hud_icon_runic_spear_storm",
    "effect": "A storm of spears that detonate in a column around the target.",
    "windup_s": 0.6
   }

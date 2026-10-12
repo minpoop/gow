@@ -90,9 +90,12 @@ pub struct Rect {
 
 #[derive(Clone, Debug)]
 pub enum DrawCmd {
-    Bar { rect: Rect, frac: f32, trail: f32, frame: Option<&'static str>, fill: Option<&'static str>, color: u32, alpha: f32 },
-    Ring { cx: f32, cy: f32, r: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, alpha: f32 },
-    Icon { rect: Rect, asset: Option<&'static str>, color: u32, alpha: f32 },
+    /// `color` fills the bar, glowing to `lead` at the leading edge; `segments` > 1 splits it (the Rage meter).
+    Bar { rect: Rect, frac: f32, trail: f32, frame: Option<&'static str>, fill: Option<&'static str>, color: u32, lead: u32, segments: u32, alpha: f32 },
+    /// A runic plate `rx` by `ry` from its centre: `color` its face, `light` its lit tone.
+    Ring { cx: f32, cy: f32, rx: f32, ry: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, light: u32, alpha: f32 },
+    /// `mono`: drawn as a white silhouette (Ragnarök's glyph style) when there is no picture for it.
+    Icon { rect: Rect, asset: Option<&'static str>, color: u32, alpha: f32, mono: bool },
     Text { rect: Rect, px: f32, text: String, color: u32, alpha: f32, align: Align, plate: Option<&'static str>, portrait: Option<&'static str> },
     Prompt { rect: Rect, text: Option<String>, glyph: Option<&'static str>, backing: Option<&'static str>, color: u32, alpha: f32 },
     Overlay { color: u32, alpha: f32 },
@@ -164,6 +167,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             continue;
         }
         let color = h.color;
+        let (lead, segments) = (h.lead, h.segments.max(1) as u32);
         match h.bind {
             HudBind::PlayerHp => out.push(DrawCmd::Bar {
                 rect: rect_at(h),
@@ -172,6 +176,8 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                 frame: h.frame,
                 fill: h.fill,
                 color,
+                lead,
+                segments,
                 alpha: 1.0,
             }),
             HudBind::PlayerRage => out.push(DrawCmd::Bar {
@@ -181,51 +187,65 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                 frame: h.frame,
                 fill: h.fill,
                 color,
-                alpha: if s.rage_ready || s.rage_active { pulse_alpha } else { 1.0 },
+                lead,
+                segments,
+                alpha: if s.rage_active { pulse_alpha } else { 1.0 },
             }),
-            HudBind::RageReady => out.push(DrawCmd::Prompt {
-                rect: rect_at(h),
-                text: Some("L3 + R3".into()),
-                glyph: h.glyph,
-                backing: h.frame,
-                color,
-                alpha: pulse_alpha,
-            }),
+            // Ragnarök's prompt: the two stick buttons, on fire
+            HudBind::RageReady => out.push(DrawCmd::Shapes { prims: vector::rage_prompt(&rect_at(h), s.pulse, 1.0) }),
             HudBind::RunicLightCd | HudBind::RunicHeavyCd => {
                 let r = if h.bind == HudBind::RunicLightCd { &s.runic_light } else { &s.runic_heavy };
                 let Some(r) = r else { continue };
                 let rc = rect_at(h);
-                // light on top, heavy below, like Ragnarök's pair; a small pointer says which way on the D-pad
-                let up = h.bind == HudBind::RunicLightCd;
-                let tip = if up { rc.y - 12.0 * k * us } else { rc.y + rc.h + 12.0 * k * us };
-                out.push(DrawCmd::Shapes { prims: vector::pointer(rc.x + rc.w / 2.0, tip, 6.0 * k * us, up, vector::lighten(color, 0.3), 0.8) });
+                // light on top, heavy below, like Ragnarök's pair, each with its own glyph; the sheet's box includes the plate's outer silver line
+                let inset = 4.0 * k * us;
                 out.push(DrawCmd::Ring {
                     cx: rc.x + rc.w / 2.0,
                     cy: rc.y + rc.h / 2.0,
-                    r: rc.w.min(rc.h) / 2.0,
+                    rx: rc.w / 2.0 - inset,
+                    ry: rc.h / 2.0 - inset,
                     remaining: r.remaining_frac,
                     ready: r.ready,
                     frame: h.frame,
                     glow: h.fill,
-                    icon: s.weapon_icon,
+                    icon: d.runic(r.id).icon.or(s.weapon_icon),
                     color,
-                    alpha: if r.ready { pulse_alpha } else { 0.9 },
+                    light: lead,
+                    alpha: 1.0,
                 });
             }
             HudBind::WeaponCurrent | HudBind::ShieldState => {
                 // Ragnarök's cluster: the weapon on a round plate next to the bars, the shield on an octagon where
                 // Ragnarök keeps the relic
                 let rc = rect_at(h);
-                let (cx, cy, r) = (rc.x + rc.w / 2.0, rc.y + rc.h / 2.0, rc.w.min(rc.h) / 2.0);
-                let (sides, asset, alpha) = match h.bind {
-                    HudBind::WeaponCurrent => (0, s.weapon_icon, 1.0),
-                    _ => (8, h.glyph, if s.shield_drawn { 1.0 } else { 0.35 }),
-                };
-                out.push(DrawCmd::Shapes { prims: vector::badge(cx, cy, r, sides, 0x22201C, 0xB9AE92, 0.85) });
-                let inner = r * 0.68;
-                out.push(DrawCmd::Icon { rect: Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 }, asset, color, alpha });
+                let (cx, cy) = (rc.x + rc.w / 2.0, rc.y + rc.h / 2.0);
+                if h.bind == HudBind::WeaponCurrent {
+                    let r = rc.w.min(rc.h) / 2.0;
+                    let mut prims = vector::plate(vector::PlateShape::Disc, cx, cy, r, r, vector::shade(lead, 0.5), lead, 1.0, 1.0);
+                    // the fine line that runs from the plate between the health and Rage bars, with its stud
+                    let len = 330.0 * k * us;
+                    for i in 0..8 {
+                        let (a, b) = (cx + r + len * i as f32 / 8.0, cx + r + len * (i + 1) as f32 / 8.0);
+                        prims.push(vector::Prim::Line { a: (a, cy), b: (b, cy), thick: (1.2 * k * us).max(1.0), color: 0xD0CCD4, alpha: 0.7 * (1.0 - i as f32 / 8.0) });
+                    }
+                    let d = (3.2 * k * us).max(2.0);
+                    let stud = vec![(cx + r, cy - d), (cx + r + d, cy), (cx + r, cy + d), (cx + r - d, cy)];
+                    prims.push(vector::Prim::Poly { pts: stud.clone(), color: 0x1A181C, alpha: 0.95 });
+                    for i in 0..4 {
+                        prims.push(vector::Prim::Line { a: stud[i], b: stud[(i + 1) % 4], thick: (1.0 * k * us).max(1.0), color: 0xE8E4EC, alpha: 0.9 });
+                    }
+                    out.push(DrawCmd::Shapes { prims });
+                    let inner = r * 0.62;
+                    out.push(DrawCmd::Icon { rect: Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 }, asset: s.weapon_icon, color, alpha: 1.0, mono: true });
+                } else {
+                    let (rx, ry) = (rc.w / 2.0 - 4.0 * k * us, rc.h / 2.0 - 4.0 * k * us);
+                    out.push(DrawCmd::Shapes { prims: vector::plate(vector::PlateShape::Octagon, cx, cy, rx, ry, vector::shade(lead, 0.35), lead, 1.0, 1.0) });
+                    let inner = ry * 0.66;
+                    let alpha = if s.shield_drawn { 1.0 } else { 0.55 };
+                    out.push(DrawCmd::Icon { rect: Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 }, asset: h.glyph, color, alpha, mono: true });
+                }
             }
-            HudBind::ThrowAim => out.push(DrawCmd::Icon { rect: rect_at(h), asset: h.glyph, color, alpha: 0.95 }),
+            HudBind::ThrowAim => out.push(DrawCmd::Icon { rect: rect_at(h), asset: h.glyph, color, alpha: 0.95, mono: false }),
             HudBind::RecallState => out.push(DrawCmd::Prompt { rect: rect_at(h), text: Some(s.recall_label.to_string()), glyph: h.glyph, backing: None, color, alpha: 1.0 }),
             HudBind::Finisher => out.push(DrawCmd::Prompt { rect: rect_at(h), text: Some("Finish".into()), glyph: h.glyph, backing: h.frame, color, alpha: pulse_alpha }),
             HudBind::EnemyHp | HudBind::EnemyStun | HudBind::EnemyStunned => {
@@ -234,12 +254,12 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     let (w, hh) = (h.w as f32 * k * us, h.h as f32 * k * us);
                     let rc = Rect { x: px - w / 2.0 + h.x as f32 * k * 0.0, y: py + h.y as f32 * k, w, h: hh };
                     match h.bind {
-                        HudBind::EnemyHp => out.push(DrawCmd::Bar { rect: rc, frac: e.hp_frac, trail: e.hp_frac, frame: h.frame, fill: h.fill, color, alpha: 0.95 }),
+                        HudBind::EnemyHp => out.push(DrawCmd::Bar { rect: rc, frac: e.hp_frac, trail: e.hp_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 0.95 }),
                         HudBind::EnemyStun => {
-                            out.push(DrawCmd::Bar { rect: rc, frac: e.stun_frac, trail: e.stun_frac, frame: h.frame, fill: h.fill, color, alpha: 0.95 });
+                            out.push(DrawCmd::Bar { rect: rc, frac: e.stun_frac, trail: e.stun_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 0.95 });
                             if e.status_frac > 0.01 && e.status_color != 0 {
                                 let thin = Rect { y: rc.y + rc.h + 2.0 * k * us, h: (rc.h * 0.5).max(2.0), ..rc };
-                                out.push(DrawCmd::Bar { rect: thin, frac: e.status_frac, trail: e.status_frac, frame: None, fill: None, color: e.status_color, alpha: 0.95 });
+                                out.push(DrawCmd::Bar { rect: thin, frac: e.status_frac, trail: e.status_frac, frame: None, fill: None, color: e.status_color, lead: vector::lighten(e.status_color, 0.4), segments: 1, alpha: 0.95 });
                             }
                             if let Some(label) = e.status_label {
                                 let tag = Rect { y: rc.y + rc.h * 2.0 + 6.0 * k * us, h: 16.0 * k * us, ..rc };
@@ -247,19 +267,19 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                                 out.push(DrawCmd::Text { rect: tag, px: 14.0 * k * us, text: label.to_string(), color: tint, alpha: 1.0, align: Align::Center, plate: None, portrait: None });
                             }
                         }
-                        _ if e.stunned => out.push(DrawCmd::Icon { rect: rc, asset: h.glyph, color, alpha: pulse_alpha }),
+                        _ if e.stunned => out.push(DrawCmd::Icon { rect: rc, asset: h.glyph, color, alpha: pulse_alpha, mono: false }),
                         _ => {}
                     }
                 }
             }
             HudBind::BossHp => {
                 if let Some(b) = &s.boss {
-                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.hp_frac, trail: b.hp_frac, frame: h.frame, fill: h.fill, color, alpha: 1.0 });
+                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.hp_frac, trail: b.hp_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 1.0 });
                 }
             }
             HudBind::BossStun => {
                 if let Some(b) = &s.boss {
-                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.stun_frac, trail: b.stun_frac, frame: h.frame, fill: h.fill, color, alpha: 1.0 });
+                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.stun_frac, trail: b.stun_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 1.0 });
                 }
             }
             HudBind::MimirSubtitle => {
@@ -319,7 +339,7 @@ mod tests {
         assert!(!cmds.iter().any(|c| matches!(c, DrawCmd::Overlay { .. } | DrawCmd::Text { .. })));
         // health bar sits where the sheet says (virtual == real at 1080p)
         let DrawCmd::Bar { rect, frac, .. } = &cmds[0] else { panic!() };
-        assert_eq!((rect.x, rect.y, rect.w, rect.h), (245.0, 939.0, 390.0, 19.0));
+        assert_eq!((rect.x, rect.y, rect.w, rect.h), (243.0, 939.0, 392.0, 19.0));
         assert_eq!(*frac, 0.8);
     }
 
@@ -331,11 +351,11 @@ mod tests {
         let cmds = draw_list(d, &s, Screen { w: 1920.0, h: 1080.0 }, &project);
         let DrawCmd::Bar { rect, .. } = &cmds[0] else { panic!() };
         // bottom-left anchored: distance from the corner and size both double
-        assert_eq!((rect.x, 1080.0 - (rect.y + rect.h), rect.w, rect.h), (490.0, 244.0, 780.0, 38.0));
+        assert_eq!((rect.x, 1080.0 - (rect.y + rect.h), rect.w, rect.h), (486.0, 244.0, 784.0, 38.0));
         // the weapon icon's centre keeps its distance from the bottom-left corner times the scale
         let icon = cmds.iter().find_map(|c| if let DrawCmd::Icon { rect, .. } = c { Some(*rect) } else { None }).unwrap();
         let (cx, cy) = (icon.x + icon.w / 2.0, icon.y + icon.h / 2.0);
-        assert!((cx - 422.0).abs() < 1e-3 && ((1080.0 - cy) - 240.0).abs() < 1e-3, "{icon:?}");
+        assert!((cx - 423.0).abs() < 1e-3 && ((1080.0 - cy) - 237.0).abs() < 1e-3, "{icon:?}");
     }
 
     #[test]
@@ -349,23 +369,42 @@ mod tests {
         for c in &cmds {
             match c {
                 DrawCmd::Bar { rect, .. } | DrawCmd::Icon { rect, .. } | DrawCmd::Prompt { rect, .. } => rects.push(*rect),
-                DrawCmd::Ring { cx, cy, r, .. } => rects.push(Rect { x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0 }),
+                DrawCmd::Ring { cx, cy, rx, ry, .. } => rects.push(Rect { x: cx - rx, y: cy - ry, w: rx * 2.0, h: ry * 2.0 }),
+                DrawCmd::Shapes { prims } => {
+                    let pts: Vec<(f32, f32)> = prims
+                        .iter()
+                        .flat_map(|p| match p {
+                            vector::Prim::Tri { p, .. } => p.to_vec(),
+                            vector::Prim::Line { a, b, .. } => vec![*a, *b],
+                            vector::Prim::Circle { c, r, .. } => vec![(c.0 - r, c.1 - r), (c.0 + r, c.1 + r)],
+                            vector::Prim::Poly { pts, .. } => pts.clone(),
+                            vector::Prim::Grad { x0, y0, x1, y1, .. } => vec![(*x0, *y0), (*x1, *y1)],
+                        })
+                        .collect();
+                    let (x0, x1) = (pts.iter().map(|q| q.0).fold(f32::MAX, f32::min), pts.iter().map(|q| q.0).fold(f32::MIN, f32::max));
+                    let (y0, y1) = (pts.iter().map(|q| q.1).fold(f32::MAX, f32::min), pts.iter().map(|q| q.1).fold(f32::MIN, f32::max));
+                    rects.push(Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+                }
                 _ => {}
             }
         }
-        // health, rage, prompt, two runics, weapon, shield: all inside the corner, all on screen
-        assert_eq!(rects.len(), 7);
+        // health, rage, two runics, weapon (plate + glyph), shield (plate + glyph), the L3 + R3 prompt: all inside
+        // the corner, all on screen
+        assert_eq!(rects.len(), 9);
         for r in &rects {
             assert!(r.x >= 0.0 && r.x + r.w < 700.0 && r.y > 850.0 && r.y + r.h <= 1080.0, "{r:?}");
         }
         let ring_y: Vec<f32> = cmds.iter().filter_map(|c| if let DrawCmd::Ring { cy, .. } = c { Some(*cy) } else { None }).collect();
         assert!(ring_y[0] < ring_y[1], "light runic above heavy");
-        // the weapon and the shield sit on plates, and each runic has its D-pad pointer
-        assert_eq!(cmds.iter().filter(|c| matches!(c, DrawCmd::Shapes { .. })).count(), 4);
+        // each runic shows its own glyph, not the weapon's
+        let icons: Vec<_> = cmds.iter().filter_map(|c| if let DrawCmd::Ring { icon, .. } = c { *icon } else { None }).collect();
+        assert_eq!(icons, vec!["hud_icon_runic_frost_wave", "hud_icon_runic_glacial"]);
+        // the weapon and the shield sit on plates; the prompt is drawn as shapes
+        assert_eq!(cmds.iter().filter(|c| matches!(c, DrawCmd::Shapes { .. })).count(), 3);
         // Rage sits under health, the prompt under Rage
         let DrawCmd::Bar { rect: hp, .. } = &cmds[0] else { panic!() };
         let DrawCmd::Bar { rect: rage, .. } = &cmds[1] else { panic!() };
-        assert!(rage.y > hp.y + hp.h && (rage.x - hp.x).abs() < 4.0);
+        assert!(rage.y > hp.y + hp.h && (rage.x - hp.x).abs() < 8.0);
     }
 
     #[test]
@@ -374,10 +413,10 @@ mod tests {
         let cmds = draw_list(d, &base_state(), Screen { w: 2560.0, h: 1080.0 }, &project);
         let DrawCmd::Bar { rect, .. } = &cmds[0] else { panic!() };
         // 21:9: scale 1.0, 320 px of side bars
-        assert!((rect.x - (320.0 + 245.0)).abs() < 1e-3);
+        assert!((rect.x - (320.0 + 243.0)).abs() < 1e-3);
         let cmds = draw_list(d, &base_state(), Screen { w: 3840.0, h: 2160.0 }, &project);
         let DrawCmd::Bar { rect, .. } = &cmds[0] else { panic!() };
-        assert!((rect.x - 490.0).abs() < 1e-3 && (rect.w - 780.0).abs() < 1e-3);
+        assert!((rect.x - 486.0).abs() < 1e-3 && (rect.w - 784.0).abs() < 1e-3);
     }
 
     #[test]
@@ -401,7 +440,7 @@ mod tests {
         let icons = cmds.iter().filter(|c| matches!(c, DrawCmd::Icon { .. })).count();
         assert_eq!(icons, 4 + 0, "weapon, shield, crosshair, one stunned marker");
         let prompts: Vec<_> = cmds.iter().filter_map(|c| if let DrawCmd::Prompt { text: Some(t), .. } = c { Some(t.clone()) } else { None }).collect();
-        assert!(prompts.contains(&"Recall".to_string()) && prompts.contains(&"Finish".to_string()) && prompts.contains(&"L3 + R3".to_string()));
+        assert!(prompts.contains(&"Recall".to_string()) && prompts.contains(&"Finish".to_string()));
     }
 
     #[test]

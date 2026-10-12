@@ -137,6 +137,8 @@ impl ImguiRenderLoop for Overlay {
             }
             let weapon_age = self.weapon_seen.1.elapsed().as_secs_f32();
             let tex = |id: Option<&'static str>| id.and_then(|i| self.textures.get(i).copied());
+            // a full-colour picture (not one of Ragnarök's white shapes the HUD colours itself)
+            let is_picture = |id: Option<&'static str>| id.is_some_and(|i| self.textures.contains_key(i) && !self.masks.contains(i));
             let image = |t: (TextureId, f32, f32), r: &Rect, a: f32, tint: u32| {
                 dl.add_image(t.0, [r.x, r.y], [r.x + r.w, r.y + r.h]).col(col(tint, a)).build();
             };
@@ -148,61 +150,51 @@ impl ImguiRenderLoop for Overlay {
                         }
                     }
                     DrawCmd::Shapes { prims } => draw_prims(&dl, prims),
-                    DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha } if tex(*frame).is_none() && tex(*fill).is_none() => {
-                        draw_prims(&dl, &gowring_core::vector::bar(rect, *frac, *trail, *color, *alpha));
+                    // Ragnarök's own bar pictures are plain white bar shapes, so bars are drawn in Ragnarök's look by the
+                    // HUD itself; only a full-colour picture chosen for a bar replaces that drawing.
+                    DrawCmd::Bar { rect, frac, trail, frame, fill, color, lead, segments, alpha } if !is_picture(*frame) && !is_picture(*fill) => {
+                        draw_prims(&dl, &gowring_core::vector::rbar(rect, *frac, *trail, *color, *lead, *segments, *alpha));
                     }
-                    DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha } => {
+                    DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha, .. } => {
                         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
-                        let is_mask = |id: Option<&'static str>| id.map(|i| self.masks.contains(i)).unwrap_or(false);
-                        let frame_mask = is_mask(*frame);
-                        // a picture clipped to the left `f` of the bar, tinted
-                        let clipped = |t: (TextureId, f32, f32), f: f32, tint: u32, a: f32| {
-                            dl.add_image(t.0, [x0, y0], [x0 + rect.w * f, y1]).uv_min([0.0, 0.0]).uv_max([f, 1.0]).col(col(tint, a)).build();
-                        };
                         match tex(*frame) {
-                            // Ragnarök's housing shapes are white masks: a dark body in that shape, the fill in the same shape
-                            Some(t) if frame_mask => {
-                                // a bronze edge (the same shape a little larger), then a solid dark body
-                                let edge = Rect { x: rect.x - 2.0, y: rect.y - 2.0, w: rect.w + 4.0, h: rect.h + 4.0 };
-                                image(t, &edge, 0.9 * alpha, 0xC9A15A);
-                                image(t, rect, 0.95 * alpha, 0x17140F);
-                            }
-                            Some(t) => image(t, rect, *alpha, 0xFFFFFF),
-                            None => {
+                            Some(t) if is_picture(*frame) => image(t, rect, *alpha, 0xFFFFFF),
+                            _ => {
                                 dl.add_rect([x0, y0], [x1, y1], col(0x101010, 0.65 * alpha)).filled(true).build();
                             }
                         }
-                        // the lagging "recent damage" trail, then the fill
+                        // the lagging "recent damage" trail, then the fill (a picture clipped to the fraction)
                         if *trail > *frac {
-                            match tex(*frame) {
-                                Some(t) if frame_mask => clipped(t, *trail, 0xE8E2C8, 0.45 * alpha),
-                                _ => {
-                                    dl.add_rect([x0, y0], [x0 + rect.w * trail, y1], col(0xE8E2C8, 0.45 * alpha)).filled(true).build();
-                                }
-                            }
+                            dl.add_rect([x0, y0], [x0 + rect.w * trail, y1], col(0xE8E2C8, 0.45 * alpha)).filled(true).build();
                         }
-                        let fill_t = tex(*fill).or(if frame_mask { tex(*frame) } else { None });
-                        match fill_t {
-                            Some(t) => {
-                                let tinted = is_mask(*fill) || tex(*fill).is_none();
-                                clipped(t, *frac, if tinted { *color } else { 0xFFFFFF }, *alpha);
+                        match tex(*fill) {
+                            Some(t) if is_picture(*fill) => {
+                                dl.add_image(t.0, [x0, y0], [x0 + rect.w * frac, y1]).uv_min([0.0, 0.0]).uv_max([*frac, 1.0]).col(col(0xFFFFFF, *alpha)).build();
                             }
-                            None => {
+                            _ => {
                                 dl.add_rect([x0, y0], [x0 + rect.w * frac, y1], col(*color, *alpha)).filled(true).build();
                             }
                         }
                     }
-                    DrawCmd::Ring { cx, cy, r, remaining, ready, frame, icon, color, alpha, .. } if tex(*frame).is_none() => {
-                        draw_prims(&dl, &gowring_core::vector::ring(*cx, *cy, *r, *remaining, *ready, *color, *alpha, *icon));
-                    }
-                    DrawCmd::Ring { cx, cy, r, remaining, ready, frame, glow, icon, color, alpha } => {
-                        let rect = Rect { x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0 };
-                        match tex(*frame) {
-                            Some(t) => image(t, &rect, *alpha, 0xFFFFFF),
+                    // a runic plate in Ragnarök's look, lit from the bottom up as it recharges, with the runic's glyph
+                    DrawCmd::Ring { cx, cy, rx, ry, remaining, frame, icon, color, light, alpha, .. } if !is_picture(*frame) => {
+                        draw_prims(&dl, &gowring_core::vector::plate(gowring_core::vector::PlateShape::Diamond, *cx, *cy, *rx, *ry, *color, *light, 1.0 - remaining, *alpha));
+                        let side = ry * 0.62;
+                        let inner = Rect { x: cx - side, y: cy - side, w: side * 2.0, h: side * 2.0 };
+                        let dim = if *remaining > 0.001 { 0.6 } else { 1.0 };
+                        match tex(*icon) {
+                            Some(t) => image(t, &inner, alpha * dim, 0xFFFFFF),
                             None => {
-                                dl.add_circle([*cx, *cy], *r, col(0x101010, 0.55 * alpha)).filled(true).num_segments(48).build();
-                                dl.add_circle([*cx, *cy], *r, col(*color, *alpha)).thickness(3.0).num_segments(48).build();
+                                if let Some(v) = icon.and_then(|id| gowring_core::vector::mono_icon(id, &inner, 0xFFFFFF, alpha * dim)) {
+                                    draw_prims(&dl, &v);
+                                }
                             }
+                        }
+                    }
+                    DrawCmd::Ring { cx, cy, rx: r, remaining, ready, frame, glow, icon, color, alpha, .. } => {
+                        let rect = Rect { x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0 };
+                        if let Some(t) = tex(*frame) {
+                            image(t, &rect, *alpha, 0xFFFFFF);
                         }
                         if let Some(t) = tex(*icon) {
                             let inner = Rect { x: cx - r * 0.62, y: cy - r * 0.62, w: r * 1.24, h: r * 1.24 };
@@ -228,19 +220,19 @@ impl ImguiRenderLoop for Overlay {
                             }
                         }
                     }
-                    DrawCmd::Icon { rect, asset, color, alpha } => {
+                    DrawCmd::Icon { rect, asset, color, alpha, mono } => {
                         // a moment after a switch, the weapon's name next to its plate, above the health bar
                         if asset.is_some() && *asset == snap.hud.weapon_icon && weapon_age < 2.6 && !snap.hud.weapon_name.is_empty() {
                             let a = if weapon_age < 2.0 { 1.0 } else { (2.6 - weapon_age) / 0.6 };
                             let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));
                             let sz = ui.calc_text_size(snap.hud.weapon_name);
-                            let plate_r = rect.w / 2.0 / 0.68;
+                            let plate_r = rect.w / 2.0 / 0.62;
                             let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
                             dl.add_text([cx + plate_r + 10.0, cy - plate_r - sz[1] + 2.0], col(0xE8E2C8, 0.95 * a), snap.hud.weapon_name);
                         }
                         if let Some(t) = tex(*asset) {
                             image(t, rect, *alpha, *color);
-                        } else if let Some(v) = asset.and_then(|id| gowring_core::vector::icon_prims(id, rect, *color, *alpha)) {
+                        } else if let Some(v) = asset.and_then(|id| if *mono { gowring_core::vector::mono_icon(id, rect, *color, *alpha) } else { gowring_core::vector::icon_prims(id, rect, *color, *alpha) }) {
                             draw_prims(&dl, &v);
                         } else {
                             dl.add_rect([rect.x, rect.y], [rect.x + rect.w, rect.y + rect.h], col(*color, 0.5 * alpha)).thickness(2.0).build();
@@ -423,6 +415,12 @@ fn draw_prims(dl: &imgui::DrawListMut<'_>, prims: &[gowring_core::vector::Prim])
                 } else {
                     b.thickness(*thick).build();
                 }
+            }
+            Prim::Poly { pts, color, alpha } => {
+                dl.add_polyline(pts.iter().map(|q| [q.0, q.1]).collect::<Vec<_>>(), col(*color, *alpha)).filled(true).build();
+            }
+            Prim::Grad { x0, y0, x1, y1, left, right, alpha } => {
+                dl.add_rect_filled_multicolor([*x0, *y0], [*x1, *y1], col(*left, *alpha), col(*right, *alpha), col(*right, *alpha), col(*left, *alpha));
             }
         }
     }

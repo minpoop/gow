@@ -149,6 +149,66 @@
    "status": "unverified"
   },
   {
+   "id": "hud_icon_runic_frost_wave",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,frost|runic,ice,wave",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_frost_wave.png",
+   "describes": "Runic icon: Frost Shockwave (axe, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_glacial",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,glacial|runic,ice,spike",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_glacial.png",
+   "describes": "Runic icon: Glacial Cleave (axe, heavy)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_flame_lash",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,flame|runic,fire,lash",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_flame_lash.png",
+   "describes": "Runic icon: Flame Lash (blades, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_inferno",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,inferno|runic,fire,whirl",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_inferno.png",
+   "describes": "Runic icon: Inferno Whirl (blades, heavy)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_spark",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,spark|runic,lightning",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_spark.png",
+   "describes": "Runic icon: Spark Volley (spear, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_spear_storm",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,spear|runic,storm",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_spear_storm.png",
+   "describes": "Runic icon: Spear Storm (spear, heavy)",
+   "status": "unverified"
+  },
+  {
    "id": "hud_icon_shield",
    "kind": "texture",
    "role": "hud",

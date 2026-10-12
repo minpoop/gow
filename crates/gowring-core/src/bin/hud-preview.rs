@@ -1,7 +1,10 @@
 //! Dev tool: rasterises `gowring-core`'s HUD draw list with flat placeholder shapes so the layout can be
 //! judged without the game. It is a LAYOUT PREVIEW — not gameplay, not Ragnarök art.
 //!
-//!   cargo run -p gowring-core --features preview --bin hud-preview -- out.png [width height]
+//!   cargo run -p gowring-core --features preview --bin hud-preview -- out.png [width height] [--match backdrop.png]
+//!
+//! `--match` draws only the player's corner cluster in the state of a reference screenshot (full health, Rage 89 %
+//! and ready, both runics ready) over that screenshot (an RGB PNG of the same size), to check the layout against it.
 
 use gowring_core::hud::{self, Align, DrawCmd, EnemyBar, HudState, RunicHud, Screen};
 use gowring_core::vector::{self, Prim};
@@ -108,6 +111,52 @@ impl Canvas {
                         self.disc(c.0, c.1, *r + thick / 2.0, (*r - thick / 2.0).max(0.0), *color, *alpha, None);
                     }
                 }
+                Prim::Poly { pts, color, alpha } => self.poly(pts, *color, *alpha),
+                Prim::Grad { x0, y0, x1, y1, left, right, alpha } => {
+                    let (l, r) = (rgb(*left), rgb(*right));
+                    for yy in y0.floor() as i64..y1.ceil() as i64 {
+                        let cy = (y1.min(yy as f32 + 1.0) - y0.max(yy as f32)).clamp(0.0, 1.0);
+                        for xx in x0.floor() as i64..x1.ceil() as i64 {
+                            let cx = (x1.min(xx as f32 + 1.0) - x0.max(xx as f32)).clamp(0.0, 1.0);
+                            let t = ((xx as f32 + 0.5 - x0) / (x1 - x0).max(1e-3)).clamp(0.0, 1.0);
+                            self.blend(xx, yy, [l[0] + (r[0] - l[0]) * t, l[1] + (r[1] - l[1]) * t, l[2] + (r[2] - l[2]) * t], alpha * cx * cy);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    /// Fill a convex polygon, 3x3 supersampled.
+    fn poly(&mut self, pts: &[(f32, f32)], c: u32, a: f32) {
+        if pts.len() < 3 {
+            return;
+        }
+        let (min_x, max_x) = (pts.iter().map(|q| q.0).fold(f32::MAX, f32::min).floor() as i64, pts.iter().map(|q| q.0).fold(f32::MIN, f32::max).ceil() as i64);
+        let (min_y, max_y) = (pts.iter().map(|q| q.1).fold(f32::MAX, f32::min).floor() as i64, pts.iter().map(|q| q.1).fold(f32::MIN, f32::max).ceil() as i64);
+        let n = pts.len();
+        let inside = |x: f32, y: f32| {
+            let (mut pos, mut neg) = (false, false);
+            for i in 0..n {
+                let (a, b) = (pts[i], pts[(i + 1) % n]);
+                let cr = (b.0 - a.0) * (y - a.1) - (b.1 - a.1) * (x - a.0);
+                pos |= cr > 0.0;
+                neg |= cr < 0.0;
+            }
+            !(pos && neg)
+        };
+        for yy in min_y..=max_y {
+            for xx in min_x..=max_x {
+                let mut hit = 0;
+                for sy in 0..3 {
+                    for sx in 0..3 {
+                        if inside(xx as f32 + (sx as f32 + 0.5) / 3.0, yy as f32 + (sy as f32 + 0.5) / 3.0) {
+                            hit += 1;
+                        }
+                    }
+                }
+                if hit > 0 {
+                    self.blend(xx, yy, rgb(c), a * hit as f32 / 9.0);
+                }
             }
         }
     }
@@ -141,15 +190,44 @@ fn main() {
     let font_path = std::env::var("HUD_PREVIEW_FONT").unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into());
     let font = fontdue::Font::from_bytes(std::fs::read(&font_path).expect("font"), fontdue::FontSettings::default()).expect("font parse");
     let mut cv = Canvas { w, h, px: vec![[0.0; 3]; w * h], font };
-    // backdrop: a dusk-coloured gradient so translucent HUD parts read like they would over a scene
-    for y in 0..h {
-        for x in 0..w {
-            let t = y as f32 / h as f32;
-            cv.px[y * w + x] = [0.16 + 0.10 * t, 0.17 + 0.12 * t, 0.22 + 0.06 * t];
+    let backdrop = args.iter().position(|a| a == "--match").and_then(|i| args.get(i + 1)).cloned();
+    match &backdrop {
+        Some(path) => {
+            let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).expect("backdrop")));
+            let mut r = dec.read_info().expect("backdrop png");
+            let mut buf = vec![0; r.output_buffer_size()];
+            let info = r.next_frame(&mut buf).expect("backdrop frame");
+            let ch = info.color_type.samples();
+            assert_eq!((info.width as usize, info.height as usize), (w, h), "backdrop must be {w}x{h}");
+            for i in 0..w * h {
+                cv.px[i] = [buf[i * ch] as f32 / 255.0, buf[i * ch + 1] as f32 / 255.0, buf[i * ch + 2] as f32 / 255.0];
+            }
+        }
+        None => {
+            // backdrop: a dusk-coloured gradient so translucent HUD parts read like they would over a scene
+            for y in 0..h {
+                for x in 0..w {
+                    let t = y as f32 / h as f32;
+                    cv.px[y * w + x] = [0.16 + 0.10 * t, 0.17 + 0.12 * t, 0.22 + 0.06 * t];
+                }
+            }
         }
     }
     let d = Data::get();
-    let state = HudState {
+    let matching = HudState {
+        hp_frac: 1.0,
+        hp_trail_frac: 1.0,
+        rage_frac: 0.89,
+        rage_ready: true,
+        runic_light: Some(RunicHud { id: "axe_runic_light", name: "Frost Shockwave", remaining_frac: 0.0, ready: true }),
+        runic_heavy: Some(RunicHud { id: "axe_runic_heavy", name: "Glacial Cleave", remaining_frac: 0.0, ready: true }),
+        weapon_icon: d.weapon("leviathan_axe").icon,
+        weapon_name: "Leviathan Axe",
+        shield_drawn: true,
+        pulse: 0.2,
+        ..Default::default()
+    };
+    let busy = HudState {
         hp_frac: 0.72,
         hp_trail_frac: 0.84,
         rage_frac: 1.0,
@@ -174,6 +252,7 @@ fn main() {
         pulse: 0.2,
         ..Default::default()
     };
+    let state = if backdrop.is_some() { matching } else { busy };
     let project = |p: Vec3| -> Option<(f32, f32)> {
         if p.z <= 0.5 {
             return None;
@@ -185,9 +264,15 @@ fn main() {
         match c {
             DrawCmd::Overlay { color, alpha } => cv.rect(0.0, 0.0, w as f32, h as f32, color, alpha),
             DrawCmd::Shapes { prims } => cv.prims(&prims),
-            DrawCmd::Bar { rect, frac, trail, color, alpha, .. } => cv.prims(&vector::bar(&rect, frac, trail, color, alpha)),
-            DrawCmd::Ring { cx, cy, r, remaining, ready, icon, color, alpha, .. } => cv.prims(&vector::ring(cx, cy, r, remaining, ready, color, alpha, icon)),
-            DrawCmd::Icon { rect, asset, color, alpha } => match asset.and_then(|id| vector::icon_prims(id, &rect, color, alpha)) {
+            DrawCmd::Bar { rect, frac, trail, color, lead, segments, alpha, .. } => cv.prims(&vector::rbar(&rect, frac, trail, color, lead, segments, alpha)),
+            DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, alpha, .. } => {
+                cv.prims(&vector::plate(vector::PlateShape::Diamond, cx, cy, rx, ry, color, light, 1.0 - remaining, alpha));
+                let s = ry * 0.62;
+                if let Some(v) = icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: cx - s, y: cy - s, w: s * 2.0, h: s * 2.0 }, 0xFFFFFF, alpha)) {
+                    cv.prims(&v);
+                }
+            }
+            DrawCmd::Icon { rect, asset, color, alpha, mono } => match asset.and_then(|id| if mono { vector::mono_icon(id, &rect, color, alpha) } else { vector::icon_prims(id, &rect, color, alpha) }) {
                 Some(v) => cv.prims(&v),
                 None => {
                     cv.outline(rect.x, rect.y, rect.w, rect.h, color, 0.6 * alpha);
@@ -210,6 +295,10 @@ fn main() {
             }
         }
     }
+    if backdrop.is_some() {
+        save(&cv, &out);
+        return;
+    }
     // an icon sheet: every HUD drawing at 110 px, on the same backdrop
     for (i, id) in ["hud_icon_axe", "hud_icon_blades", "hud_icon_spear", "hud_icon_shield", "hud_crosshair_throw", "hud_enemy_stunned"].iter().enumerate() {
         let r = gowring_core::hud::Rect { x: 1120.0 + i as f32 * 128.0, y: 40.0, w: 110.0, h: 110.0 };
@@ -219,13 +308,18 @@ fn main() {
     }
     let banner = "LAYOUT PREVIEW - original vector HUD art on a stand-in backdrop; not gameplay and not Ragnarok art";
     cv.text(24.0, 14.0, 22.0, banner, 0xFFD27A, 0.95);
+    save(&cv, &out);
+}
+
+fn save(cv: &Canvas, out: &str) {
+    let (w, h) = (cv.w, cv.h);
     let mut buf = Vec::with_capacity(w * h * 3);
     for p in &cv.px {
         for c in p {
             buf.push((c.clamp(0.0, 1.0) * 255.0) as u8);
         }
     }
-    let file = std::fs::File::create(&out).expect("create png");
+    let file = std::fs::File::create(out).expect("create png");
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
     enc.set_color(png::ColorType::Rgb);
     enc.set_depth(png::BitDepth::Eight);
