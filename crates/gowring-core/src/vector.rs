@@ -673,8 +673,9 @@ fn hash01(i: u32) -> f32 {
 
 /// `rbar` with the lost chunk (`trail`) drawn in `trail_color` at `trail_alpha`, and a white-hot `flash` over the fill.
 /// `live`: the HUD clock in seconds for Kratos' own bars, whose fill is alive the way Ragnarök's is (measured on the
-/// player's Hrolf Kraki clip): a soft glow around it, its smoky core drifting toward the leading edge (health; about 1.9
-/// bar heights a second) or churning in place (Rage), and bright motes streaming along it. `None`: a still bar.
+/// player's Hrolf Kraki clips): soft patches of light and shade flowing back through the health fill from its tip and
+/// churning in the Rage segments, a soft glow around the fill and light spilling from its tip. `None`: a still bar (the
+/// patches stand still). The clips show no sharp sparks: a time slice of the bars has only broad, slow bands.
 pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, mid: u32, lead: u32, segments: u32, flash: f32, alpha: f32, live: Option<f32>) -> Vec<Prim> {
     let mut c = Canvas { out: Vec::new() };
     let (x0, y0, y1) = (rect.x, rect.y, rect.y + rect.h);
@@ -735,6 +736,21 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
             c.poly(&pts, col, al * (0.34 + 0.05 * k as f32) * alpha);
         }
     };
+    // a soft patch of light or shade the bar's height, strongest (`al`) in its middle, kept inside [lo, hi]
+    let patch = |c: &mut Canvas, cx: f32, rx: f32, col: u32, al: f32, lo: f32, hi: f32| {
+        if cx + rx <= lo || cx - rx >= hi || al <= 0.0 {
+            return;
+        }
+        for sc in [1.0f32, 0.78, 0.56, 0.34] {
+            let pts: Vec<(f32, f32)> = (0..20)
+                .map(|i| {
+                    let a = i as f32 * std::f32::consts::TAU / 20.0;
+                    ((cx + rx * sc * a.cos()).clamp(lo, hi), ((y0 + y1) / 2.0 + h * 0.62 * sc * a.sin()).clamp(y0, y1))
+                })
+                .collect();
+            c.poly(&pts, col, al / 4.0 * alpha);
+        }
+    };
     let band = |c: &mut Canvas, a: f32, b: f32, f0: f32, f1: f32, col: u32, al: f32| {
         if b > a {
             c.rect(a, y0 + h * f0, b, y0 + h * f1, col, al * alpha);
@@ -751,19 +767,20 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                 // the glowing head of the bar pales to white at its tip
                 mix(col, 0xFFFFFF, ((x - (fill_end - head)) / head.max(1.0)).clamp(0.0, 1.0).powi(3) * 0.8)
             });
-            let len = fill_end - x0;
-            // the smoky core drifts toward the leading edge, each wisp fading in at the start and out before the tip
-            let speed = h * 1.9;
-            for k in 0..4u32 {
-                let rx = h * (3.2 + 2.4 * hash01(k * 7 + 1));
-                let span = len + rx;
-                let u = (t * speed * (0.8 + 0.4 * hash01(k * 7 + 2)) + span * k as f32 / 4.0).rem_euclid(span);
-                let cx = x0 + u - rx * 0.5;
-                let edge = (u / (rx * 1.5)).min((span - u) / (rx * 1.5)).clamp(0.0, 1.0);
-                // fewer, fainter wisps near the bright head
-                let fade = edge * (1.0 - ((cx - x0) / len.max(1.0)).clamp(0.0, 1.0).powi(2) * 0.6);
-                let ry = h * (0.26 + 0.08 * (t * 1.3 + k as f32).sin());
-                blot(&mut c, cx, rx.min(len * 0.45), ry, shade(mid, 0.72), 0.16 * fade, x0, fill_end);
+            // The fill's texture (measured on the player's 1080p clip): soft light and dark patches about two bar heights
+            // wide and the bar's full height, swelling and fading, flowing back from the tip toward the start at about
+            // 1.4 bar heights a second (25-28 px/s on the 19 px bar), about 9 levels lighter or darker (up to 15).
+            // Laid out over the whole bar, so they do not jump when health changes.
+            let speed = h * 1.4;
+            let period = rect.w + h * 4.0;
+            let count = ((period / (h * 2.4)) as u32).max(3);
+            for k in 0..count {
+                // each patch also changes shape and strength as it goes, as the clip's do
+                let rx = h * (0.8 + 0.5 * hash01(k * 4 + 21)) * (1.0 + 0.3 * (t * 1.9 + k as f32 * 2.9).sin());
+                let u = (period * k as f32 / count as f32 + h * hash01(k * 4 + 22) - t * speed * (0.9 + 0.2 * hash01(k * 4 + 23))).rem_euclid(period);
+                let swell = 0.55 + 0.45 * (t * 2.2 + k as f32 * 1.7).sin();
+                let (col, al) = if hash01(k * 4 + 24) > 0.5 { (0xFFFFFF, 0.13) } else { (0x000000, 0.19) };
+                patch(&mut c, x0 - h * 2.0 + u, rx, col, al * swell, x0, fill_end);
             }
             band(&mut c, x0, fill_end, 0.0, 0.14, 0xFFFFFF, 0.12);
             for (f0, f1, a) in [(0.5, 0.62, 0.2), (0.62, 0.74, 0.42), (0.74, 0.86, 0.62), (0.86, 0.94, 0.72)] {
@@ -788,9 +805,19 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                     let e = ((t - 0.8) / 0.2).clamp(0.0, 1.0).max(((0.12 - t) / 0.12).clamp(0.0, 1.0) * 0.7);
                     mix(warm, glow, e)
                 });
-                // a smoky core that churns in place
+                // a smoky core, and smaller light and dark patches churning in it (measured: about one bar height wide,
+                // the light ones warm, +13 / -9 levels, no steady drift)
                 let wob = (t * 1.3 + i as f32 * 1.7).sin();
-                blot(&mut c, a + sw * (0.45 + 0.08 * wob), sw * (0.38 + 0.05 * (t * 0.9 + i as f32).cos()), h * 0.4, shade(warm, 0.75), 0.5 - 0.1 * i as f32, a, b);
+                blot(&mut c, a + sw * (0.45 + 0.03 * wob), sw * (0.38 + 0.02 * (t * 0.9 + i as f32).cos()), h * 0.4, shade(warm, 0.75), 0.5 - 0.1 * i as f32, a, b);
+                let period = sw + h * 2.0;
+                for k in 0..5u32 {
+                    let id = i * 16 + k * 4;
+                    let rx = h * (0.45 + 0.25 * hash01(id + 31));
+                    let u = (period * k as f32 / 5.0 + t * h * 0.6 * (0.85 + 0.3 * hash01(id + 32)) + h * 0.8 * (t * 1.7 + k as f32).sin()).rem_euclid(period);
+                    let swell = 0.5 + 0.5 * (t * 4.0 + k as f32 * 2.3 + i as f32).sin();
+                    let (col, al) = if hash01(id + 33) > 0.45 { (0xFFE4DA, 0.2) } else { (0x000000, 0.12) };
+                    patch(&mut c, a - h + u, rx, col, al * swell, a, b);
+                }
                 band(&mut c, a, b, 0.0, 0.1, lighten(warm, 0.3), 0.45);
                 band(&mut c, a, b, 0.9, 1.0, 0x000000, 0.2);
             } else {
@@ -818,33 +845,6 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                 })
                 .collect();
             c.poly(&ring, lighten(lead, 0.5), a * breathe * alpha);
-        }
-    }
-    if alive && fill_end > x0 + h {
-        // bright motes streaming along the fill toward its leading edge, flickering: a soft halo, a bright core and a
-        // faint tail behind
-        let len = fill_end - x0;
-        let count = ((len / (h * 1.6)) as u32).clamp(3, 28);
-        let mote = if n > 1 { 0xFFC070 } else { lighten(lead, 0.55) };
-        for i in 0..count {
-            let speed = h * (3.0 + 3.0 * hash01(i * 5 + 11));
-            let u = (t * speed + len * hash01(i * 5 + 12)).rem_euclid(len);
-            let x = x0 + u;
-            // inside a gap between Rage segments there is nothing to light
-            if n > 1 && ((x - x0) % (sw + gap)) > sw {
-                continue;
-            }
-            let y = y0 + h * (0.5 + 0.28 * (t * (1.5 + hash01(i * 5 + 13)) + i as f32).sin());
-            let ends = (u / (h * 1.5)).min((len - u) / (h * 0.8)).clamp(0.0, 1.0);
-            let flicker = 0.55 + 0.45 * (t * (7.0 + 5.0 * hash01(i * 5 + 14)) + i as f32 * 2.1).sin();
-            let a = 0.85 * ends * flicker * alpha;
-            let r = h * (0.05 + 0.05 * hash01(i * 5 + 15));
-            let tail = (speed * 0.08).min(u);
-            c.line((x - tail, y), (x - r, y), (r * 0.8).max(0.6), mote, 0.18 * a);
-            for k in 0..3 {
-                c.circle((x, y), (r * (2.6 - 0.5 * k as f32)).max(1.0), true, 0.0, mote, 0.1 * a);
-            }
-            c.circle((x, y), r.max(0.6), true, 0.0, lighten(mote, 0.5), a);
         }
     }
     if n > 1 && frac > 0.002 && frac < 0.999 {
@@ -1242,13 +1242,13 @@ mod tests {
         let r = Rect { x: 0.0, y: 0.0, w: 392.0, h: 19.0 };
         let at = |live| rbar_fx(&r, 0.8, 0.8, 0, 0.0, 0x55914A, 0x8EE05A, 1, 0.0, 1.0, live);
         let (a, b) = (at(Some(1.0)), at(Some(1.4)));
-        assert_ne!(format!("{a:?}"), format!("{b:?}"), "the smoke and motes move");
+        assert_ne!(format!("{a:?}"), format!("{b:?}"), "the patches of light and shade move");
         assert_eq!(format!("{:?}", at(None)), format!("{:?}", at(None)));
-        assert!(at(None).len() < a.len(), "a still bar has no glow or motes");
-        // motes stay inside the fill
+        assert!(at(None).len() < a.len(), "a still bar has no glow");
+        // the patches of light stay inside the fill
         for p in &a {
-            if let Prim::Circle { c, r: cr, .. } = p {
-                assert!(c.0 <= 392.0 * 0.8 + 0.01 && c.0 >= 0.0 && c.1 >= 0.0 && c.1 <= 19.0, "{c:?} r {cr}");
+            if let Prim::Poly { pts, color: 0xFFFFFF, .. } = p {
+                assert!(pts.iter().all(|q| q.0 >= -1e-3 && q.0 <= 392.0 * 0.8 + 1e-3 && q.1 >= -1e-3 && q.1 <= 19.0 + 1e-3), "{pts:?}");
             }
         }
     }
