@@ -496,7 +496,9 @@ fn project_rules(sheets: &Sheets, r: &mut Report) {
     for name in ["assets", "bindings", "moves", "er_templates"] {
         if let Some(s) = get(name) {
             for id in s.ids() {
-                if !referenced.contains_key(&(s.name.as_str(), id.to_string())) {
+                // an asset with a Ragnarök pick is a piece the HUD itself draws with (and suggests in ragnarok_hud.json)
+                let picked = name == "assets" && s.find(id).and_then(|r| r.get("ragnarok_pick")).and_then(|v| v.as_str()).is_some_and(|p| p != "none");
+                if !picked && !referenced.contains_key(&(s.name.as_str(), id.to_string())) {
                     r.warn(name, Some(id), None, "row is never referenced by another sheet");
                 }
             }

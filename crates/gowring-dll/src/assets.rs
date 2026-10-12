@@ -73,7 +73,9 @@ pub struct Store {
     pub prepared: bool,
 }
 
-fn decode_png(path: &Path) -> Result<Texture, String> {
+/// `whole`: a piece the HUD places by its texel coordinates (see `vector::is_placed_piece`), kept uncropped and with its
+/// own alpha.
+fn decode_png(path: &Path, whole: bool) -> Result<Texture, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut dec = png::Decoder::new(file);
     dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
@@ -90,7 +92,7 @@ fn decode_png(path: &Path) -> Result<Texture, String> {
     };
     let mask = is_mask(&rgba);
     let t = Texture { w: info.width, h: info.height, rgba, mask };
-    Ok(if mask { trim_mask(t) } else { t })
+    Ok(if mask && !whole { trim_mask(t) } else { t })
 }
 
 pub fn load(cache: &Path, channel: &str) -> Store {
@@ -99,7 +101,7 @@ pub fn load(cache: &Path, channel: &str) -> Store {
     for a in ASSETS {
         let path = cache.join(a.output);
         let ok = match a.kind {
-            AssetKind::Texture => match decode_png(&path) {
+            AssetKind::Texture => match decode_png(&path, gowring_core::vector::is_placed_piece(a.id)) {
                 Ok(t) => {
                     s.textures.insert(a.id, t);
                     true

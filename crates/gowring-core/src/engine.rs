@@ -813,6 +813,8 @@ impl Engine {
             in_combat,
             pulse: (now % 1.2) as f32 / 1.2,
             ui_scale: 1.0,
+            // the renderer fills in which of Ragnarök's pieces it has
+            art: 0,
         }
     }
 }

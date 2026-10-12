@@ -14,6 +14,80 @@ pub enum Prim {
     Poly { pts: Vec<(f32, f32)>, color: u32, alpha: f32 },
     /// A rectangle shaded from `left` to `right`.
     Grad { x0: f32, y0: f32, x1: f32, y1: f32, left: u32, right: u32, alpha: f32 },
+    /// One of Ragnarök's own HUD pieces (a white shape, coloured `color`) mapped onto a quad: texture coordinate
+    /// `uv[i]` lands on `pts[i]`. Drawn only when the renderer has the picture (see `art_flags`).
+    Tex { asset: &'static str, pts: [(f32, f32); 4], uv: [(f32, f32); 4], color: u32, alpha: f32 },
+}
+
+/// Which of Ragnarök's own HUD pieces the renderer has loaded, as bits: the runic plates, the shield's octagon, Rage's
+/// mark, the L3 / R3 buttons, the Triangle. Each falls back to the mod's own drawing when its pieces are missing.
+pub const ART_PLATE: u32 = 1;
+pub const ART_RELIC: u32 = 2;
+pub const ART_RAGE: u32 = 4;
+pub const ART_STICKS: u32 = 8;
+pub const ART_TRIANGLE: u32 = 16;
+
+const ART_GROUPS: [(u32, &[&str]); 5] = [
+    (ART_PLATE, &["hud_part_plate_face", "hud_part_plate_housing", "hud_part_plate_spec", "hud_part_plate_shadow"]),
+    (ART_RELIC, &["hud_part_relic_face", "hud_part_relic_spec", "hud_part_relic_shadow"]),
+    (ART_RAGE, &["hud_icon_rage"]),
+    (ART_STICKS, &["hud_btn_l3", "hud_btn_r3"]),
+    (ART_TRIANGLE, &["hud_btn_triangle"]),
+];
+
+/// The `ART_*` bits for the pieces `has` reports loaded; a group counts only when all of its pieces are there.
+pub fn art_flags(has: impl Fn(&str) -> bool) -> u32 {
+    ART_GROUPS.iter().filter(|(_, ids)| ids.iter().all(|id| has(id))).fold(0, |f, (bit, _)| f | bit)
+}
+
+/// Ragnarök's pieces that are placed by their texel coordinates, so the renderer must keep them whole (not cropped).
+pub fn is_placed_piece(asset: &str) -> bool {
+    ART_GROUPS.iter().any(|(_, ids)| ids.contains(&asset))
+}
+
+/// A 64x64 piece placed so its texel `pivot` lands on `centre`, turned `q` quarter turns clockwise, then scaled by
+/// `sx` / `sy` screen pixels per texel along the screen's axes.
+fn piece(asset: &'static str, pivot: (f32, f32), centre: (f32, f32), sx: f32, sy: f32, q: u32, color: u32, alpha: f32) -> Prim {
+    let at = |x: f32, y: f32| {
+        let (mut lx, mut ly) = (x - pivot.0, y - pivot.1);
+        for _ in 0..q {
+            (lx, ly) = (-ly, lx);
+        }
+        (centre.0 + lx * sx, centre.1 + ly * sy)
+    };
+    // The game's sampler wraps, so a texture's outermost half texel blends with the opposite edge. Sample from half a
+    // texel in; an edge on the pivot (where the turned quarters meet) still reaches the pivot, so they meet without a gap.
+    let edge = |t: f32, pivot: f32| (if t == pivot { t } else { t.clamp(0.5, 63.5) }, t.clamp(0.5, 63.5) / 64.0);
+    let corners = [(0.0, 0.0), (64.0, 0.0), (64.0, 64.0), (0.0, 64.0)].map(|(x, y)| {
+        let ((px, u), (py, v)) = (edge(x, pivot.0), edge(y, pivot.1));
+        (at(px, py), (u, v))
+    });
+    Prim::Tex { asset, pts: corners.map(|c| c.0), uv: corners.map(|c| c.1), color, alpha }
+}
+
+/// The part of an upright textured quad (turned by whole quarter turns only) between y = `top` and y = `bottom`, its
+/// texture coordinates cut to match; `None` when nothing is left.
+fn tex_band(p: &Prim, top: f32, bottom: f32) -> Option<Prim> {
+    let Prim::Tex { asset, pts, uv, color, alpha } = p else { return None };
+    let (y0, y1) = (pts.iter().map(|q| q.1).fold(f32::MAX, f32::min), pts.iter().map(|q| q.1).fold(f32::MIN, f32::max));
+    let (a, b) = (top.max(y0), bottom.min(y1));
+    if b - a < 0.01 {
+        return None;
+    }
+    // texture coordinates are affine over the quad: uv(p) = uv0 + s * (uv1 - uv0) + t * (uv3 - uv0)
+    let (e1, e2) = ((pts[1].0 - pts[0].0, pts[1].1 - pts[0].1), (pts[3].0 - pts[0].0, pts[3].1 - pts[0].1));
+    let det = e1.0 * e2.1 - e1.1 * e2.0;
+    if det.abs() < 1e-6 {
+        return None;
+    }
+    let uv_at = |q: (f32, f32)| {
+        let (dx, dy) = (q.0 - pts[0].0, q.1 - pts[0].1);
+        let s = (dx * e2.1 - dy * e2.0) / det;
+        let t = (e1.0 * dy - e1.1 * dx) / det;
+        (uv[0].0 + s * (uv[1].0 - uv[0].0) + t * (uv[3].0 - uv[0].0), uv[0].1 + s * (uv[1].1 - uv[0].1) + t * (uv[3].1 - uv[0].1))
+    };
+    let cut = pts.map(|q| (q.0, q.1.clamp(a, b)));
+    Some(Prim::Tex { asset, pts: cut, uv: cut.map(uv_at), color: *color, alpha: *alpha })
 }
 
 fn mix(c: u32, to: u32, t: f32) -> u32 {
@@ -209,12 +283,13 @@ pub fn plate_fx(shape: PlateShape, cx: f32, cy: f32, rx: f32, ry: f32, mid: u32,
 }
 
 /// A runic plate in its weapon's colours, with an optional soft halo around it (`aura` 0..1; the Blades' plates glow).
-pub fn runic_plate(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, aura: f32, alpha: f32) -> Vec<Prim> {
-    runic_plate_fx(cx, cy, rx, ry, mid, light, charge, aura, 0.0, alpha)
+/// `art`: the `ART_*` pieces loaded; with `ART_PLATE` the plate is built from Ragnarök's own pieces.
+pub fn runic_plate(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, aura: f32, alpha: f32, art: u32) -> Vec<Prim> {
+    runic_plate_fx(cx, cy, rx, ry, mid, light, charge, aura, 0.0, alpha, art)
 }
 
 /// `runic_plate` with a white `flash` (used, or ready again).
-pub fn runic_plate_fx(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, aura: f32, flash: f32, alpha: f32) -> Vec<Prim> {
+pub fn runic_plate_fx(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, aura: f32, flash: f32, alpha: f32, art: u32) -> Vec<Prim> {
     let mut out = Vec::new();
     if aura > 0.0 && charge >= 0.999 {
         let face = plate_outline(PlateShape::Diamond, cx, cy, rx, ry);
@@ -223,12 +298,112 @@ pub fn runic_plate_fx(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, 
             out.push(Prim::Poly { pts: grow(&face, (cx, cy), d), color: glow, alpha: a * aura * alpha * (0.35 + 0.65 * charge.clamp(0.0, 1.0)) });
         }
     }
-    out.extend(plate_fx(PlateShape::Diamond, cx, cy, rx, ry, mid, light, charge, flash, alpha));
+    if art & ART_PLATE != 0 {
+        out.extend(tex_plate(PlateShape::Diamond, cx, cy, rx, ry, mid, light, charge, flash, alpha));
+    } else {
+        out.extend(plate_fx(PlateShape::Diamond, cx, cy, rx, ry, mid, light, charge, flash, alpha));
+    }
     out
 }
 
-/// A PlayStation face button: white disc, dark rim, a dark triangle (Ragnarök's recall / detonate prompt).
-pub fn face_button(cx: f32, cy: f32, r: f32, alpha: f32) -> Vec<Prim> {
+/// The shield's octagon in `lead`'s green: Ragnarök's own pieces with `ART_RELIC`, otherwise the mod's drawing.
+pub fn relic_plate(cx: f32, cy: f32, rx: f32, ry: f32, lead: u32, alpha: f32, art: u32) -> Vec<Prim> {
+    if art & ART_RELIC != 0 {
+        tex_plate(PlateShape::Octagon, cx, cy, rx, ry, lead, lead, 1.0, 0.0, alpha)
+    } else {
+        plate(PlateShape::Octagon, cx, cy, rx, ry, shade(lead, 0.35), lead, 1.0, alpha)
+    }
+}
+
+/// A runic plate (`Diamond`) or the shield's octagon (`Octagon`) built from Ragnarök's own pieces, the way its HUD
+/// layers them: soft shadow, the face in the plate's colour lit from the top, the highlight, the silver outline. Each
+/// face, outline and shadow piece is one quarter, turned four times about the plate's centre. Charging and the flash
+/// behave as in `plate_fx`.
+fn tex_plate(shape: PlateShape, cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, flash: f32, alpha: f32) -> Vec<Prim> {
+    let mut out = Vec::new();
+    let ctr = (cx, cy);
+    let diamond = shape == PlateShape::Diamond;
+    // how many texels of each piece reach from the centre to the face's edge (measured on the pieces)
+    let (face_id, shadow_id, spec_id) = if diamond { ("hud_part_plate_face", "hud_part_plate_shadow", "hud_part_plate_spec") } else { ("hud_part_relic_face", "hud_part_relic_shadow", "hud_part_relic_spec") };
+    let (fx, fy) = if diamond { (rx / 35.0, ry / 35.0) } else { (rx / 31.0, ry / 32.0) };
+    let spec_reach = if diamond { 29.0 } else { 27.0 };
+    // The face pieces are plain white: the shading is fitted to the player's screenshot (rim colours within about 5
+    // levels): the runic face a little darker than its colour and lit strongly from the top; the shield's octagon a
+    // greyed green, lit faintly.
+    let (mid, light_a, spec_a) = if diamond { (shade(mid, 0.15), 0.55, 0.2) } else { (mix(shade(light, 0.25), 0x6E7064, 0.3), 0.15, 0.2) };
+    let quarters = |id: &'static str, sx: f32, sy: f32, color: u32, a: f32| -> Vec<Prim> { (0..4).map(|q| piece(id, (0.0, 64.0), ctr, sx, sy, q, color, a)).collect() };
+    out.extend(quarters(shadow_id, fx, fy, 0x000000, 0.8 * alpha));
+    let outline = plate_outline(shape, cx, cy, rx, ry);
+    let edge = (rx.min(ry) * 0.05).max(1.0);
+    if !diamond {
+        // the octagon has no outline piece: a dark border under the face
+        out.push(Prim::Poly { pts: grow(&outline, ctr, edge * 1.8), color: 0x0A0E14, alpha: 0.92 * alpha });
+    }
+    let charge = charge.clamp(0.0, 1.0);
+    let cooling = charge < 0.999;
+    let (top, bottom) = (cy - ry, cy + ry);
+    let cut = top + 2.0 * ry * (1.0 - charge);
+    let (mid, light) = if cooling { (mix(shade(mid, 0.35), 0x707378, 0.75), mix(light, 0x9A9EA4, 0.75)) } else { (mid, light) };
+    let face = |color: u32, a: f32| quarters(face_id, fx, fy, color, a);
+    let lit_from = if cooling {
+        // the part still to charge, dimmed; the part already charged rises from the bottom
+        out.extend(face(mix(shade(mid, 0.55), 0x2A2C30, 0.5), 0.92 * alpha));
+        cut
+    } else {
+        top
+    };
+    let lit = face(mid, alpha);
+    out.extend(lit.iter().filter_map(|p| tex_band(p, lit_from, bottom)));
+    // light from the top: the lit tone over the face, strongest at the top and gone at the bottom, in thin bands
+    let bands = 12;
+    for i in 0..bands {
+        let (a, b) = (top + 2.0 * ry * i as f32 / bands as f32, top + 2.0 * ry * (i + 1) as f32 / bands as f32);
+        let strength = light_a * (1.0 - (i as f32 + 0.5) / bands as f32);
+        out.extend(face(light, strength * alpha).iter().filter_map(|p| tex_band(p, a.max(lit_from), b)));
+    }
+    if flash > 0.0 {
+        out.extend(face(0xF4FAFF, 0.85 * flash * alpha));
+    }
+    out.push(piece(spec_id, (32.0, 32.0), ctr, rx / spec_reach, ry / spec_reach, 0, 0xFFFFFF, spec_a * alpha));
+    let silver = lerp_color(0xD0D6DE, 0xFFFFFF, flash);
+    if diamond {
+        // the outline piece sits a fixed step outside the face
+        let gap = rx * 0.15;
+        out.extend(quarters("hud_part_plate_housing", (rx + gap) / 58.0, (ry + gap) / 58.0, silver, 0.9 * alpha));
+    } else {
+        let ring = grow(&outline, ctr, edge * 3.0);
+        for i in 0..ring.len() {
+            out.push(Prim::Line { a: ring[i], b: ring[(i + 1) % ring.len()], thick: edge * 0.9, color: silver, alpha: 0.75 * alpha });
+        }
+    }
+    if cooling && charge > 0.001 {
+        // the bright edge of the charge, across the face's width at that height
+        let xs: Vec<f32> = clip_y(&outline, cut, true).iter().filter(|q| (q.1 - cut).abs() < 1e-3).map(|q| q.0).collect();
+        if let (Some(x0), Some(x1)) = (xs.iter().copied().reduce(f32::min), xs.iter().copied().reduce(f32::max)) {
+            out.push(Prim::Line { a: (x0 + edge, cut), b: (x1 - edge, cut), thick: edge, color: lighten(light, 0.6), alpha: 0.9 * alpha });
+        }
+    }
+    out
+}
+
+/// One of Ragnarök's whole pictures (`asset`, a white shape) centred on (`cx`, `cy`), `size` pixels across.
+pub fn tex_icon(asset: &'static str, cx: f32, cy: f32, size: f32, color: u32, alpha: f32) -> Prim {
+    piece(asset, (32.0, 32.0), (cx, cy), size / 64.0, size / 64.0, 0, color, alpha)
+}
+
+/// One of Ragnarök's button pictures (`hud_btn_*`: a white disc with the button's mark cut out) over a dark disc, so
+/// the mark reads dark; `r` is the white disc's radius.
+pub fn tex_button(asset: &'static str, cx: f32, cy: f32, r: f32, alpha: f32) -> Vec<Prim> {
+    // the button's disc is 26 texels across from its centre in the 64-texel picture
+    vec![Prim::Circle { c: (cx, cy), r: r * 0.98, fill: true, thick: 0.0, color: 0x161616, alpha: 0.94 * alpha }, tex_icon(asset, cx, cy, r * 64.0 / 26.0, 0xF2F2F0, alpha)]
+}
+
+/// A PlayStation face button: white disc, dark rim, a dark triangle (Ragnarök's recall / detonate prompt). With
+/// `ART_TRIANGLE` in `art`, Ragnarök's own Triangle.
+pub fn face_button(cx: f32, cy: f32, r: f32, alpha: f32, art: u32) -> Vec<Prim> {
+    if art & ART_TRIANGLE != 0 {
+        return tex_button("hud_btn_triangle", cx, cy, r, alpha);
+    }
     let mut c = Canvas { out: Vec::new() };
     c.circle((cx, cy), r * 1.1, true, 0.0, 0x161616, 0.9 * alpha);
     c.circle((cx, cy), r, true, 0.0, 0xF2F2F0, alpha);
@@ -270,6 +445,7 @@ pub fn mono_icon(asset: &str, rect: &Rect, color: u32, alpha: f32) -> Option<Vec
         Prim::Circle { c, r, fill, thick, alpha, .. } => Prim::Circle { c: (c.0 + dx, c.1 + dx), r: *r, fill: *fill, thick: thick + grow_by, color: col, alpha: alpha * a },
         Prim::Poly { pts, alpha, .. } => Prim::Poly { pts: pts.iter().map(|q| (q.0 + dx, q.1 + dx)).collect(), color: col, alpha: alpha * a },
         Prim::Grad { x0, y0, x1, y1, alpha, .. } => Prim::Grad { x0: x0 + dx, y0: y0 + dx, x1: x1 + dx, y1: y1 + dx, left: col, right: col, alpha: alpha * a },
+        Prim::Tex { asset, pts, uv, alpha, .. } => Prim::Tex { asset, pts: pts.map(|q| (q.0 + dx, q.1 + dx)), uv: *uv, color: col, alpha: alpha * a },
     };
     let sh = (rect.w * 0.025).max(1.0);
     let mut out: Vec<Prim> = shapes.iter().map(|p| recolour(p, 0x000000, 0.55, sh, sh)).collect();
@@ -483,11 +659,23 @@ pub fn glyph_prims(asset: &str, rect: &Rect, color: u32, alpha: f32) -> Option<V
 /// lit along the bottom, with a pale tip. Several segments (the Rage meter): each full segment dark red with a bright
 /// upper band and glowing ends, warming from one segment to the next; the segment still filling burns in `lead`.
 pub fn rbar(rect: &Rect, frac: f32, trail: f32, mid: u32, lead: u32, segments: u32, alpha: f32) -> Vec<Prim> {
-    rbar_fx(rect, frac, trail, 0xF4EBD0, 0.5, mid, lead, segments, 0.0, alpha)
+    rbar_fx(rect, frac, trail, 0xF4EBD0, 0.5, mid, lead, segments, 0.0, alpha, None)
+}
+
+/// A repeatable 0..1 value for particle `i` (no state is kept between frames).
+fn hash01(i: u32) -> f32 {
+    let mut x = i.wrapping_mul(0x9E37_79B9) ^ 0x85EB_CA6B;
+    x ^= x >> 15;
+    x = x.wrapping_mul(0x2C1B_3C6D);
+    x ^= x >> 12;
+    (x & 0xFFFF) as f32 / 65535.0
 }
 
 /// `rbar` with the lost chunk (`trail`) drawn in `trail_color` at `trail_alpha`, and a white-hot `flash` over the fill.
-pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, mid: u32, lead: u32, segments: u32, flash: f32, alpha: f32) -> Vec<Prim> {
+/// `live`: the HUD clock in seconds for Kratos' own bars, whose fill is alive the way Ragnarök's is (measured on the
+/// player's Hrolf Kraki clip): a soft glow around it, its smoky core drifting toward the leading edge (health; about 1.9
+/// bar heights a second) or churning in place (Rage), and bright motes streaming along it. `None`: a still bar.
+pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, mid: u32, lead: u32, segments: u32, flash: f32, alpha: f32, live: Option<f32>) -> Vec<Prim> {
     let mut c = Canvas { out: Vec::new() };
     let (x0, y0, y1) = (rect.x, rect.y, rect.y + rect.h);
     let h = rect.h;
@@ -497,13 +685,6 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
     let gap = if n > 1 { (h * 0.38).max(2.0) } else { 0.0 };
     let sw = (rect.w - gap * (n - 1) as f32) / n as f32;
     let seg_x = |i: u32| x0 + i as f32 * (sw + gap);
-    // housing: one piece per segment, so the gaps stay dark
-    let rim = (h * 0.08).max(1.0);
-    for i in 0..n {
-        let (a, b) = (seg_x(i), seg_x(i) + sw);
-        c.rect(a, y0 - rim, b, y1 + rim, 0x000000, 0.55 * alpha);
-        c.rect(a, y0, b, y1, 0x5A5658, 0.45 * alpha);
-    }
     // a fraction of the whole bar to an x, skipping the gaps
     let at = |f: f32| {
         let u = f * n as f32;
@@ -511,6 +692,23 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
         seg_x(i) + (u - i as f32) * sw
     };
     let fill_end = at(frac);
+    // the glow around what is filled (bars big enough to show it), breathing slowly, strongest at the leading end
+    let (alive, t) = (live.is_some(), live.unwrap_or(0.0));
+    let fill_to = fill_end;
+    if alive && frac > 0.002 {
+        let breathe = 0.85 + 0.15 * (t * 2.2).sin();
+        let glow = mix(mid, lead, 0.6);
+        for (d, a) in [(h * 0.75, 0.04f32), (h * 0.45, 0.06), (h * 0.22, 0.08)] {
+            c.poly(&[(x0 - d * 0.3, y0 - d), (fill_to + d, y0 - d), (fill_to + d, y1 + d), (x0 - d * 0.3, y1 + d)], glow, a * breathe * alpha);
+        }
+    }
+    // housing: one piece per segment, so the gaps stay dark
+    let rim = (h * 0.08).max(1.0);
+    for i in 0..n {
+        let (a, b) = (seg_x(i), seg_x(i) + sw);
+        c.rect(a, y0 - rim, b, y1 + rim, 0x000000, 0.55 * alpha);
+        c.rect(a, y0, b, y1, 0x5A5658, 0.45 * alpha);
+    }
     if trail > frac && trail_alpha > 0.0 {
         c.rect(fill_end, y0, at(trail), y1, trail_color, trail_alpha * alpha);
     }
@@ -525,12 +723,13 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
         }
     };
     // a soft dark blot, like the smoky core of Ragnarök's meters: nested ellipses that darken toward the middle
-    let blot = |c: &mut Canvas, cx: f32, rx: f32, ry: f32, col: u32, al: f32| {
+    let blot = |c: &mut Canvas, cx: f32, rx: f32, ry: f32, col: u32, al: f32, lo: f32, hi: f32| {
         for (k, sc) in [1.0f32, 0.88, 0.76, 0.64, 0.52, 0.4, 0.28].iter().enumerate() {
+            // kept inside the fill: an ellipse squeezed against [lo, hi] stays convex
             let pts: Vec<(f32, f32)> = (0..24)
                 .map(|i| {
                     let t = i as f32 * std::f32::consts::TAU / 24.0;
-                    (cx + rx * sc * t.cos(), (y0 + y1) / 2.0 + ry * sc * t.sin())
+                    ((cx + rx * sc * t.cos()).clamp(lo, hi), (y0 + y1) / 2.0 + ry * sc * t.sin())
                 })
                 .collect();
             c.poly(&pts, col, al * (0.34 + 0.05 * k as f32) * alpha);
@@ -553,8 +752,19 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                 mix(col, 0xFFFFFF, ((x - (fill_end - head)) / head.max(1.0)).clamp(0.0, 1.0).powi(3) * 0.8)
             });
             let len = fill_end - x0;
-            blot(&mut c, x0 + len * 0.3, len * 0.28, h * 0.32, shade(mid, 0.72), 0.16);
-            blot(&mut c, x0 + len * 0.62, len * 0.16, h * 0.28, shade(mid, 0.72), 0.12);
+            // the smoky core drifts toward the leading edge, each wisp fading in at the start and out before the tip
+            let speed = h * 1.9;
+            for k in 0..4u32 {
+                let rx = h * (3.2 + 2.4 * hash01(k * 7 + 1));
+                let span = len + rx;
+                let u = (t * speed * (0.8 + 0.4 * hash01(k * 7 + 2)) + span * k as f32 / 4.0).rem_euclid(span);
+                let cx = x0 + u - rx * 0.5;
+                let edge = (u / (rx * 1.5)).min((span - u) / (rx * 1.5)).clamp(0.0, 1.0);
+                // fewer, fainter wisps near the bright head
+                let fade = edge * (1.0 - ((cx - x0) / len.max(1.0)).clamp(0.0, 1.0).powi(2) * 0.6);
+                let ry = h * (0.26 + 0.08 * (t * 1.3 + k as f32).sin());
+                blot(&mut c, cx, rx.min(len * 0.45), ry, shade(mid, 0.72), 0.16 * fade, x0, fill_end);
+            }
             band(&mut c, x0, fill_end, 0.0, 0.14, 0xFFFFFF, 0.12);
             for (f0, f1, a) in [(0.5, 0.62, 0.2), (0.62, 0.74, 0.42), (0.74, 0.86, 0.62), (0.86, 0.94, 0.72)] {
                 band(&mut c, x0, fill_end, f0, f1, lighten(mid, 0.15), a);
@@ -578,7 +788,9 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                     let e = ((t - 0.8) / 0.2).clamp(0.0, 1.0).max(((0.12 - t) / 0.12).clamp(0.0, 1.0) * 0.7);
                     mix(warm, glow, e)
                 });
-                blot(&mut c, a + sw * 0.45, sw * 0.4, h * 0.4, shade(warm, 0.75), 0.5 - 0.1 * i as f32);
+                // a smoky core that churns in place
+                let wob = (t * 1.3 + i as f32 * 1.7).sin();
+                blot(&mut c, a + sw * (0.45 + 0.08 * wob), sw * (0.38 + 0.05 * (t * 0.9 + i as f32).cos()), h * 0.4, shade(warm, 0.75), 0.5 - 0.1 * i as f32, a, b);
                 band(&mut c, a, b, 0.0, 0.1, lighten(warm, 0.3), 0.45);
                 band(&mut c, a, b, 0.9, 1.0, 0x000000, 0.2);
             } else {
@@ -591,6 +803,48 @@ pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha
                 band(&mut c, a, end, 0.0, 0.35, lighten(fire, 0.1), 0.35);
                 band(&mut c, a, end, 0.5, 1.0, mix(fire, 0xE8A040, 0.6), 0.45);
             }
+        }
+    }
+    if alive && frac > 0.002 {
+        // light spilling from the leading edge: soft rings that fade outward
+        let breathe = 0.8 + 0.2 * (t * 2.2 + 0.7).sin();
+        // many faint layers, so the light fades smoothly instead of in rings
+        for k in 0..8 {
+            let (sc, a) = (1.6 - 0.16 * k as f32, 0.035f32);
+            let ring: Vec<(f32, f32)> = (0..20)
+                .map(|i| {
+                    let ang = i as f32 * std::f32::consts::TAU / 20.0;
+                    (fill_end + h * sc * 0.9 * ang.cos(), (y0 + y1) / 2.0 + h * sc * 0.75 * ang.sin())
+                })
+                .collect();
+            c.poly(&ring, lighten(lead, 0.5), a * breathe * alpha);
+        }
+    }
+    if alive && fill_end > x0 + h {
+        // bright motes streaming along the fill toward its leading edge, flickering: a soft halo, a bright core and a
+        // faint tail behind
+        let len = fill_end - x0;
+        let count = ((len / (h * 1.6)) as u32).clamp(3, 28);
+        let mote = if n > 1 { 0xFFC070 } else { lighten(lead, 0.55) };
+        for i in 0..count {
+            let speed = h * (3.0 + 3.0 * hash01(i * 5 + 11));
+            let u = (t * speed + len * hash01(i * 5 + 12)).rem_euclid(len);
+            let x = x0 + u;
+            // inside a gap between Rage segments there is nothing to light
+            if n > 1 && ((x - x0) % (sw + gap)) > sw {
+                continue;
+            }
+            let y = y0 + h * (0.5 + 0.28 * (t * (1.5 + hash01(i * 5 + 13)) + i as f32).sin());
+            let ends = (u / (h * 1.5)).min((len - u) / (h * 0.8)).clamp(0.0, 1.0);
+            let flicker = 0.55 + 0.45 * (t * (7.0 + 5.0 * hash01(i * 5 + 14)) + i as f32 * 2.1).sin();
+            let a = 0.85 * ends * flicker * alpha;
+            let r = h * (0.05 + 0.05 * hash01(i * 5 + 15));
+            let tail = (speed * 0.08).min(u);
+            c.line((x - tail, y), (x - r, y), (r * 0.8).max(0.6), mote, 0.18 * a);
+            for k in 0..3 {
+                c.circle((x, y), (r * (2.6 - 0.5 * k as f32)).max(1.0), true, 0.0, mote, 0.1 * a);
+            }
+            c.circle((x, y), r.max(0.6), true, 0.0, lighten(mote, 0.5), a);
         }
     }
     if n > 1 && frac > 0.002 && frac < 0.999 {
@@ -626,8 +880,9 @@ fn strokes(ch: char) -> Vec<Vec<(f32, f32)>> {
 }
 
 /// A stick button glyph ("L3" / "R3"): white disc, dark rim and lettering, ringed by burning fire when `fire` > 0.
-/// `t` is a running clock in seconds: the flames rise, sway and flicker, and embers drift up off the top.
-pub fn stick_button(cx: f32, cy: f32, r: f32, label: &str, fire: f32, t: f32, alpha: f32) -> Vec<Prim> {
+/// `t` is a running clock in seconds: the flames rise, sway and flicker, and embers drift up off the top. With
+/// `ART_STICKS` in `art`, the button itself is Ragnarök's own.
+pub fn stick_button(cx: f32, cy: f32, r: f32, label: &str, fire: f32, t: f32, alpha: f32, art: u32) -> Vec<Prim> {
     let mut c = Canvas { out: Vec::new() };
     if fire > 0.0 {
         let fa = fire * alpha;
@@ -664,6 +919,16 @@ pub fn stick_button(cx: f32, cy: f32, r: f32, label: &str, fire: f32, t: f32, al
             c.circle((x, y), (r * 0.085 * (1.0 - u)).max(0.6), true, 0.0, if i % 2 == 0 { 0xFFB060 } else { 0xFF7A3A }, 0.9 * (1.0 - u) * fa);
         }
     }
+    let own = match label {
+        "L3" => Some("hud_btn_l3"),
+        "R3" => Some("hud_btn_r3"),
+        _ => None,
+    };
+    if let Some(id) = own.filter(|_| art & ART_STICKS != 0) {
+        c.circle((cx, cy), r * 1.08, true, 0.0, 0x141414, 0.95 * alpha);
+        c.out.extend(tex_button(id, cx, cy, r, alpha));
+        return c.out;
+    }
     c.circle((cx, cy), r * 1.08, true, 0.0, 0x141414, 0.95 * alpha);
     c.circle((cx, cy), r, true, 0.0, 0xF2F2F0, alpha);
     c.circle((cx, cy), r * 0.86, false, (r * 0.06).max(1.0), 0xBDBDBD, 0.8 * alpha);
@@ -685,12 +950,12 @@ pub fn stick_button(cx: f32, cy: f32, r: f32, label: &str, fire: f32, t: f32, al
 }
 
 /// Ragnarök's Spartan Rage prompt in `rect`: L3 + R3, both buttons on fire (`t`: running clock, seconds).
-pub fn rage_prompt(rect: &Rect, t: f32, alpha: f32) -> Vec<Prim> {
+pub fn rage_prompt(rect: &Rect, t: f32, alpha: f32, art: u32) -> Vec<Prim> {
     let r = rect.h * 0.34;
     let cy = rect.y + rect.h / 2.0;
     let (lx, rx) = (rect.x + rect.w * 0.2, rect.x + rect.w * 0.8);
-    let mut out = stick_button(lx, cy, r, "L3", 1.0, t, alpha);
-    out.extend(stick_button(rx, cy, r, "R3", 1.0, t + 0.37, alpha));
+    let mut out = stick_button(lx, cy, r, "L3", 1.0, t, alpha, art);
+    out.extend(stick_button(rx, cy, r, "R3", 1.0, t + 0.37, alpha, art));
     let mx = (lx + rx) / 2.0;
     let arm = r * 0.42;
     let t = (r * 0.22).max(1.5);
@@ -714,6 +979,7 @@ pub fn rotated(prims: &[Prim], centre: (f32, f32), angle: f32) -> Vec<Prim> {
             Prim::Circle { c, r, fill, thick, color, alpha } => Prim::Circle { c: rot(*c), r: *r, fill: *fill, thick: *thick, color: *color, alpha: *alpha },
             Prim::Poly { pts, color, alpha } => Prim::Poly { pts: pts.iter().map(|q| rot(*q)).collect(), color: *color, alpha: *alpha },
             Prim::Grad { x0, y0, x1, y1, left, right, alpha } => Prim::Poly { pts: vec![rot((*x0, *y0)), rot((*x1, *y0)), rot((*x1, *y1)), rot((*x0, *y1))], color: mix(*left, *right, 0.5), alpha: *alpha },
+            Prim::Tex { asset, pts, uv, color, alpha } => Prim::Tex { asset, pts: pts.map(rot), uv: *uv, color: *color, alpha: *alpha },
         })
         .collect()
 }
@@ -845,6 +1111,7 @@ mod tests {
             Prim::Circle { c, r, .. } => vec![(c.0 - r, c.1 - r), (c.0 + r, c.1 + r)],
             Prim::Poly { pts, .. } => pts.clone(),
             Prim::Grad { x0, y0, x1, y1, .. } => vec![(*x0, *y0), (*x1, *y1)],
+            Prim::Tex { pts, .. } => pts.to_vec(),
         }
     }
 
@@ -912,6 +1179,78 @@ mod tests {
         assert!((lit_top(1.0) - 24.0).abs() < 0.01, "a ready plate is lit to its top");
         assert!((lit_top(0.5) - 50.0).abs() < 0.01, "half charged: lit up to the middle");
         assert!(lit_top(0.0) > 75.0, "nothing lit when it has just been used");
+    }
+
+    #[test]
+    fn every_ragnarok_piece_the_hud_places_is_an_asset_picked_from_the_gallery() {
+        for (_, ids) in ART_GROUPS {
+            for id in ids {
+                let a = crate::sheets::ASSETS.iter().find(|a| a.id == *id).unwrap_or_else(|| panic!("{id} is not in assets.json"));
+                assert_ne!(a.ragnarok_pick, "none", "{id} has no Ragnarök picture picked");
+                assert!(is_placed_piece(id));
+            }
+        }
+        assert!(!is_placed_piece("hud_icon_shield"), "whole icons are still cropped to their shape");
+    }
+
+    #[test]
+    fn a_group_of_pieces_counts_only_when_all_of_it_is_loaded() {
+        assert_eq!(art_flags(|_| false), 0);
+        assert_eq!(art_flags(|_| true), ART_PLATE | ART_RELIC | ART_RAGE | ART_STICKS | ART_TRIANGLE);
+        let no_spec = art_flags(|id| id != "hud_part_plate_spec");
+        assert_eq!(no_spec & ART_PLATE, 0, "a plate missing a piece falls back to the drawing");
+        assert_ne!(no_spec & ART_RELIC, 0);
+    }
+
+    #[test]
+    fn a_textured_plate_is_four_quarters_meeting_at_its_centre() {
+        let (cx, cy) = (200.0, 300.0);
+        let prims = runic_plate_fx(cx, cy, 30.0, 26.0, 0x4A7FB4, 0x8AB4DC, 1.0, 0.0, 0.0, 1.0, ART_PLATE);
+        let faces: Vec<&[(f32, f32); 4]> = prims.iter().filter_map(|p| if let Prim::Tex { asset: "hud_part_plate_face", pts, color, .. } = p { (*color == shade(0x4A7FB4, 0.15)).then_some(pts) } else { None }).collect();
+        assert_eq!(faces.len(), 4, "one face piece per quarter");
+        for pts in &faces {
+            assert!(pts.iter().any(|q| (q.0 - cx).abs() < 1e-3 && (q.1 - cy).abs() < 1e-3), "each quarter reaches the centre: {pts:?}");
+        }
+        // one quarter in each direction from the centre
+        let mut dirs: Vec<(bool, bool)> = faces.iter().map(|p| (p.iter().map(|q| q.0).sum::<f32>() > 4.0 * cx, p.iter().map(|q| q.1).sum::<f32>() > 4.0 * cy)).collect();
+        dirs.sort();
+        dirs.dedup();
+        assert_eq!(dirs.len(), 4);
+        // without the pieces it is the mod's own drawing
+        assert!(!runic_plate_fx(cx, cy, 30.0, 26.0, 0x4A7FB4, 0x8AB4DC, 1.0, 0.0, 0.0, 1.0, 0).iter().any(|p| matches!(p, Prim::Tex { .. })));
+    }
+
+    #[test]
+    fn a_band_of_a_piece_keeps_its_texture_in_step() {
+        let p = piece("hud_part_plate_face", (0.0, 64.0), (100.0, 100.0), 1.0, 1.0, 0, 0xFFFFFF, 1.0);
+        let Prim::Tex { pts: full, uv: full_uv, .. } = &p else { unreachable!() };
+        // the whole piece: v runs linearly from its top edge to its bottom edge
+        let (top, bottom) = (full[0].1, full[3].1);
+        let v_at = |y: f32| full_uv[0].1 + (y - top) / (bottom - top) * (full_uv[3].1 - full_uv[0].1);
+        let Some(Prim::Tex { pts, uv, .. }) = tex_band(&p, 70.0, 80.0) else { panic!("a band inside the piece") };
+        for (q, t) in pts.iter().zip(uv.iter()) {
+            assert!(q.1 >= 70.0 - 1e-3 && q.1 <= 80.0 + 1e-3);
+            assert!((t.1 - v_at(q.1)).abs() < 1e-5, "{q:?} {t:?}");
+        }
+        // the pivot edge reaches the pivot; the texture is sampled from half a texel in (the game's sampler wraps)
+        assert!((bottom - 100.0).abs() < 1e-4 && (full_uv[3].1 - 63.5 / 64.0).abs() < 1e-6);
+        assert!(tex_band(&p, 120.0, 130.0).is_none(), "below the piece");
+    }
+
+    #[test]
+    fn kratos_bars_move_with_the_clock_and_others_stay_still() {
+        let r = Rect { x: 0.0, y: 0.0, w: 392.0, h: 19.0 };
+        let at = |live| rbar_fx(&r, 0.8, 0.8, 0, 0.0, 0x55914A, 0x8EE05A, 1, 0.0, 1.0, live);
+        let (a, b) = (at(Some(1.0)), at(Some(1.4)));
+        assert_ne!(format!("{a:?}"), format!("{b:?}"), "the smoke and motes move");
+        assert_eq!(format!("{:?}", at(None)), format!("{:?}", at(None)));
+        assert!(at(None).len() < a.len(), "a still bar has no glow or motes");
+        // motes stay inside the fill
+        for p in &a {
+            if let Prim::Circle { c, r: cr, .. } = p {
+                assert!(c.0 <= 392.0 * 0.8 + 0.01 && c.0 >= 0.0 && c.1 >= 0.0 && c.1 <= 19.0, "{c:?} r {cr}");
+            }
+        }
     }
 
     #[test]

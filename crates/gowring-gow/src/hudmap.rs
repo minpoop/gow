@@ -9,17 +9,22 @@ use anyhow::{bail, Result};
 use std::fmt::Write;
 use std::path::Path;
 
+/// The pieces the first starter choices (0.1.24) covered: a file marked `_suggestions_applied` before the list of
+/// suggested pieces was kept had these.
+const FIRST_SUGGESTED: [&str; 4] = ["hud_health_frame", "hud_rage_frame", "hud_enemy_health", "hud_icon_shield"];
+
 /// The file's text when it does not exist yet: every HUD piece, empty, with what it is.
 pub fn template(pieces: &[(&str, &str)]) -> String {
-    render(pieces, &[], false)
+    render(pieces, &[], &[])
 }
 
-/// The file's text with these values (pieces not listed are empty). `suggested` records that the starter choices
-/// were put in once, so a piece the player empties again stays empty.
-pub fn render(pieces: &[(&str, &str)], values: &[(String, String)], suggested: bool) -> String {
+/// The file's text with these values (pieces not listed are empty). `suggested` lists the pieces a starter choice was
+/// offered for once, so a piece the player empties again stays empty.
+pub fn render(pieces: &[(&str, &str)], values: &[(String, String)], suggested: &[String]) -> String {
     let mut o = String::from("{\n  \"_about\": \"Put the name of a picture from the ragnarok_ui folder (for example TX_sonhud_meter_bg_1234ABCD) next to a HUD piece, save, and start the game again. Leave a piece empty to keep the mod's own drawing. Open ragnarok_ui/index.html in a browser to see every picture with its name. White shapes are coloured by the HUD (health green, Rage red).\"");
-    if suggested {
-        o.push_str(",\n  \"_suggestions_applied\": \"Starter choices were filled in once; change or empty any of them and they stay as you leave them.\"");
+    if !suggested.is_empty() {
+        o.push_str(",\n  \"_suggestions_applied\": \"Starter choices were filled in once for the pieces in _suggested; change or empty any of them and they stay as you leave them.\"");
+        let _ = write!(o, ",\n  \"_suggested\": \"{}\"", suggested.join(" ").replace('"', ""));
     }
     for (id, what) in pieces {
         let v = values.iter().find(|(k, _)| k == id).map(|(_, v)| v.replace('"', "")).unwrap_or_default();
@@ -29,29 +34,44 @@ pub fn render(pieces: &[(&str, &str)], values: &[(String, String)], suggested: b
     o
 }
 
-/// Put starter choices into a file that has never had them, for pieces that are empty and whose picture was
-/// exported. `None` when nothing changes (already applied, unreadable, or nothing to add).
+/// The pieces a file has already been offered a starter choice for.
+fn suggested_ids(obj: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    match obj.get("_suggested").and_then(|v| v.as_str()) {
+        Some(list) => list.split_whitespace().map(str::to_string).collect(),
+        None if obj.contains_key("_suggestions_applied") => FIRST_SUGGESTED.iter().map(|s| s.to_string()).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Offer each starter choice once: a piece never offered one gets it when it is empty and its picture was exported;
+/// a piece the player already chose for is only marked offered, and a piece offered once is never filled again (so
+/// emptying it sticks). A picture not exported yet is offered again later. `None` when nothing changes.
 pub fn fill_suggestions(text: &str, pieces: &[(&str, &str)], suggestions: &[(&str, &str)], ui_dir: &Path) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(text).ok()?;
     let obj = v.as_object()?;
-    if obj.contains_key("_suggestions_applied") {
-        return None;
-    }
+    let mut offered = suggested_ids(obj);
     let mut values: Vec<(String, String)> = obj
         .iter()
         .filter(|(k, _)| !k.starts_with('_'))
         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.trim().to_string())))
         .filter(|(_, s)| !s.is_empty())
         .collect();
-    let mut added = 0;
+    let mut changed = false;
     for (id, tex) in suggestions {
-        let empty = !values.iter().any(|(k, _)| k == id);
-        if empty && pieces.iter().any(|(p, _)| p == id) && ui_dir.join(picture_name(tex)).exists() {
-            values.push((id.to_string(), tex.to_string()));
-            added += 1;
+        if offered.iter().any(|o| o == id) || !pieces.iter().any(|(p, _)| p == id) {
+            continue;
         }
+        let chosen = values.iter().any(|(k, _)| k == id);
+        if !chosen {
+            if !ui_dir.join(picture_name(tex)).exists() {
+                continue;
+            }
+            values.push((id.to_string(), tex.to_string()));
+        }
+        offered.push(id.to_string());
+        changed = true;
     }
-    (added > 0).then(|| render(pieces, &values, true))
+    changed.then(|| render(pieces, &values, &offered))
 }
 
 /// List HUD pieces a newer version added (for example the runic icons) in a file that predates them, keeping every
@@ -68,7 +88,7 @@ pub fn add_new_pieces(text: &str, pieces: &[(&str, &str)]) -> Option<String> {
         .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.trim().to_string())))
         .filter(|(_, s)| !s.is_empty())
         .collect();
-    Some(render(pieces, &values, obj.contains_key("_suggestions_applied")))
+    Some(render(pieces, &values, &suggested_ids(obj)))
 }
 
 /// The non-empty choices: (HUD piece id, texture name).
@@ -167,7 +187,7 @@ mod tests {
     fn new_pieces_are_listed_without_touching_choices() {
         let old = [("hud_health_frame", "health frame")];
         let now = [("hud_health_frame", "health frame"), ("hud_icon_runic_glacial", "Glacial Cleave icon")];
-        let mine = render(&old, &[("hud_health_frame".into(), "TX_mine".into())], true);
+        let mine = render(&old, &[("hud_health_frame".into(), "TX_mine".into())], &["hud_health_frame".to_string()]);
         let grown = add_new_pieces(&mine, &now).expect("a piece to add");
         assert!(grown.contains("\"hud_icon_runic_glacial\": \"\""), "{grown}");
         assert!(grown.contains("_suggestions_applied"), "the marker stays");
@@ -191,7 +211,7 @@ mod tests {
         }
         let sugg = [("hud_health_frame", "TX_health_A"), ("hud_rage_frame", "TX_rage_B"), ("hud_icon_shield", "TX_not_exported")];
         // the player already chose a rage picture: kept; the missing picture is not suggested
-        let mine = render(&pieces, &[("hud_rage_frame".into(), "TX_mine".into())], false);
+        let mine = render(&pieces, &[("hud_rage_frame".into(), "TX_mine".into())], &[]);
         let filled = fill_suggestions(&mine, &pieces, &sugg, &dir).expect("something to add");
         let got = parse(&filled).unwrap();
         assert!(got.contains(&("hud_health_frame".to_string(), "TX_health_A".to_string())));
@@ -200,6 +220,28 @@ mod tests {
         // emptied again by the player: never refilled
         let emptied = filled.replace("\"TX_health_A\"", "\"\"");
         assert!(fill_suggestions(&emptied, &pieces, &sugg, &dir).is_none());
+        // the shield's picture exported later: offered then, once
+        std::fs::write(dir.join("TX_not_exported.png"), b"x").unwrap();
+        let later = fill_suggestions(&emptied, &pieces, &sugg, &dir).expect("the shield now");
+        assert!(parse(&later).unwrap().contains(&("hud_icon_shield".to_string(), "TX_not_exported".to_string())));
+        assert!(!parse(&later).unwrap().iter().any(|(k, _)| k == "hud_health_frame"), "still empty as the player left it");
+        assert!(fill_suggestions(&later, &pieces, &sugg, &dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_from_before_the_list_gets_only_the_new_starter_choices() {
+        // 0.1.24 to 0.1.29 marked the file without saying which pieces: those were the first four
+        let pieces = [("hud_health_frame", "health frame"), ("hud_icon_shield", "shield"), ("hud_part_plate_face", "plate face")];
+        let dir = std::env::temp_dir().join(format!("gowring-hudmap-o-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["TX_health_A", "TX_plate_F"] {
+            std::fs::write(dir.join(format!("{n}.png")), b"x").unwrap();
+        }
+        let old = "{\n  \"_suggestions_applied\": \"...\",\n  \"hud_health_frame\": \"\",\n  \"hud_icon_shield\": \"\",\n  \"hud_part_plate_face\": \"\"\n}";
+        let sugg = [("hud_health_frame", "TX_health_A"), ("hud_part_plate_face", "TX_plate_F")];
+        let got = parse(&fill_suggestions(old, &pieces, &sugg, &dir).expect("the plate face")).unwrap();
+        assert_eq!(got, vec![("hud_part_plate_face".to_string(), "TX_plate_F".to_string())], "the emptied health frame stays empty");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -73,6 +73,8 @@ pub struct HudState {
     pub time_s: f32,
     /// The runic picker, shown for a moment after L1 + D-pad changes a slot.
     pub runic_picker: Option<RunicPicker>,
+    /// Which of Ragnarök's own HUD pieces the renderer has (`vector::ART_*`); the rest is the mod's drawing.
+    pub art: u32,
 }
 
 /// The runics a weapon can put in the slot just changed, with the chosen one marked.
@@ -121,10 +123,12 @@ pub struct Rect {
 #[derive(Clone, Debug)]
 pub enum DrawCmd {
     /// `color` fills the bar, glowing to `lead` at the leading edge; `segments` > 1 splits it (the Rage meter).
-    /// `trail`: top of the chunk just lost, drawn in `trail_color` at `trail_alpha`; `flash`: white-hot over the fill.
-    Bar { rect: Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, frame: Option<&'static str>, fill: Option<&'static str>, color: u32, lead: u32, segments: u32, flash: f32, alpha: f32 },
-    /// A runic plate `rx` by `ry` from its centre: `color` its face, `light` its lit tone, `aura` a soft halo (0..1).
-    Ring { cx: f32, cy: f32, rx: f32, ry: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, light: u32, aura: f32, flash: f32, alpha: f32 },
+    /// `trail`: top of the chunk just lost, drawn in `trail_color` at `trail_alpha`; `flash`: white-hot over the fill;
+    /// `live`: the HUD clock for Kratos' own bars, whose fill glows and moves (see `vector::rbar_fx`).
+    Bar { rect: Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, frame: Option<&'static str>, fill: Option<&'static str>, color: u32, lead: u32, segments: u32, flash: f32, alpha: f32, live: Option<f32> },
+    /// A runic plate `rx` by `ry` from its centre: `color` its face, `light` its lit tone, `aura` a soft halo (0..1);
+    /// `art` as in `HudState`.
+    Ring { cx: f32, cy: f32, rx: f32, ry: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, light: u32, aura: f32, flash: f32, alpha: f32, art: u32 },
     /// `mono`: drawn as a white silhouette (Ragnarök's glyph style) when there is no picture for it.
     Icon { rect: Rect, asset: Option<&'static str>, color: u32, alpha: f32, mono: bool },
     Text { rect: Rect, px: f32, text: String, color: u32, alpha: f32, align: Align, plate: Option<&'static str>, portrait: Option<&'static str> },
@@ -217,6 +221,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     segments,
                     flash: 0.0,
                     alpha: 1.0,
+                    live: Some(s.time_s),
                 })
             }
             HudBind::PlayerRage => out.push(DrawCmd::Bar {
@@ -232,9 +237,10 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                 segments,
                 flash: s.rage_flash,
                 alpha: 1.0,
+                live: Some(s.time_s),
             }),
             // Ragnarök's prompt: the two stick buttons, on fire
-            HudBind::RageReady => out.push(DrawCmd::Shapes { prims: vector::rage_prompt(&rect_at(h), s.time_s, 1.0) }),
+            HudBind::RageReady => out.push(DrawCmd::Shapes { prims: vector::rage_prompt(&rect_at(h), s.time_s, 1.0, s.art) }),
             HudBind::RunicLightCd | HudBind::RunicHeavyCd => {
                 let r = if h.bind == HudBind::RunicLightCd { &s.runic_light } else { &s.runic_heavy };
                 let Some(r) = r else { continue };
@@ -258,6 +264,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     flash: r.flash,
                     // Ragnarök fades the runics while Spartan Rage burns
                     alpha: if s.rage_active { 0.3 } else { 1.0 },
+                    art: s.art,
                 });
             }
             HudBind::WeaponCurrent | HudBind::ShieldState => {
@@ -286,11 +293,16 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     let inner_rect = Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 };
                     let axe_away = s.recall_available && s.recall_label == "Recall";
                     if s.rage_active {
-                        prims.extend(vector::rage_mark(&inner_rect, 1.0));
+                        if s.art & vector::ART_RAGE != 0 {
+                            // Ragnarök's own mark, 44 px across on its 35.5 px disc
+                            prims.push(vector::tex_icon("hud_icon_rage", cx, cy, r * 44.0 / 35.5, 0xFFFFFF, 1.0));
+                        } else {
+                            prims.extend(vector::rage_mark(&inner_rect, 1.0));
+                        }
                         out.push(DrawCmd::Shapes { prims });
                     } else if axe_away {
                         // the axe is out of Kratos' hand: the disc shows the button that calls it back
-                        prims.extend(vector::face_button(cx, cy, r * 0.5, 1.0));
+                        prims.extend(vector::face_button(cx, cy, r * 0.5, 1.0, s.art));
                         out.push(DrawCmd::Shapes { prims });
                     } else {
                         out.push(DrawCmd::Shapes { prims });
@@ -299,7 +311,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                 } else {
                     let (rx, ry) = (rc.w / 2.0 - 4.0 * k * us, rc.h / 2.0 - 4.0 * k * us);
                     let fade = if s.rage_active { 0.3 } else { 1.0 };
-                    out.push(DrawCmd::Shapes { prims: vector::plate(vector::PlateShape::Octagon, cx, cy, rx, ry, vector::shade(lead, 0.35), lead, 1.0, fade) });
+                    out.push(DrawCmd::Shapes { prims: vector::relic_plate(cx, cy, rx, ry, lead, fade, s.art) });
                     let inner = ry * 0.66;
                     let alpha = fade * if s.shield_drawn { 1.0 } else { 0.55 };
                     out.push(DrawCmd::Icon { rect: Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 }, asset: h.glyph, color, alpha, mono: true });
@@ -311,7 +323,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             HudBind::RecallState => {
                 if s.recall_label != "Recall" {
                     let rc = rect_at(h);
-                    out.push(DrawCmd::Shapes { prims: vector::face_button(rc.x + rc.w / 2.0, rc.y + rc.h / 2.0, rc.w.min(rc.h) / 2.0, 1.0) });
+                    out.push(DrawCmd::Shapes { prims: vector::face_button(rc.x + rc.w / 2.0, rc.y + rc.h / 2.0, rc.w.min(rc.h) / 2.0, 1.0, s.art) });
                 }
             }
             HudBind::Finisher => out.push(DrawCmd::Prompt { rect: rect_at(h), text: Some("Finish".into()), glyph: h.glyph, backing: h.frame, color, alpha: pulse_alpha }),
@@ -321,12 +333,12 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     let (w, hh) = (h.w as f32 * k * us, h.h as f32 * k * us);
                     let rc = Rect { x: px - w / 2.0 + h.x as f32 * k * 0.0, y: py + h.y as f32 * k, w, h: hh };
                     match h.bind {
-                        HudBind::EnemyHp => out.push(DrawCmd::Bar { rect: rc, frac: e.hp_frac, trail: e.hp_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 0.95 }),
+                        HudBind::EnemyHp => out.push(DrawCmd::Bar { rect: rc, frac: e.hp_frac, trail: e.hp_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 0.95, live: None }),
                         HudBind::EnemyStun => {
-                            out.push(DrawCmd::Bar { rect: rc, frac: e.stun_frac, trail: e.stun_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 0.95 });
+                            out.push(DrawCmd::Bar { rect: rc, frac: e.stun_frac, trail: e.stun_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 0.95, live: None });
                             if e.status_frac > 0.01 && e.status_color != 0 {
                                 let thin = Rect { y: rc.y + rc.h + 2.0 * k * us, h: (rc.h * 0.5).max(2.0), ..rc };
-                                out.push(DrawCmd::Bar { rect: thin, frac: e.status_frac, trail: e.status_frac, trail_color: 0, trail_alpha: 0.0, frame: None, fill: None, color: e.status_color, lead: vector::lighten(e.status_color, 0.4), segments: 1, flash: 0.0, alpha: 0.95 });
+                                out.push(DrawCmd::Bar { rect: thin, frac: e.status_frac, trail: e.status_frac, trail_color: 0, trail_alpha: 0.0, frame: None, fill: None, color: e.status_color, lead: vector::lighten(e.status_color, 0.4), segments: 1, flash: 0.0, alpha: 0.95, live: None });
                             }
                             if let Some(label) = e.status_label {
                                 let tag = Rect { y: rc.y + rc.h * 2.0 + 6.0 * k * us, h: 16.0 * k * us, ..rc };
@@ -341,12 +353,12 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             }
             HudBind::BossHp => {
                 if let Some(b) = &s.boss {
-                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.hp_frac, trail: b.hp_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 1.0 });
+                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.hp_frac, trail: b.hp_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 1.0, live: None });
                 }
             }
             HudBind::BossStun => {
                 if let Some(b) = &s.boss {
-                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.stun_frac, trail: b.stun_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 1.0 });
+                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.stun_frac, trail: b.stun_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 1.0, live: None });
                 }
             }
             HudBind::MimirSubtitle => {
@@ -370,14 +382,14 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
         }
     }
     if let Some(p) = &s.runic_picker {
-        picker(p, &mut out, (k, ox, oy), us);
+        picker(p, &mut out, (k, ox, oy), us, s.art);
     }
     out
 }
 
 /// The runic picker: a panel above the runic plates listing the weapon's runics for the slot just changed, the
 /// chosen one lit with what it does. Laid out on the 1920x1080 canvas from the bottom-left corner, like the cluster.
-fn picker(p: &RunicPicker, out: &mut Vec<DrawCmd>, (k, ox, oy): (f32, f32, f32), us: f32) {
+fn picker(p: &RunicPicker, out: &mut Vec<DrawCmd>, (k, ox, oy): (f32, f32, f32), us: f32, art: u32) {
     let a = p.alpha.clamp(0.0, 1.0);
     if a <= 0.01 || p.options.is_empty() {
         return;
@@ -417,7 +429,7 @@ fn picker(p: &RunicPicker, out: &mut Vec<DrawCmd>, (k, ox, oy): (f32, f32, f32),
         }
         let (cx, ccy) = at(x0 + 46.0, cy);
         let (face, lit, aura) = p.colors;
-        prims.extend(vector::runic_plate(cx, ccy, sz(22.0), sz(19.0), face, lit, if chosen { 1.0 } else { 0.0 }, if chosen { aura } else { 0.0 }, a));
+        prims.extend(vector::runic_plate(cx, ccy, sz(22.0), sz(19.0), face, lit, if chosen { 1.0 } else { 0.0 }, if chosen { aura } else { 0.0 }, a, art));
         out.push(DrawCmd::Shapes { prims });
         let g = sz(13.0);
         out.push(DrawCmd::Icon { rect: Rect { x: cx - g, y: ccy - g, w: g * 2.0, h: g * 2.0 }, asset: *icon, color: 0xFFFFFF, alpha: if chosen { a } else { 0.55 * a }, mono: true });
@@ -532,6 +544,7 @@ mod tests {
                             vector::Prim::Circle { c, r, .. } => vec![(c.0 - r, c.1 - r), (c.0 + r, c.1 + r)],
                             vector::Prim::Poly { pts, .. } => pts.clone(),
                             vector::Prim::Grad { x0, y0, x1, y1, .. } => vec![(*x0, *y0), (*x1, *y1)],
+                            vector::Prim::Tex { pts, .. } => pts.to_vec(),
                         })
                         .collect();
                     let (x0, x1) = (pts.iter().map(|q| q.0).fold(f32::MAX, f32::min), pts.iter().map(|q| q.0).fold(f32::MIN, f32::max));

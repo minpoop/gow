@@ -27,22 +27,20 @@ fn hud_pieces() -> Vec<(&'static str, &'static str, &'static str)> {
     ASSETS.iter().filter(|a| a.id.starts_with("hud_") && a.output.ends_with(".png")).map(|a| (a.id, a.describes, a.output)).collect()
 }
 
-/// Copy the Ragnarök pictures chosen in `ragnarok_hud.json` into the cache for the overlay (before every Play).
-/// Ragnarök pictures picked from the player's own gallery (0.1.23 test) as the starting look.
-const SUGGESTED_HUD: [(&str, &str); 4] = [
-    ("hud_health_frame", "TX_player_health_housing_3F78F9427233D20B"),
-    ("hud_rage_frame", "TX_player_rage_housing_0B32235030FD391C"),
-    ("hud_enemy_health", "TX_enemyhud_meter_m_F808F3D038FF250A"),
-    ("hud_icon_shield", "TX_icon_runicarmor_D0945976D09F21C9"),
-];
+/// Ragnarök pictures picked from the player's own gallery as the starting look (`ragnarok_pick` in assets.json: the
+/// bar shapes, the shield icon, and the pieces the runic plates, shield octagon, Rage mark and buttons are built from).
+fn suggested_hud() -> Vec<(&'static str, &'static str)> {
+    ASSETS.iter().filter(|a| a.ragnarok_pick != "none").map(|a| (a.id, a.ragnarok_pick)).collect()
+}
 
+/// Copy the Ragnarök pictures chosen in `ragnarok_hud.json` into the cache for the overlay (before every Play).
 fn apply_hud_choices(ctx: &Ctx) {
     let path = ctx.local.join("ragnarok_hud.json");
     let Ok(mut text) = std::fs::read_to_string(&path) else { return };
     let pieces: Vec<(&str, &str)> = hud_pieces().iter().map(|(id, what, _)| (*id, *what)).collect();
-    if let Some(filled) = gowring_gow::hudmap::fill_suggestions(&text, &pieces, &SUGGESTED_HUD, &ctx.local.join("ragnarok_ui")) {
+    if let Some(filled) = gowring_gow::hudmap::fill_suggestions(&text, &pieces, &suggested_hud(), &ctx.local.join("ragnarok_ui")) {
         if std::fs::write(&path, &filled).is_ok() {
-            ctx.log("ragnarok_hud: starter Ragnarök pictures filled in (health and Rage bar shapes, enemy bars, shield icon)");
+            ctx.log("ragnarok_hud: starter Ragnarök pictures filled in (bar shapes, shield icon, and the pieces of the runic plates, shield octagon, Rage mark and buttons)");
             text = filled;
         }
     }

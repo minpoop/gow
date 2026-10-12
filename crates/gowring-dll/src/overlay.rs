@@ -54,6 +54,8 @@ pub struct Overlay {
     small_font: Option<SendFont>,
     /// The weapon in hand and when it was taken up: its name shows for a moment after a switch.
     weapon_seen: (&'static str, std::time::Instant),
+    /// Which of Ragnarök's own HUD pieces were uploaded (`vector::ART_*`).
+    art: u32,
 }
 
 /// `FontId` wraps a raw pointer into ImGui's atlas; it is only ever used on the render thread.
@@ -64,7 +66,7 @@ unsafe impl Sync for SendFont {}
 
 impl Overlay {
     pub fn new(shared: Shared, store: Arc<Store>) -> Self {
-        Overlay { shared, store, textures: HashMap::new(), masks: Default::default(), big_font: None, mid_font: None, small_font: None, weapon_seen: ("", std::time::Instant::now()) }
+        Overlay { shared, store, textures: HashMap::new(), masks: Default::default(), big_font: None, mid_font: None, small_font: None, weapon_seen: ("", std::time::Instant::now()), art: 0 }
     }
 }
 
@@ -104,13 +106,16 @@ impl ImguiRenderLoop for Overlay {
             }
         }
         crate::glog!("overlay", "initialised: {ok}/{} textures uploaded ({} of them white shapes the HUD colours: {:?})", self.store.textures.len(), self.masks.len(), self.masks);
+        self.art = gowring_core::vector::art_flags(|id| self.textures.contains_key(id));
+        crate::glog!("overlay", "Ragnarök's own HUD pieces in use (bits: plates 1, shield octagon 2, Rage mark 4, L3/R3 8, Triangle 16): {}", self.art);
     }
 
     fn render(&mut self, ui: &mut Ui) {
-        let snap = match self.shared.lock() {
+        let mut snap = match self.shared.lock() {
             Ok(g) => g.clone(),
             Err(_) => return,
         };
+        snap.hud.art = self.art;
         let [w, h] = ui.io().display_size;
         if w < 16.0 || h < 16.0 {
             return;
@@ -154,7 +159,7 @@ impl ImguiRenderLoop for Overlay {
                             dl.add_rect([0.0, 0.0], [w, h], col(*color, *alpha)).filled(true).build();
                         }
                     }
-                    DrawCmd::Shapes { prims } => draw_prims(&dl, prims),
+                    DrawCmd::Shapes { prims } => draw_prims(&dl, prims, &self.textures),
                     DrawCmd::Label { x, y, px, text, color, alpha, align } => {
                         // the loaded size nearest the one asked for
                         let font = if *px >= 25.0 { &self.big_font } else if *px >= 18.0 { &self.mid_font } else { &self.small_font };
@@ -164,8 +169,8 @@ impl ImguiRenderLoop for Overlay {
                     }
                     // Ragnarök's own bar pictures are plain white bar shapes, so bars are drawn in Ragnarök's look by the
                     // HUD itself; only a full-colour picture chosen for a bar replaces that drawing.
-                    DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, frame, fill, color, lead, segments, flash, alpha } if !is_picture(*frame) && !is_picture(*fill) => {
-                        draw_prims(&dl, &gowring_core::vector::rbar_fx(rect, *frac, *trail, *trail_color, *trail_alpha, *color, *lead, *segments, *flash, *alpha));
+                    DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, frame, fill, color, lead, segments, flash, alpha, live } if !is_picture(*frame) && !is_picture(*fill) => {
+                        draw_prims(&dl, &gowring_core::vector::rbar_fx(rect, *frac, *trail, *trail_color, *trail_alpha, *color, *lead, *segments, *flash, *alpha, *live), &self.textures);
                     }
                     DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha, .. } => {
                         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
@@ -189,8 +194,8 @@ impl ImguiRenderLoop for Overlay {
                         }
                     }
                     // a runic plate in Ragnarök's look, lit from the bottom up as it recharges, with the runic's glyph
-                    DrawCmd::Ring { cx, cy, rx, ry, remaining, frame, icon, color, light, aura, flash, alpha, .. } if !is_picture(*frame) => {
-                        draw_prims(&dl, &gowring_core::vector::runic_plate_fx(*cx, *cy, *rx, *ry, *color, *light, 1.0 - remaining, *aura, *flash, *alpha));
+                    DrawCmd::Ring { cx, cy, rx, ry, remaining, frame, icon, color, light, aura, flash, alpha, art, .. } if !is_picture(*frame) => {
+                        draw_prims(&dl, &gowring_core::vector::runic_plate_fx(*cx, *cy, *rx, *ry, *color, *light, 1.0 - remaining, *aura, *flash, *alpha, *art), &self.textures);
                         let side = ry * 0.62;
                         let inner = Rect { x: cx - side, y: cy - side, w: side * 2.0, h: side * 2.0 };
                         let dim = if *remaining > 0.001 { 0.6 } else { 1.0 };
@@ -198,7 +203,7 @@ impl ImguiRenderLoop for Overlay {
                             Some(t) => image(t, &inner, alpha * dim, 0xFFFFFF),
                             None => {
                                 if let Some(v) = icon.and_then(|id| gowring_core::vector::mono_icon(id, &inner, 0xFFFFFF, alpha * dim)) {
-                                    draw_prims(&dl, &v);
+                                    draw_prims(&dl, &v, &self.textures);
                                 }
                             }
                         }
@@ -245,7 +250,7 @@ impl ImguiRenderLoop for Overlay {
                         if let Some(t) = tex(*asset) {
                             image(t, rect, *alpha, *color);
                         } else if let Some(v) = asset.and_then(|id| if *mono { gowring_core::vector::mono_icon(id, rect, *color, *alpha) } else { gowring_core::vector::icon_prims(id, rect, *color, *alpha) }) {
-                            draw_prims(&dl, &v);
+                            draw_prims(&dl, &v, &self.textures);
                         } else {
                             dl.add_rect([rect.x, rect.y], [rect.x + rect.w, rect.y + rect.h], col(*color, 0.5 * alpha)).thickness(2.0).build();
                             if let Some(id) = asset {
@@ -263,7 +268,12 @@ impl ImguiRenderLoop for Overlay {
                             }
                         }
                         let mut tx = rect.x + 10.0;
-                        if let Some(t) = tex(*glyph) {
+                        if let Some(id) = glyph.filter(|id| gowring_core::vector::is_placed_piece(id) && self.textures.contains_key(*id)) {
+                            // one of Ragnarök's whole button pictures: drawn as a button over its dark disc
+                            let r = rect.h * 0.4;
+                            draw_prims(&dl, &gowring_core::vector::tex_button(id, rect.x + 6.0 + r, rect.y + rect.h / 2.0, r, *alpha), &self.textures);
+                            tx = rect.x + 6.0 + 2.0 * r + 8.0;
+                        } else if let Some(t) = tex(*glyph) {
                             let side = rect.h * 0.8;
                             image(t, &Rect { x: rect.x + 6.0, y: rect.y + rect.h * 0.1, w: side, h: side }, *alpha, 0xFFFFFF);
                             tx = rect.x + 6.0 + side + 8.0;
@@ -312,7 +322,7 @@ impl ImguiRenderLoop for Overlay {
                 dl.add_circle([sx, sy], size * 0.5, col(0x9FE3FF, 0.16)).filled(true).num_segments(24).build();
                 let (asset, angle) = if *id == "leviathan_axe" { ("hud_icon_axe", snap.hud.pulse * std::f32::consts::TAU * 3.0) } else { ("hud_icon_spear", 0.0) };
                 if let Some(v) = gowring_core::vector::icon_prims(asset, &rect, 0xFFFFFF, 1.0) {
-                    draw_prims(&dl, &gowring_core::vector::rotated(&v, (sx, sy), angle));
+                    draw_prims(&dl, &gowring_core::vector::rotated(&v, (sx, sy), angle), &self.textures);
                 } else {
                     dl.add_circle([sx, sy], 9.0, col(0x9FE3FF, 0.95)).filled(true).num_segments(16).build();
                 }
@@ -410,8 +420,9 @@ impl ImguiRenderLoop for Overlay {
     }
 }
 
-/// Draw the shared vector art (see `gowring_core::vector`) with ImGui's draw list.
-fn draw_prims(dl: &imgui::DrawListMut<'_>, prims: &[gowring_core::vector::Prim]) {
+/// Draw the shared vector art (see `gowring_core::vector`) with ImGui's draw list; `textures` holds the uploaded
+/// Ragnarök pictures that `Prim::Tex` pieces name.
+fn draw_prims(dl: &imgui::DrawListMut<'_>, prims: &[gowring_core::vector::Prim], textures: &HashMap<&'static str, (TextureId, f32, f32)>) {
     use gowring_core::vector::Prim;
     for p in prims {
         match p {
@@ -434,6 +445,13 @@ fn draw_prims(dl: &imgui::DrawListMut<'_>, prims: &[gowring_core::vector::Prim])
             }
             Prim::Grad { x0, y0, x1, y1, left, right, alpha } => {
                 dl.add_rect_filled_multicolor([*x0, *y0], [*x1, *y1], col(*left, *alpha), col(*right, *alpha), col(*right, *alpha), col(*left, *alpha));
+            }
+            Prim::Tex { asset, pts, uv, color, alpha } => {
+                if let Some((tid, _, _)) = textures.get(asset) {
+                    let p = |i: usize| [pts[i].0, pts[i].1];
+                    let u = |i: usize| [uv[i].0, uv[i].1];
+                    dl.add_image_quad(*tid, p(0), p(1), p(2), p(3)).uv(u(0), u(1), u(2), u(3)).col(col(*color, *alpha)).build();
+                }
             }
         }
     }

@@ -5,6 +5,9 @@
 //!
 //! `--match` draws only the player's corner cluster in the state of a reference screenshot (full health, Rage 89 %
 //! and ready, both runics ready) over that screenshot (an RGB PNG of the same size), to check the layout against it.
+//!
+//! `--art DIR` loads the Ragnarök pictures `assets.json` picks (`ragnarok_pick`) from DIR — the player's own exported
+//! `ragnarok_ui` folder, never shipped — so the HUD is drawn with Ragnarök's pieces as the overlay draws it in game.
 
 use gowring_core::hud::{self, Align, DrawCmd, EnemyBar, HudState, RunicHud, Screen};
 use gowring_core::vector::{self, Prim};
@@ -15,6 +18,24 @@ struct Canvas {
     h: usize,
     px: Vec<[f32; 3]>,
     font: fontdue::Font,
+    /// Ragnarök pictures by HUD asset id: (width, height, RGBA).
+    tex: std::sync::Arc<std::collections::HashMap<&'static str, (usize, usize, Vec<u8>)>>,
+}
+
+fn load_png(path: &std::path::Path) -> Option<(usize, usize, Vec<u8>)> {
+    let mut dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).ok()?));
+    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut r = dec.read_info().ok()?;
+    let mut buf = vec![0; r.output_buffer_size()];
+    let info = r.next_frame(&mut buf).ok()?;
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
+        png::ColorType::Rgb => buf[..info.buffer_size()].chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => buf[..info.buffer_size()].chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        png::ColorType::Grayscale => buf[..info.buffer_size()].iter().flat_map(|g| [*g, *g, *g, 255]).collect(),
+        _ => return None,
+    };
+    Some((info.width as usize, info.height as usize, rgba))
 }
 
 fn rgb(c: u32) -> [f32; 3] {
@@ -112,6 +133,7 @@ impl Canvas {
                     }
                 }
                 Prim::Poly { pts, color, alpha } => self.poly(pts, *color, *alpha),
+                Prim::Tex { asset, pts, uv, color, alpha } => self.quad(asset, pts, uv, *color, *alpha),
                 Prim::Grad { x0, y0, x1, y1, left, right, alpha } => {
                     let (l, r) = (rgb(*left), rgb(*right));
                     for yy in y0.floor() as i64..y1.ceil() as i64 {
@@ -122,6 +144,53 @@ impl Canvas {
                             self.blend(xx, yy, [l[0] + (r[0] - l[0]) * t, l[1] + (r[1] - l[1]) * t, l[2] + (r[2] - l[2]) * t], alpha * cx * cy);
                         }
                     }
+                }
+            }
+        }
+    }
+    /// A Ragnarök picture on a quad (a parallelogram), sampled bilinearly with wrapping like the game's sampler, one
+    /// sample at each pixel's centre with half-open edges as a GPU fills triangles (so quads that share an edge, like
+    /// the plates' four turned quarters, meet without a seam); the picture's white is tinted `c`.
+    fn quad(&mut self, asset: &str, pts: &[(f32, f32); 4], uv: &[(f32, f32); 4], c: u32, a: f32) {
+        let tex = self.tex.clone();
+        let Some((tw, th, rgba)) = tex.get(asset) else { return };
+        let (e1, e2) = ((pts[1].0 - pts[0].0, pts[1].1 - pts[0].1), (pts[3].0 - pts[0].0, pts[3].1 - pts[0].1));
+        let det = e1.0 * e2.1 - e1.1 * e2.0;
+        if det.abs() < 1e-6 {
+            return;
+        }
+        let sample = |u: f32, v: f32| -> [f32; 4] {
+            let (x, y) = (u * *tw as f32 - 0.5, v * *th as f32 - 0.5);
+            let (x0, y0) = (x.floor(), y.floor());
+            let (fx, fy) = (x - x0, y - y0);
+            let px = |xi: i64, yi: i64| {
+                let (xi, yi) = (xi.rem_euclid(*tw as i64) as usize, yi.rem_euclid(*th as i64) as usize);
+                let i = (yi * tw + xi) * 4;
+                [rgba[i] as f32 / 255.0, rgba[i + 1] as f32 / 255.0, rgba[i + 2] as f32 / 255.0, rgba[i + 3] as f32 / 255.0]
+            };
+            let (a, b, cc, d) = (px(x0 as i64, y0 as i64), px(x0 as i64 + 1, y0 as i64), px(x0 as i64, y0 as i64 + 1), px(x0 as i64 + 1, y0 as i64 + 1));
+            let mut o = [0.0; 4];
+            for k in 0..4 {
+                o[k] = (a[k] * (1.0 - fx) + b[k] * fx) * (1.0 - fy) + (cc[k] * (1.0 - fx) + d[k] * fx) * fy;
+            }
+            o
+        };
+        let (min_x, max_x) = (pts.iter().map(|q| q.0).fold(f32::MAX, f32::min).floor() as i64, pts.iter().map(|q| q.0).fold(f32::MIN, f32::max).ceil() as i64);
+        let (min_y, max_y) = (pts.iter().map(|q| q.1).fold(f32::MAX, f32::min).floor() as i64, pts.iter().map(|q| q.1).fold(f32::MIN, f32::max).ceil() as i64);
+        let tint = rgb(c);
+        for yy in min_y..=max_y {
+            for xx in min_x..=max_x {
+                let (dx, dy) = (xx as f32 + 0.5 - pts[0].0, yy as f32 + 0.5 - pts[0].1);
+                let s = (dx * e2.1 - dy * e2.0) / det;
+                let t = (e1.0 * dy - e1.1 * dx) / det;
+                if !(0.0..1.0).contains(&s) || !(0.0..1.0).contains(&t) {
+                    continue;
+                }
+                let u = uv[0].0 + s * (uv[1].0 - uv[0].0) + t * (uv[3].0 - uv[0].0);
+                let v = uv[0].1 + s * (uv[1].1 - uv[0].1) + t * (uv[3].1 - uv[0].1);
+                let p = sample(u, v);
+                if p[3] > 0.0 {
+                    self.blend(xx, yy, [p[0] * tint[0], p[1] * tint[1], p[2] * tint[2]], a * p[3]);
                 }
             }
         }
@@ -189,7 +258,20 @@ fn main() {
     let (w, h) = (args.get(2).and_then(|s| s.parse().ok()).unwrap_or(1920usize), args.get(3).and_then(|s| s.parse().ok()).unwrap_or(1080usize));
     let font_path = std::env::var("HUD_PREVIEW_FONT").unwrap_or_else(|_| "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".into());
     let font = fontdue::Font::from_bytes(std::fs::read(&font_path).expect("font"), fontdue::FontSettings::default()).expect("font parse");
-    let mut cv = Canvas { w, h, px: vec![[0.0; 3]; w * h], font };
+    // `--art DIR`: Ragnarök's own pictures, as picked in assets.json
+    let mut tex = std::collections::HashMap::new();
+    if let Some(dir) = args.iter().position(|a| a == "--art").and_then(|i| args.get(i + 1)) {
+        for a in gowring_core::sheets::ASSETS.iter().filter(|a| a.ragnarok_pick != "none") {
+            match load_png(&std::path::Path::new(dir).join(format!("{}.png", a.ragnarok_pick))) {
+                Some(t) => {
+                    tex.insert(a.id, t);
+                }
+                None => eprintln!("{}: {} not found in {dir}", a.id, a.ragnarok_pick),
+            }
+        }
+    }
+    let art = vector::art_flags(|id| tex.contains_key(id));
+    let mut cv = Canvas { w, h, px: vec![[0.0; 3]; w * h], font, tex: std::sync::Arc::new(tex) };
     let backdrop = args.iter().position(|a| a == "--match").and_then(|i| args.get(i + 1)).cloned();
     match &backdrop {
         Some(path) => {
@@ -215,7 +297,7 @@ fn main() {
     }
     let d = Data::get();
     if let Some(dir) = args.iter().position(|a| a == "--demo").and_then(|i| args.get(i + 1)) {
-        demo(&cv, dir);
+        demo(&cv, dir, art);
         return;
     }
     if args.iter().any(|a| a == "--runics") {
@@ -228,7 +310,7 @@ fn main() {
                 let x = 150.0 + i as f32 * 290.0 + if r.tier == gowring_core::sheets::RunicTier::Heavy { 60.0 } else { 0.0 };
                 let (rx, ry) = (58.0, 51.0);
                 let w = d.weapon(r.weapon);
-                cv.prims(&vector::runic_plate(x, y, rx, ry, w.runic_color, w.runic_light, 1.0, w.runic_glow, 1.0));
+                cv.prims(&vector::runic_plate(x, y, rx, ry, w.runic_color, w.runic_light, 1.0, w.runic_glow, 1.0, art));
                 if let Some(v) = r.icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: x - 32.0, y: y - 32.0, w: 64.0, h: 64.0 }, 0xFFFFFF, 1.0)) {
                     cv.prims(&v);
                 }
@@ -281,6 +363,7 @@ fn main() {
         ..Default::default()
     };
     let mut state = if backdrop.is_some() { matching } else { busy };
+    state.art = art;
     // `--time T`: the HUD clock (the fire around L3 + R3 moves with it); `--picker`: show the light runic picker
     if let Some(t) = args.iter().position(|a| a == "--time").and_then(|i| args.get(i + 1)).and_then(|t| t.parse().ok()) {
         state.time_s = t;
@@ -400,9 +483,9 @@ fn paint(cv: &mut Canvas, c: DrawCmd) {
             let x = if align == Align::Center { x - cv.text_w(&text, px) / 2.0 } else { x };
             cv.text(x, y, px, &text, color, alpha);
         }
-        DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha, .. } => cv.prims(&vector::rbar_fx(&rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha)),
-        DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, aura, flash, alpha, .. } => {
-            cv.prims(&vector::runic_plate_fx(cx, cy, rx, ry, color, light, 1.0 - remaining, aura, flash, alpha));
+        DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha, live, .. } => cv.prims(&vector::rbar_fx(&rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha, live)),
+        DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, aura, flash, alpha, art, .. } => {
+            cv.prims(&vector::runic_plate_fx(cx, cy, rx, ry, color, light, 1.0 - remaining, aura, flash, alpha, art));
             let s = ry * 0.62;
             if let Some(v) = icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: cx - s, y: cy - s, w: s * 2.0, h: s * 2.0 }, 0xFFFFFF, alpha)) {
                 cv.prims(&v);
@@ -434,7 +517,7 @@ fn paint(cv: &mut Canvas, c: DrawCmd) {
 
 /// `--demo DIR`: play a scripted fight through the real rules engine (`SimWorld`) and save every third frame (20 per
 /// second) of the HUD's corner, with a caption, as DIR/00000.png ... — the frames of an animated preview.
-fn demo(base: &Canvas, dir: &str) {
+fn demo(base: &Canvas, dir: &str, art: u32) {
     use gowring_core::sheets::ErAction::*;
     use gowring_core::sim::{SimEnemy, SimWorld};
     let d = Data::get();
@@ -527,9 +610,10 @@ fn demo(base: &Canvas, dir: &str) {
         if tick % 3 != 0 {
             continue;
         }
-        let mut cv = Canvas { w: base.w, h: base.h, px: base.px.clone(), font: base.font.clone() };
+        let mut cv = Canvas { w: base.w, h: base.h, px: base.px.clone(), font: base.font.clone(), tex: base.tex.clone() };
         let mut hud = out.hud.clone();
         hud.ui_scale = 1.0;
+        hud.art = art;
         for c in hud::draw_list(d, &hud, Screen { w: sw, h: sh }, &project) {
             paint(&mut cv, c);
         }

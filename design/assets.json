@@ -1,7 +1,7 @@
 {
  "sheet": "assets",
  "struct": "AssetDef",
- "about": "Everything read from the player's own God of War Ragnarök folder at --prepare. 'search' is a list of alternative term-sets (| between alternatives, , within one) matched against the names the reader can recover from the player's archives; --diagnose proves each one on a real install. Nothing here is shipped.",
+ "about": "Everything read from the player's own God of War Ragnarök folder at --prepare. 'search' is a list of alternative term-sets (| between alternatives, , within one) matched against the names the reader can recover from the player's archives; --diagnose proves each one on a real install. Nothing here is shipped. `ragnarok_pick`: the picture from the player's own Ragnarök UI textures the launcher suggests once for this piece in ragnarok_hud.json (`none` = no suggestion).",
  "columns": {
   "id": {
    "type": "id"
@@ -38,6 +38,9 @@
   "describes": {
    "type": "string"
   },
+  "ragnarok_pick": {
+   "type": "string"
+  },
   "status": {
    "type": "enum",
    "values": [
@@ -56,6 +59,7 @@
    "converter": "dds_to_png",
    "output": "hud/health_frame.png",
    "describes": "Kratos' health bar frame (top-left)",
+   "ragnarok_pick": "TX_player_health_housing_3F78F9427233D20B",
    "status": "unverified"
   },
   {
@@ -66,6 +70,7 @@
    "converter": "dds_to_png",
    "output": "hud/health_fill.png",
    "describes": "Health bar fill gradient",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -76,6 +81,7 @@
    "converter": "dds_to_png",
    "output": "hud/rage_frame.png",
    "describes": "Spartan Rage bar frame",
+   "ragnarok_pick": "TX_player_rage_housing_0B32235030FD391C",
    "status": "unverified"
   },
   {
@@ -86,6 +92,7 @@
    "converter": "dds_to_png",
    "output": "hud/rage_fill.png",
    "describes": "Spartan Rage fill",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -96,6 +103,7 @@
    "converter": "dds_to_png",
    "output": "hud/rage_ready.png",
    "describes": "Rage-ready glow / L3+R3 prompt",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -106,6 +114,7 @@
    "converter": "dds_to_png",
    "output": "hud/runic_ring.png",
    "describes": "Runic cooldown ring",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -116,6 +125,7 @@
    "converter": "dds_to_png",
    "output": "hud/runic_ready.png",
    "describes": "Runic-ready pulse",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -126,6 +136,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_axe.png",
    "describes": "Leviathan Axe icon",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -136,6 +147,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_blades.png",
    "describes": "Blades of Chaos icon",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -146,6 +158,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_spear.png",
    "describes": "Draupnir Spear icon",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -156,6 +169,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_frost_wave.png",
    "describes": "Runic icon: Frost Shockwave (axe, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -166,6 +180,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_glacial.png",
    "describes": "Runic icon: Glacial Cleave (axe, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -176,6 +191,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_flame_lash.png",
    "describes": "Runic icon: Flame Lash (blades, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -186,6 +202,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_inferno.png",
    "describes": "Runic icon: Inferno Whirl (blades, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -196,6 +213,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_spark.png",
    "describes": "Runic icon: Spark Volley (spear, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -206,6 +224,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_spear_storm.png",
    "describes": "Runic icon: Spear Storm (spear, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -216,6 +235,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_rime_ring.png",
    "describes": "Runic icon: Rime Ring (axe, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -226,6 +246,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_ice_lance.png",
    "describes": "Runic icon: Ice Lance (axe, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -236,6 +257,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_winters_maw.png",
    "describes": "Runic icon: Winter's Maw (axe, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -246,6 +268,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_frostfall.png",
    "describes": "Runic icon: Frostfall (axe, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -256,6 +279,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_ember_whip.png",
    "describes": "Runic icon: Ember Whip (blades, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -266,6 +290,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_cinder_rush.png",
    "describes": "Runic icon: Cinder Rush (blades, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -276,6 +301,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_pyre_pillar.png",
    "describes": "Runic icon: Pyre Pillar (blades, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -286,6 +312,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_scorched_arc.png",
    "describes": "Runic icon: Scorched Arc (blades, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -296,6 +323,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_shard_burst.png",
    "describes": "Runic icon: Shard Burst (spear, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -306,6 +334,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_thunder_step.png",
    "describes": "Runic icon: Thunder Step (spear, light)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -316,6 +345,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_blast_ring.png",
    "describes": "Runic icon: Blast Ring (spear, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -326,6 +356,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_runic_sky_lance.png",
    "describes": "Runic icon: Sky Lance (spear, heavy)",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -336,6 +367,7 @@
    "converter": "dds_to_png",
    "output": "hud/icon_shield.png",
    "describes": "Guardian Shield icon",
+   "ragnarok_pick": "TX_icon_runicarmor_D0945976D09F21C9",
    "status": "unverified"
   },
   {
@@ -346,6 +378,7 @@
    "converter": "dds_to_png",
    "output": "hud/crosshair_throw.png",
    "describes": "Throw aim reticle",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -356,6 +389,7 @@
    "converter": "dds_to_png",
    "output": "hud/enemy_health.png",
    "describes": "Enemy health bar",
+   "ragnarok_pick": "TX_enemyhud_meter_m_F808F3D038FF250A",
    "status": "unverified"
   },
   {
@@ -366,6 +400,7 @@
    "converter": "dds_to_png",
    "output": "hud/enemy_stun.png",
    "describes": "Enemy stun bar",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -376,6 +411,117 @@
    "converter": "dds_to_png",
    "output": "hud/enemy_stunned.png",
    "describes": "Stunned (R3) marker",
+   "ragnarok_pick": "none",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_part_plate_face",
+   "kind": "texture",
+   "role": "hud",
+   "search": "weaponspecial,m",
+   "converter": "dds_to_png",
+   "output": "hud/part_plate_face.png",
+   "describes": "Runic plate: a quarter of its face (turned four times)",
+   "ragnarok_pick": "TX_weaponspecial_m_F3AFD6E036975BA5",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_part_plate_housing",
+   "kind": "texture",
+   "role": "hud",
+   "search": "weaponspecial,housing,m",
+   "converter": "dds_to_png",
+   "output": "hud/part_plate_housing.png",
+   "describes": "Runic plate: a quarter of its silver outline",
+   "ragnarok_pick": "TX_weaponspecial_housing_m_7AE6DBA6C709F2D2",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_part_plate_spec",
+   "kind": "texture",
+   "role": "hud",
+   "search": "weaponspecial,housingspec,m",
+   "converter": "dds_to_png",
+   "output": "hud/part_plate_spec.png",
+   "describes": "Runic plate: the highlight across its edges",
+   "ragnarok_pick": "TX_weaponspecial_housingspec_m_4E463EAAA1FC4B93",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_part_plate_shadow",
+   "kind": "texture",
+   "role": "hud",
+   "search": "weaponspecial,dropshadow,m",
+   "converter": "dds_to_png",
+   "output": "hud/part_plate_shadow.png",
+   "describes": "Runic plate: a quarter of its soft shadow",
+   "ragnarok_pick": "TX_weaponspecial_dropshadow_m_86B32CCDD54CF541",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_part_relic_face",
+   "kind": "texture",
+   "role": "hud",
+   "search": "weaponspecial,trinket,m",
+   "converter": "dds_to_png",
+   "output": "hud/part_relic_face.png",
+   "describes": "Shield octagon: a quarter of its face",
+   "ragnarok_pick": "TX_weaponspecial_trinket_m_F07D88322DF6C1DC",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_part_relic_spec",
+   "kind": "texture",
+   "role": "hud",
+   "search": "weaponspecial,trinket,housingspe",
+   "converter": "dds_to_png",
+   "output": "hud/part_relic_spec.png",
+   "describes": "Shield octagon: the highlight across its edges",
+   "ragnarok_pick": "TX_weaponspecial_trinket_housingspe_0B9A505DD29E95C7",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_part_relic_shadow",
+   "kind": "texture",
+   "role": "hud",
+   "search": "weaponspecial,trinket,dropshadow",
+   "converter": "dds_to_png",
+   "output": "hud/part_relic_shadow.png",
+   "describes": "Shield octagon: a quarter of its soft shadow",
+   "ragnarok_pick": "TX_weaponspecial_trinket_dropshadow_89E078BDDDD6B909",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_rage",
+   "kind": "texture",
+   "role": "hud",
+   "search": "kratos,icon",
+   "converter": "dds_to_png",
+   "output": "hud/icon_rage.png",
+   "describes": "Spartan Rage mark in the weapon disc",
+   "ragnarok_pick": "TX_kratos_icon_1ABBB23FABDC48B0",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_btn_l3",
+   "kind": "texture",
+   "role": "hud",
+   "search": "worldinteract,l3",
+   "converter": "dds_to_png",
+   "output": "hud/btn_l3.png",
+   "describes": "L3 button",
+   "ragnarok_pick": "TX_worldinteract_l3_09C24A9FFB1FB3B7",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_btn_triangle",
+   "kind": "texture",
+   "role": "hud",
+   "search": "worldinteract,triangle",
+   "converter": "dds_to_png",
+   "output": "hud/btn_triangle.png",
+   "describes": "Triangle button (recall / detonate)",
+   "ragnarok_pick": "TX_worldinteract_triangle_35353A5F440E64AE",
    "status": "unverified"
   },
   {
@@ -386,6 +532,7 @@
    "converter": "dds_to_png",
    "output": "hud/btn_r3.png",
    "describes": "R3 finisher prompt glyph",
+   "ragnarok_pick": "TX_worldinteract_r3_846B14182C90C488",
    "status": "unverified"
   },
   {
@@ -396,6 +543,7 @@
    "converter": "dds_to_png",
    "output": "hud/btn_l3r3.png",
    "describes": "L3+R3 rage prompt glyph",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -406,6 +554,7 @@
    "converter": "dds_to_png",
    "output": "hud/subtitle_plate.png",
    "describes": "Mimir subtitle backing plate",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -416,6 +565,7 @@
    "converter": "dds_to_png",
    "output": "hud/mimir_portrait.png",
    "describes": "Mimir portrait beside subtitles",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -426,6 +576,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/axe_throw.wav",
    "describes": "Axe thrown",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -436,6 +587,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/axe_recall.wav",
    "describes": "Axe recalled",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -446,6 +598,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/axe_catch.wav",
    "describes": "Axe caught",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -456,6 +609,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/rage_on.wav",
    "describes": "Spartan Rage activates",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -466,6 +620,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/rage_off.wav",
    "describes": "Spartan Rage ends",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -476,6 +631,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/parry.wav",
    "describes": "Perfect parry",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -486,6 +642,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/block.wav",
    "describes": "Shield block",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -496,6 +653,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/runic_ready.wav",
    "describes": "Runic ready chime",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -506,6 +664,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/stun_full.wav",
    "describes": "Enemy stunned",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -516,6 +675,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/finisher.wav",
    "describes": "Finisher hit",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -526,6 +686,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/weapon_swap.wav",
    "describes": "Weapon swapped",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -536,6 +697,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/blades_swing.wav",
    "describes": "Blades of Chaos swing",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -546,6 +708,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/spear_throw.wav",
    "describes": "Draupnir thrown",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -556,6 +719,7 @@
    "converter": "wem_to_wav",
    "output": "sfx/spear_blast.wav",
    "describes": "Draupnir detonation",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -566,6 +730,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/greeting/",
    "describes": "Mimir greets / first minute in the world",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -576,6 +741,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/combat_start/",
    "describes": "Fight starts",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -586,6 +752,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/kill/",
    "describes": "After a kill",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -596,6 +763,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/kill_streak/",
    "describes": "Many kills in a row",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -606,6 +774,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/rage/",
    "describes": "Spartan Rage",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -616,6 +785,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/low_health/",
    "describes": "Kratos is badly hurt",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -626,6 +796,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/parry/",
    "describes": "A perfect parry",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -636,6 +807,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/boss_sight/",
    "describes": "A boss comes into view",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -646,6 +818,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/boss_down/",
    "describes": "A boss falls",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -656,6 +829,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/death/",
    "describes": "Kratos falls in battle",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -666,6 +840,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/new_area/",
    "describes": "Entering a new region",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -676,6 +851,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/idle/",
    "describes": "Quiet moments",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -686,6 +862,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/axe_throw/",
    "describes": "Axe thrown and recalled",
+   "ragnarok_pick": "none",
    "status": "unverified"
   },
   {
@@ -696,6 +873,7 @@
    "converter": "wem_to_wav_set",
    "output": "mimir/runic/",
    "describes": "A runic attack lands",
+   "ragnarok_pick": "none",
    "status": "unverified"
   }
  ]

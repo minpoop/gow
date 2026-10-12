@@ -1,11 +1,7 @@
-Thirtieth alpha, from your 0.1.28 test ("everything looks good") and the Ragnarök fight you recorded ("the health/rage bar goes up or down instantly; in GoW it would gradually go down or up smoothly"). The HUD's motion is now measured frame by frame from your clip.
+Thirty-first alpha, from your note "we can get the art closer", the ragnarok_ui pictures you sent, and the Hrolf Kraki fight you recorded ("include how the health/rage bar glows and has particle effects going along it").
 
-- **Taking a hit, the Ragnarök way.** Health drops at once, and the chunk you just lost flashes pale blue-white, turns red, holds for about half a second and fades away, the same timing as your clip.
-- **Healing and Spartan Rage fill smoothly** instead of jumping, over about a quarter of a second.
-- **Spartan Rage looks like Ragnarök's.** When it starts, the Rage segments flash white-hot; while it burns, the runic plates and the shield octagon fade back and the weapon disc shows Rage's mark (a fierce face with the red stripe).
-- **Runic plates recharge in grey.** A runic you just used flashes white and goes grey while it recharges (the recharged part still rises from the bottom), then flashes again and returns to its colour when it is ready.
-- **The weapon disc takes the weapon's colour:** grey for the Axe, red-orange for the Blades, sandy gold for the Spear.
-- **Recall and detonate on the weapon disc.** With the axe thrown, the disc shows the Triangle button; with spears out, a small Triangle sits on the disc's edge. The "Recall" box in the middle of the screen is gone.
-- **Changing runics: one change per press.** In your test, one L1 + D-pad press skipped through the spear's runics several times; it now moves exactly one step.
+- **The HUD is built from Ragnarök's own pieces.** The runic plates, the shield octagon, Spartan Rage's mark, the L3 / R3 buttons and the Triangle are now drawn from the pictures in your own ragnarok_ui folder, put together the way Ragnarök layers them: soft shadow, coloured face, highlight, silver outline. Their shading is matched to your screenshot. Nothing from Ragnarök ships with the mod: the pictures are read from your install on your PC, and any piece that is missing falls back to the mod's own drawing.
+- **The new pieces are picked for you once.** Before Play, ragnarok_hud.json gets the new picks filled in for any piece you left empty; your own choices stay, and a piece you empty stays empty.
+- **The health and Rage bars are alive.** Each glows softly, light spills from its leading edge, sparks stream along it toward the tip, and the smoky core inside drifts the way it does in your clip (the health bar's flows toward its tip, the Rage segments churn in place).
 
-Still an alpha: Elden Ring's own animations play for every move, and runics have no cast animation yet (their effect, ring and sound play).
+Still an alpha: the weapon and runic icons are still the mod's own drawings (Ragnarök keeps those outside the HUD pictures), Elden Ring's own animations play for every move, and runics have no cast animation yet.
