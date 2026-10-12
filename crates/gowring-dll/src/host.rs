@@ -79,6 +79,11 @@ pub struct Bridge {
     last_swing: f64,
     /// Frames L2 was masked, and in how many of them it was still visible in the game's requests (evidence for the log).
     l2_masked: (u32, u32),
+    /// The player's current Elden Ring animation id, how many changes were logged, how often each id played, and when
+    /// that tally was last written (evidence for choosing Kratos's animations).
+    anim_seen: (i32, u32),
+    anim_tally: HashMap<i32, u32>,
+    anim_tally_at: f64,
     prev_player_hp: Option<i32>,
     prev_enemy_hp: HashMap<u64, i32>,
     prev_player_last_hit: u64,
@@ -133,6 +138,9 @@ impl Bridge {
             last_equip: [0; 6],
             last_swing: f64::NEG_INFINITY,
             l2_masked: (0, 0),
+            anim_seen: (i32::MIN, 0),
+            anim_tally: HashMap::new(),
+            anim_tally_at: 0.0,
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
             prev_player_last_hit: u64::MAX,
@@ -319,6 +327,27 @@ impl Bridge {
             controllable: alive,
         };
         f.actions_down = bits_from_er(&ar.action_requests);
+        // which of Elden Ring's animations the player is playing: each change (the first 600) and, every two minutes,
+        // the most played ones
+        {
+            let ta = &chr.modules.time_act;
+            // `read_idx` is the slot of the animation last played or updated
+            let last = &ta.anim_queue[ta.read_idx as usize % ta.anim_queue.len()];
+            if last.anim_id != self.anim_seen.0 && last.anim_id > 0 {
+                self.anim_seen.0 = last.anim_id;
+                *self.anim_tally.entry(last.anim_id).or_default() += 1;
+                if self.anim_seen.1 < 600 {
+                    self.anim_seen.1 += 1;
+                    crate::glog!("player_anim", "{time:.2}s a{:03}_{:06} ({} s long), buttons {:?}", last.anim_id / 1_000_000, last.anim_id % 1_000_000, (last.anim_length * 100.0).round() / 100.0, bits_from_er(&ar.new_action_presses));
+                }
+            }
+            if time - self.anim_tally_at > 120.0 && !self.anim_tally.is_empty() {
+                self.anim_tally_at = time;
+                let mut top: Vec<(i32, u32)> = self.anim_tally.iter().map(|(k, v)| (*k, *v)).collect();
+                top.sort_by(|a, b| b.1.cmp(&a.1));
+                crate::glog!("player_anim", "most played so far: {:?}", top.iter().take(30).map(|(id, n)| format!("a{:03}_{:06} x{n}", id / 1_000_000, id % 1_000_000)).collect::<Vec<_>>());
+            }
+        }
         {
             let pressed = bits_from_er(&ar.new_action_presses);
             if pressed.has(ErAction::R1) || pressed.has(ErAction::R2) {

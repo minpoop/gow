@@ -283,6 +283,12 @@ fn background_diagnose(ctx: &Ctx) {
                     Ok(t) => t,
                     Err(_) => "\n== Ragnarök UI textures\n(the export panicked)\n".into(),
                 });
+                // Kratos's skeleton and animation files, written out for study (roadmap: his own animations)
+                let kr = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| export_kratos(&gow, &c.local.join("kratos_probe"))));
+                text.push_str(&match kr {
+                    Ok(t) => t,
+                    Err(_) => "\n== Kratos's skeleton and animations\n(the export panicked)\n".into(),
+                });
                 match std::fs::write(c.local.join("diagnose.txt"), text) {
                     Ok(()) => c.log("diagnose: wrote diagnose.txt"),
                     Err(e) => c.log(&format!("diagnose: could not write the report: {e}")),
@@ -313,7 +319,7 @@ fn find_file(root: &std::path::Path, name: &str, depth: u32) -> Option<std::path
 
 /// Decode the textures inside Ragnarök's r_ui.wad to PNG files in `out` (at most 90 s of work). Returns a report.
 fn export_ui_textures(gow: &std::path::Path, out: &std::path::Path) -> String {
-    let mut o = String::from("\n== Ragnarök UI textures (decoded to PNG for a look; not used in game yet)\n");
+    let mut o = String::from("\n== Ragnarök UI textures (decoded to PNG; the pieces picked in ragnarok_hud.json are drawn by the HUD)\n");
     let Some(wad) = find_file(gow, "r_ui.wad", 5) else {
         o.push_str("r_ui.wad not found\n");
         return o;
@@ -338,6 +344,36 @@ fn export_ui_textures(gow: &std::path::Path, out: &std::path::Path) -> String {
         o.push_str(l);
         o.push('\n');
     }
+    o
+}
+
+/// Kratos's skeleton, animation chunks and streamed animation sets from r_heroa00, written to `out` for study (nothing
+/// is used in game); the report says what was found.
+fn export_kratos(gow: &std::path::Path, out: &std::path::Path) -> String {
+    let mut o = String::from("\n== Kratos's skeleton and animations (written out for study; not used in game)\n");
+    let Some(wad) = find_file(gow, "r_heroa00.wad", 5) else {
+        o.push_str("r_heroa00.wad not found\n");
+        return o;
+    };
+    if let Some(dir) = wad.parent() {
+        o.push_str(&gowring_gow::kratos::set_inventory(dir));
+    }
+    let buf = match gowring_gow::lz4::read_file_prefix(&wad, 256 << 20) {
+        Ok((b, _)) => b,
+        Err(e) => {
+            o.push_str(&format!("{}: {e:#}\n", wad.display()));
+            return o;
+        }
+    };
+    let sets: Vec<(String, Vec<u8>)> = gowring_gow::kratos::sibling_sets(&wad)
+        .iter()
+        .take(3)
+        .filter_map(|p| Some((p.file_name()?.to_string_lossy().into_owned(), gowring_gow::kratos::read_set_file(p, 96 << 20).ok()?)))
+        .collect();
+    o.push_str(&format!("{} ({} decompressed bytes read); .as files beside it: {:?}\n", wad.display(), buf.len(), sets.iter().map(|(n, b)| (n.as_str(), b.len())).collect::<Vec<_>>()));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    o.push_str(&gowring_gow::kratos::export_from(&buf, &sets, out, || std::time::Instant::now() < until));
+    o.push_str(&format!("written to {}\n", out.display()));
     o
 }
 
