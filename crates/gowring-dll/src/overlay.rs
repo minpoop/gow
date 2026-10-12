@@ -375,6 +375,7 @@ impl ImguiRenderLoop for Overlay {
                 "D-pad right: Axe > Blades > Spear",
                 "L1: block (tap just before a hit: parry)",
                 "D-pad up / down: light / heavy runic",
+                "Square / X (use item): drink your flask; walk over green stones to heal",
                 "L1 + D-pad up / down: change light / heavy runic",
                 "L3 + R3: Spartan Rage (full bar)",
                 "R3 near a staggered enemy: finisher (wear them down first)",
@@ -385,6 +386,7 @@ impl ImguiRenderLoop for Overlay {
             .collect();
             if st.debug_tools {
                 lines.push(format!("F{} (keyboard): summon a tough enemy", st.debug_spawn_key));
+                lines.push(format!("F{} (keyboard): fill Spartan Rage", st.debug_rage_key));
             }
             let lines = &lines;
             let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));

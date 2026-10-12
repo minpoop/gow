@@ -38,6 +38,7 @@ pub struct Runtime {
     entered_at: Option<Instant>,
     /// The summon key was down last tick (summon on the press, not while held).
     spawn_key_down: bool,
+    rage_key_down: bool,
 }
 
 #[derive(Default, Debug)]
@@ -75,6 +76,7 @@ impl Runtime {
             fx_live: Vec::new(),
             entered_at: None,
             spawn_key_down: false,
+            rage_key_down: false,
         }
     }
 
@@ -174,6 +176,13 @@ impl Runtime {
                 crate::overlay::toast(&msg);
             }
             self.spawn_key_down = down;
+            let down = function_key_down(st.debug_rage_key);
+            if down && !self.rage_key_down {
+                self.engine.debug_fill_rage();
+                crate::glog!("debug", "F{} pressed: Spartan Rage filled", st.debug_rage_key);
+                crate::overlay::toast("Spartan Rage filled (debug)");
+            }
+            self.rage_key_down = down;
         }
         self.engine.set_tuning(gowring_core::Tuning {
             rage_gain: st.rage_gain_multiplier,
@@ -181,6 +190,7 @@ impl Runtime {
             mimir_chance: st.mimir_frequency,
             enemy_health: st.enemy_health_multiplier,
             wounded_stun: st.finisher_when_wounded,
+            health_stones: st.health_stones,
         });
         // the runics chosen in settings.json (or earlier in game) go in their slots
         for id in st.runics {

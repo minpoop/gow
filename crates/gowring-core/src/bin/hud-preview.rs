@@ -357,6 +357,7 @@ fn main() {
             EnemyBar { id: 3, pos: Vec3::new(7.0, 0.0, 14.0), hp_frac: 0.3, stun_frac: 0.1, stunned: false, boss: false, status_frac: 1.0, status_color: 0xFF8A3A, status_label: Some("BURNING") },
         ],
         finisher_target: Some(2),
+        stones: vec![(Vec3::new(0.6, 0.0, 4.0), 20.0), (Vec3::new(-1.4, 0.0, 5.0), 20.0)],
         subtitle: Some("(Mimir's subtitle appears here, from Ragnarök's own text)".into()),
         mimir_speaking: true,
         pulse: 0.2,

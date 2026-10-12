@@ -22,6 +22,13 @@ impl Rage {
     pub fn max(&self) -> f32 {
         self.d.rage.meter_max
     }
+    /// Fill the meter at once (the debug key); nothing while Rage is burning.
+    pub fn fill(&mut self) {
+        if !self.active {
+            self.meter = self.max();
+        }
+    }
+
     pub fn ready(&self) -> bool {
         !self.active && self.meter >= self.max() - 1e-3
     }

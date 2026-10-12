@@ -32,6 +32,10 @@ pub struct Settings {
     pub debug_tools: bool,
     /// The function key (1-12 for F1-F12) that summons a tough enemy.
     pub debug_spawn_key: u8,
+    /// The function key that fills Spartan Rage.
+    pub debug_rage_key: u8,
+    /// Enemies drop health stones that heal Kratos when he walks over them (Ragnarök's way of healing).
+    pub health_stones: bool,
     /// Health given to a summoned enemy.
     pub debug_enemy_health: f32,
     /// How much harder a summoned enemy hits than its original.
@@ -85,6 +89,8 @@ impl Default for Settings {
             finisher_when_wounded: true,
             debug_tools: true,
             debug_spawn_key: 9,
+            debug_rage_key: 10,
+            health_stones: true,
             debug_enemy_health: 20000.0,
             debug_enemy_damage_multiplier: 3.5,
             runics: OWN_RUNICS,
@@ -93,7 +99,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 7;
+const FILE_VERSION: u32 = 8;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -113,6 +119,9 @@ fn render(s: &Settings) -> String {
 
   "finisher_when_wounded": {wounded},
   "_finisher_when_wounded": "A regular enemy worn down to a quarter of its health is staggered once, so you can finish it with R3. false = only a full stun bar stuns.",
+
+  "health_stones": {stones},
+  "_health_stones": "Enemies drop green health stones, as in Ragnarok: walk over one to heal (only when hurt). Your flask still works with the use-item button. false = no stones.",
 {runic_lines}
   "hud_scale": {scale:?},
   "_hud_scale": "HUD size. 1.0 = normal, 1.3 = bigger, 0.8 = smaller (0.4 to 3.0).",
@@ -147,6 +156,9 @@ fn render(s: &Settings) -> String {
   "debug_spawn_key": "F{dkey}",
   "_debug_spawn_key": "Keyboard key (F1 to F12) that summons a tough copy of a nearby enemy 5 metres in front of you, so a fight is one key away.",
 
+  "debug_rage_key": "F{rkey}",
+  "_debug_rage_key": "Keyboard key (F1 to F12) that fills Spartan Rage at once, for trying it out.",
+
   "debug_enemy_health": {dhp:?},
   "_debug_enemy_health": "Health of a summoned enemy (100 to 100000). Summons are treated as bosses: the big health bar, a boss stun bar, and finishers that take a slice instead of killing.",
 
@@ -170,6 +182,8 @@ fn render(s: &Settings) -> String {
         hint = s.controls_hint_seconds,
         dbg = s.debug_tools,
         dkey = s.debug_spawn_key,
+        rkey = s.debug_rage_key,
+        stones = s.health_stones,
         dhp = s.debug_enemy_health,
         ddm = s.debug_enemy_damage_multiplier,
         runic_lines = runic_lines(s),
@@ -227,6 +241,8 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     finisher_when_wounded: true,
     debug_tools: true,
     debug_spawn_key: 9,
+    debug_rage_key: 10,
+    health_stones: true,
     debug_enemy_health: 20000.0,
     debug_enemy_damage_multiplier: 3.5,
     runics: OWN_RUNICS,
@@ -281,6 +297,10 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     if let Some(k) = v.get("debug_spawn_key").and_then(|x| x.as_str()).and_then(fkey) {
         s.debug_spawn_key = k;
     }
+    if let Some(k) = v.get("debug_rage_key").and_then(|x| x.as_str()).and_then(fkey) {
+        s.debug_rage_key = k;
+    }
+    flag(&v, "health_stones", &mut s.health_stones);
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
     num(&v, "debug_enemy_damage_multiplier", 1.0, 10.0, &mut s.debug_enemy_damage_multiplier);
     for (i, (key, ..)) in RUNIC_SLOTS.iter().enumerate() {
@@ -344,7 +364,8 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
         s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
-    // versions 3 and 7 only added keys (7: the runic slots): re-rendering the file shows them with their notes
+    // versions 3, 7 and 8 only added keys (7: the runic slots; 8: the Rage key and health stones): re-rendering the
+    // file shows them with their notes
     Some(render(&s))
 }
 
@@ -432,6 +453,8 @@ mod tests {
             finisher_when_wounded: false,
             debug_tools: false,
             debug_spawn_key: 11,
+            debug_rage_key: 12,
+            health_stones: false,
             debug_enemy_health: 5000.0,
             debug_enemy_damage_multiplier: 4.0,
             runics: ["axe_ice_lance", "axe_frostfall", "blades_runic_light", "blades_scorched_arc", "spear_thunder_step", "spear_runic_heavy"],

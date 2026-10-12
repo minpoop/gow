@@ -72,16 +72,27 @@ pub struct Tuning {
     pub enemy_health: f32,
     /// A regular enemy the player has worn down to the tuning sheet's wounded level is staggered once, so it can be finished.
     pub wounded_stun: bool,
+    /// Enemies drop health stones (Ragnarök's healing).
+    pub health_stones: bool,
 }
 
 impl Default for Tuning {
     fn default() -> Self {
-        Tuning { rage_gain: 1.0, mod_damage: 1.0, mimir_chance: 1.0, enemy_health: 1.0, wounded_stun: true }
+        Tuning { rage_gain: 1.0, mod_damage: 1.0, mimir_chance: 1.0, enemy_health: 1.0, wounded_stun: true, health_stones: true }
     }
+}
+
+/// A health stone on the ground: where, and when it dropped.
+#[derive(Clone, Copy, Debug)]
+pub struct Stone {
+    pub pos: Vec3,
+    pub born: f64,
 }
 
 pub struct Engine {
     d: &'static Data,
+    /// Health stones dropped by enemies, waiting to be walked over.
+    stones: Vec<Stone>,
     tuning: Tuning,
     rage: Rage,
     runics: Runics,
@@ -192,6 +203,7 @@ impl Engine {
             rage_shown: 0.0,
             hp_hit_at: f64::NEG_INFINITY,
             hud_started: false,
+            stones: Vec::new(),
         }
     }
 
@@ -239,6 +251,13 @@ impl Engine {
     pub fn rage(&self) -> &Rage {
         &self.rage
     }
+    /// Fill Spartan Rage at once (the debug key).
+    pub fn debug_fill_rage(&mut self) {
+        self.rage.fill();
+    }
+    pub fn stones(&self) -> &[Stone] {
+        &self.stones
+    }
     pub fn thrown(&self) -> &Thrown {
         &self.thrown
     }
@@ -283,6 +302,7 @@ impl Engine {
             mimir_chance: t.mimir_chance.clamp(0.0, 10.0),
             enemy_health: t.enemy_health.clamp(0.25, 20.0),
             wounded_stun: t.wounded_stun,
+            health_stones: t.health_stones,
         };
     }
 
@@ -596,6 +616,9 @@ impl Engine {
             }
         }
 
+        // ---- health stones: dropped by the dead, healing Kratos when he walks over one while hurt -----------------------
+        self.health_stones(f, now, &ev, &mut out, &mut logs);
+
         // ---- camera & HUD ------------------------------------------------------------------------------------------------------
         let since = (now - self.finisher_at) as f32;
         let punch = if since < 0.0 || since > 1.2 { 0.0 } else if since < 0.12 { since / 0.12 } else { (-(since - 0.12) / 0.35).exp() };
@@ -689,6 +712,42 @@ impl Engine {
                     self.mimir.event(MimirTriggerEvent::RunicHit, now, ctx, out);
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn health_stones(&mut self, f: &Frame, now: f64, ev: &[Event], out: &mut Vec<Command>, logs: &mut Vec<String>) {
+        let t = &self.d.tuning;
+        if !self.tuning.health_stones {
+            self.stones.clear();
+            return;
+        }
+        for e in ev {
+            let Event::Kill { enemy, boss } = e else { continue };
+            let Some(body) = f.enemies.iter().find(|x| x.id == *enemy) else { continue };
+            // a repeatable roll from the enemy's id: one stone with the sheet's chance, a boss drops several
+            let roll = ((*enemy).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) as f32 / (1u64 << 24) as f32;
+            let n = if *boss { t.health_stone_boss_count.max(0) as usize } else if roll < t.health_stone_chance { 1 } else { 0 };
+            for k in 0..n {
+                let a = k as f32 * std::f32::consts::TAU / n.max(1) as f32 + roll * 6.0;
+                let r = if n > 1 { 1.2 } else { 0.0 };
+                self.stones.push(Stone { pos: body.pos + Vec3::new(r * a.cos(), 0.0, r * a.sin()), born: now });
+            }
+            if n > 0 {
+                logs.push(format!("{n} health stone(s) dropped by {enemy:#x}"));
+            }
+        }
+        let life = t.health_stone_life_s as f64;
+        self.stones.retain(|s| now - s.born < life);
+        let hurt = f.player.alive && f.player.hp < f.player.max_hp - 0.5;
+        if hurt {
+            let reach = t.health_stone_pickup_m;
+            if let Some(i) = self.stones.iter().position(|s| (s.pos - f.player.pos).flat().len() <= reach) {
+                self.stones.swap_remove(i);
+                let amount = f.player.max_hp * t.health_stone_heal_pct / 100.0;
+                out.push(Command::Heal { amount });
+                out.push(Command::Sfx("sfx_runic_ready"));
+                logs.push(format!("health stone: +{amount:.0} hp"));
             }
         }
     }
@@ -815,6 +874,7 @@ impl Engine {
             ui_scale: 1.0,
             // the renderer fills in which of Ragnarök's pieces it has
             art: 0,
+            stones: self.stones.iter().map(|s| (s.pos, (d.tuning.health_stone_life_s as f64 - (now - s.born)).max(0.0) as f32)).collect(),
         }
     }
 }

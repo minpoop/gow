@@ -958,6 +958,37 @@ pub fn rage_prompt(rect: &Rect, t: f32, alpha: f32, art: u32) -> Vec<Prim> {
     out
 }
 
+/// A health stone on the ground, Ragnarök's green pickup: a faceted gem `r` from its centre to its tip, in a soft glow
+/// that breathes (`t`: running clock, seconds), with a glint that comes and goes.
+pub fn health_stone(cx: f32, cy: f32, r: f32, t: f32, alpha: f32) -> Vec<Prim> {
+    const GREEN: u32 = 0x3FD86A;
+    let breathe = 0.8 + 0.2 * (t * 3.2).sin();
+    let mut out = Vec::new();
+    for (k, a) in [(2.8, 0.035), (2.4, 0.045), (2.0, 0.06), (1.65, 0.08), (1.35, 0.1)] {
+        out.push(Prim::Circle { c: (cx, cy), r: r * k * (0.92 + 0.08 * breathe), fill: true, thick: 0.0, color: GREEN, alpha: a * breathe * alpha });
+    }
+    // a long hexagon, cut into six facets about a point above and left of centre, lit from the upper left
+    let (w, h) = (r * 0.62, r);
+    let rim = [(cx, cy - h), (cx + w, cy - h * 0.35), (cx + w, cy + h * 0.35), (cx, cy + h), (cx - w, cy + h * 0.35), (cx - w, cy - h * 0.35)];
+    let mid = (cx - w * 0.15, cy - h * 0.1);
+    out.push(Prim::Poly { pts: rim.to_vec(), color: shade(GREEN, 0.3), alpha });
+    let tones = [lighten(GREEN, 0.3), shade(GREEN, 0.15), shade(GREEN, 0.4), shade(GREEN, 0.25), GREEN, lighten(GREEN, 0.55)];
+    for i in 0..6 {
+        out.push(Prim::Tri { p: [rim[i], rim[(i + 1) % 6], mid], color: tones[i], alpha });
+    }
+    for i in 0..6 {
+        out.push(Prim::Line { a: rim[i], b: rim[(i + 1) % 6], thick: (r * 0.08).max(1.0), color: lighten(GREEN, 0.6), alpha: 0.7 * alpha });
+    }
+    let glint = (t * 1.3).sin().max(0.0).powi(3);
+    if glint > 0.02 {
+        let (gx, gy, arm) = (cx - w * 0.35, cy - h * 0.45, r * 0.55 * glint);
+        let thick = (r * 0.09).max(1.0);
+        out.push(Prim::Line { a: (gx - arm, gy), b: (gx + arm, gy), thick, color: 0xFFFFFF, alpha: 0.9 * glint * alpha });
+        out.push(Prim::Line { a: (gx, gy - arm), b: (gx, gy + arm), thick, color: 0xFFFFFF, alpha: 0.9 * glint * alpha });
+    }
+    out
+}
+
 /// The same shapes turned by `angle` radians about `centre` (for thrown weapons that spin in flight).
 pub fn rotated(prims: &[Prim], centre: (f32, f32), angle: f32) -> Vec<Prim> {
     let (sn, cs) = angle.sin_cos();

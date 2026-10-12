@@ -97,6 +97,9 @@ struct Burn {
     per_tick: i32,
 }
 
+/// How long after the mod last owned D-pad up/down a spell or quick-item switch is still put back.
+const DPAD_LOCK_S: f64 = 0.6;
+
 pub struct Bridge {
     /// The six weapon slot param ids last read from the player (for the self-checks).
     pub last_equip: [i32; 6],
@@ -117,6 +120,11 @@ pub struct Bridge {
     skill_quiet_until: f64,
     skill_misses: HashMap<&'static str, u32>,
     anim_asked: Option<(i32, f64)>,
+    /// The spell and quick-item slots kept while the mod owns D-pad up/down (the game still switches them even with
+    /// the actions masked), when the mod last owned them, and how many switches were put back (for the log).
+    slot_lock: Option<(i32, i32)>,
+    dpad_owned_at: f64,
+    slot_restores: u32,
     prev_player_hp: Option<i32>,
     prev_enemy_hp: HashMap<u64, i32>,
     prev_player_last_hit: u64,
@@ -178,6 +186,9 @@ impl Bridge {
             skill_quiet_until: 0.0,
             skill_misses: HashMap::new(),
             anim_asked: None,
+            slot_lock: None,
+            dpad_owned_at: f64::NEG_INFINITY,
+            slot_restores: 0,
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
             prev_player_last_hit: u64::MAX,
@@ -748,6 +759,29 @@ impl Bridge {
                 crate::log::once_u64("mask", new_mask.0, "action_mask", &format!("masked ER action bits {:#x}", new_mask.0));
             }
             self.my_mask = new_mask;
+            // D-pad up/down cast runics, but the game switches the spell and the quick item on its own path, which
+            // the masks do not reach, so the flask moved away from the item button. While the mod owns the D-pad (and
+            // a moment after), a switch is put back; at any other time a change (from the menu, say) is kept.
+            if new_mask.has(ErAction::SwitchForm) || new_mask.has(ErAction::ChangeItem) {
+                self.dpad_owned_at = now;
+            }
+            let owned = now - self.dpad_owned_at < DPAD_LOCK_S;
+            let pgd = unsafe { p.player_game_data.as_mut() };
+            let quick = pgd.equipment.equip_item_data.selected_quick_slot;
+            if let Some(magic) = opt_mut(&mut pgd.equipment.equip_magic_data) {
+                let now_slots = (magic.selected_slot, quick);
+                match self.slot_lock {
+                    Some(kept) if owned && kept != now_slots => {
+                        magic.selected_slot = kept.0;
+                        pgd.equipment.equip_item_data.selected_quick_slot = kept.1;
+                        self.slot_restores += 1;
+                        if self.slot_restores <= 20 || self.slot_restores % 50 == 0 {
+                            crate::glog!("dpad_lock", "the game switched spell {} -> {} and quick item {} -> {} on a runic press; put back ({} so far)", kept.0, now_slots.0, kept.1, now_slots.1, self.slot_restores);
+                        }
+                    }
+                    _ => self.slot_lock = Some(now_slots),
+                }
+            }
             // a runic's skill: hold the skill button (after the masks, so it gets through) until the skill's
             // animation starts or the wait runs out
             let l2 = ActionBits(ActionBits::bit(ErAction::L2));

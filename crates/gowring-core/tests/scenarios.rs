@@ -672,3 +672,74 @@ fn bosses_take_half_the_build_up_and_shake_statuses_off_sooner() {
     assert!((secs - axe.status_s * 0.5).abs() < 1e-3, "half as long: {secs}");
     assert!(swings as f32 >= (100.0 / axe.status_per_hit) * 2.0 - 1.0, "half the build-up per hit: frozen after {swings} swings");
 }
+
+/// Hit an enemy once (so the kill is Kratos's), then drop it.
+fn kill(w: &mut SimWorld, id: u64) {
+    w.step(&[R1], &[]);
+    w.idle(0.4);
+    w.enemies.iter_mut().find(|e| e.id == id).unwrap().hp = 0.0;
+    w.idle(0.1);
+}
+
+#[test]
+fn a_boss_drops_health_stones_that_heal_only_a_hurt_kratos_and_fade() {
+    let mut w = SimWorld::new();
+    let mut boss = SimEnemy::new(7, 0.0, 2.2, 60000.0);
+    boss.boss = true;
+    w.add_enemy(boss);
+    kill(&mut w, 7);
+    let t = &gowring_core::Data::get().tuning;
+    let n = w.engine.stones().len();
+    assert_eq!(n, t.health_stone_boss_count as usize, "log: {:?}", w.log);
+    assert!(w.idle(0.05).hud.stones.len() == n, "the HUD shows them");
+    // at full health Kratos walks over a stone and leaves it
+    w.player.pos = w.engine.stones()[0].pos;
+    w.idle(0.3);
+    assert_eq!(w.engine.stones().len(), n);
+    // hurt, one stone heals its share and is used up
+    w.player.hp = w.player.max_hp * 0.5;
+    w.step(&[], &[]);
+    let want = w.player.max_hp * (0.5 + t.health_stone_heal_pct / 100.0);
+    assert!((w.player.hp - want).abs() < 1.0, "healed to {} (want {want})", w.player.hp);
+    assert_eq!(w.engine.stones().len(), n - 1);
+    assert!(w.log.iter().any(|l| l.starts_with("health stone")));
+    // the rest fade when their time is up
+    w.player.pos = Vec3::new(30.0, 0.0, 30.0);
+    w.idle(t.health_stone_life_s as f64 + 0.5);
+    assert!(w.engine.stones().is_empty());
+}
+
+#[test]
+fn soldiers_drop_a_stone_now_and_then_and_the_setting_turns_them_off() {
+    let mut w = SimWorld::new();
+    for i in 0..40u64 {
+        w.add_enemy(SimEnemy::new(100 + i, 0.0, 2.2, 900.0));
+        kill(&mut w, 100 + i);
+    }
+    let dropped = w.log.iter().filter(|l| l.contains("health stone(s) dropped")).count();
+    let chance = gowring_core::Data::get().tuning.health_stone_chance;
+    assert!(dropped > 0 && dropped < 40, "{dropped} of 40 soldiers dropped one (chance {chance})");
+
+    let mut w = SimWorld::new();
+    w.engine.set_tuning(gowring_core::Tuning { health_stones: false, ..Default::default() });
+    let mut boss = SimEnemy::new(7, 0.0, 2.2, 60000.0);
+    boss.boss = true;
+    w.add_enemy(boss);
+    kill(&mut w, 7);
+    assert!(w.engine.stones().is_empty());
+}
+
+#[test]
+fn the_debug_key_fills_rage_but_not_while_it_burns() {
+    let mut w = SimWorld::new();
+    w.idle(0.1);
+    assert!(!w.engine.rage().ready());
+    w.engine.debug_fill_rage();
+    assert!(w.engine.rage().ready());
+    w.step(&[L3, R3], &[]);
+    assert!(w.engine.rage().active);
+    let before = w.engine.rage().frac();
+    w.idle(1.0);
+    w.engine.debug_fill_rage();
+    assert!(w.engine.rage().frac() < before, "a burning meter keeps draining");
+}

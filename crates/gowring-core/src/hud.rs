@@ -75,6 +75,8 @@ pub struct HudState {
     pub runic_picker: Option<RunicPicker>,
     /// Which of Ragnarök's own HUD pieces the renderer has (`vector::ART_*`); the rest is the mod's drawing.
     pub art: u32,
+    /// Health stones on the ground: where each lies and the seconds it has left.
+    pub stones: Vec<(Vec3, f32)>,
 }
 
 /// The runics a weapon can put in the slot just changed, with the chosen one marked.
@@ -198,6 +200,21 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
         Rect { x: ox + nx * k, y: oy + ny * k, w: h.w as f32 * k * us, h: h.h as f32 * k * us }
     };
     let pulse_alpha = 0.65 + 0.35 * (s.pulse * std::f32::consts::TAU).sin().abs();
+
+    // health stones, under the rest of the HUD: a green gem bobbing over each, as large as a fist at that distance
+    // (the widest of three short offsets on screen, so it holds from any camera angle); the last three seconds blink
+    for (i, (pos, left)) in s.stones.iter().enumerate() {
+        let at = *pos + Vec3::new(0.0, 0.45 + 0.08 * (s.time_s * 2.2 + i as f32 * 1.7).sin(), 0.0);
+        let Some(c) = project(at) else { continue };
+        let r = [Vec3::new(0.0, 0.14, 0.0), Vec3::new(0.14, 0.0, 0.0), Vec3::new(0.0, 0.0, 0.14)]
+            .iter()
+            .filter_map(|o| project(at + *o))
+            .map(|q| (q.0 - c.0).hypot(q.1 - c.1))
+            .fold(0.0f32, f32::max)
+            .clamp(4.0 * k, 40.0 * k);
+        let alpha = if *left < 3.0 { 0.45 + 0.55 * (s.time_s * 9.0).sin().abs() } else { 1.0 };
+        out.push(DrawCmd::Shapes { prims: vector::health_stone(c.0, c.1, r, s.time_s + i as f32 * 0.9, alpha) });
+    }
 
     for h in HUD {
         if !visible(h.visible_when, s) {
@@ -476,6 +493,32 @@ mod tests {
 
     fn project(p: Vec3) -> Option<(f32, f32)> {
         Some((960.0 + p.x * 20.0, 540.0 - p.y * 20.0))
+    }
+
+    #[test]
+    fn health_stones_draw_a_green_gem_where_they_lie_and_blink_before_fading() {
+        let d = Data::get();
+        let screen = Screen { w: 1920.0, h: 1080.0 };
+        let gems = |s: &HudState| -> Vec<Vec<Prim>> {
+            draw_list(d, s, screen, &project)
+                .into_iter()
+                .filter_map(|c| match c {
+                    DrawCmd::Shapes { prims } if prims.iter().any(|p| matches!(p, Prim::Tri { .. })) && prims.iter().any(|p| matches!(p, Prim::Circle { color: 0x3FD86A, .. })) => Some(prims),
+                    _ => None,
+                })
+                .collect()
+        };
+        let mut s = HudState { stones: vec![(Vec3::new(5.0, 0.0, 3.0), 20.0), (Vec3::new(-5.0, 0.0, 3.0), 1.0)], time_s: 0.05, ..base_state() };
+        let g = gems(&s);
+        assert_eq!(g.len(), 2);
+        // over its own spot, a little above the ground
+        let Prim::Circle { c, .. } = g[0][0] else { panic!() };
+        assert!((c.0 - 1060.0).abs() < 1.0 && c.1 < 540.0, "{c:?}");
+        // the stone about to fade is fainter
+        let alpha = |p: &[Prim]| p.iter().find_map(|q| if let Prim::Poly { alpha, .. } = q { Some(*alpha) } else { None }).unwrap();
+        assert!(alpha(&g[1]) < alpha(&g[0]));
+        s.stones.clear();
+        assert!(gems(&s).is_empty());
     }
 
     fn base_state() -> HudState {
