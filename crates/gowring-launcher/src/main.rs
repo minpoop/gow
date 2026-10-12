@@ -385,7 +385,7 @@ fn export_kratos(gow: &std::path::Path, out: &std::path::Path) -> String {
 /// elsewhere. List the install's files (`install_files.tsv`, names and sizes only) and look for that buffer: in each
 /// candidate file, read where a few draws' offsets point, and search the start of the file for a draw's positions.
 fn probe_mesh_stream(gow: &std::path::Path, buf: &[u8], out: &std::path::Path) -> String {
-    use gowring_gow::kratos::{find_positions, mesh_records};
+    use gowring_gow::kratos::mesh_records;
     use std::io::{Read, Seek, SeekFrom};
     let mut o = String::from("\n-- Kratos's mesh: where the detailed levels are kept\n");
     fn walk(dir: &std::path::Path, depth: usize, files: &mut Vec<(std::path::PathBuf, u64)>) {
@@ -424,77 +424,87 @@ fn probe_mesh_stream(gow: &std::path::Path, buf: &[u8], out: &std::path::Path) -
     for (ext, (c, n, ex)) in exts.iter().take(25) {
         o.push_str(&format!("  .{ext:<12} {c:>6} files {:>10.1} MB  e.g. {ex:?}\n", *n as f64 / 1e6));
     }
-    // the draws, from the WAD
+    // the draws, from the WAD, and its GPU chunk (the lowest level of each part)
     let Some(es) = gowring_gow::wtoc::read(buf) else { return o + "no chunk table\n" };
-    let Some(mesh) = es.iter().find(|e| e.name == "MESH_heroa00_0" && e.id == 1).and_then(|e| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize)) else {
-        return o + "MESH_heroa00_0 not in the bytes read\n";
+    let chunk = |name: &str, id: u16| es.iter().find(|e| e.name == name && e.id == id).and_then(|e| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize));
+    let (Some(mesh), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
+        return o + "MESH_heroa00_0 or MG_heroa00_0_gpu not in the bytes read\n";
     };
     let rs = mesh_records(mesh);
     let span = rs.iter().map(|r| r.vertex_offset + r.vertex_bytes as u64).max().unwrap_or(0);
-    o.push_str(&format!("MESH_heroa00_0: {} draws; their buffer spans {span} bytes\n", rs.len()));
-    if rs.len() < 4 {
-        return o;
-    }
-    // test draws: the first big ones, and the farthest
-    let mut tests: Vec<usize> = (0..rs.len()).filter(|k| rs[*k].vertices >= 200).take(3).collect();
-    let mut far: Vec<usize> = (0..rs.len()).filter(|k| rs[*k].vertices >= 200).collect();
-    far.sort_by_key(|k| std::cmp::Reverse(rs[*k].vertex_offset));
-    tests.extend(far.into_iter().take(3));
-    // candidates: files named for him (not his WAD or animation sets), then the largest files near his WAD
-    let mut cands: Vec<&(std::path::PathBuf, u64)> = files
-        .iter()
-        .filter(|(p, _)| {
-            let n = p.file_name().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-            n.contains("heroa00") && !n.ends_with(".as") && !n.ends_with(".wad")
+    // resident draws: their positions sit at their (absolute) first stream start in the WAD's GPU chunk
+    let mut resident: Vec<usize> = (0..rs.len())
+        .filter(|k| {
+            let r = &rs[*k];
+            r.vertices >= 64 && r.streams.first().is_some_and(|s| s.0 == 0) && gpu.get(r.streams[0].3 as usize..).is_some_and(|b| r.positions_inside(b) == r.vertices as usize)
         })
         .collect();
-    let mut big: Vec<&(std::path::PathBuf, u64)> = files.iter().filter(|(p, n)| *n >= span / 2 && !p.to_string_lossy().ends_with(".wad") && !p.to_string_lossy().ends_with(".as") && !p.to_string_lossy().contains("audiopack")).collect();
-    big.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
-    for b in big.into_iter().take(8) {
-        if !cands.contains(&b) {
-            cands.push(b);
-        }
+    resident.sort_by_key(|k| std::cmp::Reverse(rs[*k].vertices));
+    o.push_str(&format!("MESH_heroa00_0: {} draws, buffer spans {span} bytes; the WAD's GPU chunk ({} bytes) holds {} of them\n", rs.len(), gpu.len(), resident.len()));
+    if resident.len() < 2 {
+        return o;
     }
-    let until = std::time::Instant::now() + std::time::Duration::from_secs(120);
-    for (p, n) in cands.iter().take(16) {
+    let sig = |k: usize| -> &[u8] {
+        let at = rs[k].streams[0].3 as usize;
+        &gpu[at..at + (rs[k].vertices as usize * 12).min(192)]
+    };
+    let (a, b) = (resident[0], resident[1]);
+    // candidates: named for him, then beside his WAD, then the biggest; never his WAD, animation sets or audio
+    let wad_dir = files.iter().find(|(p, _)| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("r_heroa00.wad"))).and_then(|(p, _)| p.parent().map(|d| d.to_path_buf()));
+    let mut cands: Vec<&(std::path::PathBuf, u64)> = files
+        .iter()
+        .filter(|(p, n)| {
+            let l = p.to_string_lossy().to_ascii_lowercase();
+            *n >= 1 << 20 && !l.ends_with(".wad") && !l.ends_with(".as") && !l.contains("audiopack") && !l.ends_with(".dll") && !l.ends_with(".exe")
+        })
+        .collect();
+    let rank = |p: &std::path::Path| {
+        let n = p.file_name().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+        if n.contains("heroa00") {
+            0
+        } else if n.contains("hero") || n.contains("kratos") {
+            1
+        } else if wad_dir.as_deref() == p.parent() {
+            2
+        } else {
+            3
+        }
+    };
+    cands.sort_by_key(|(p, n)| (rank(p), std::cmp::Reverse(*n)));
+    o.push_str(&format!("searching up to {} files for draw {a}'s first positions ({} vertices, buffer offset {})\n", cands.len(), rs[a].vertices, rs[a].vertex_offset));
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(240);
+    let mut searched = 0;
+    for (p, n) in &cands {
         if std::time::Instant::now() >= until {
-            o.push_str("  (out of time)\n");
+            o.push_str(&format!("  out of time after {searched} files\n"));
             break;
         }
-        let lz4 = gowring_gow::lz4::is_frame(p);
-        let mut line = format!("  {} ({n} bytes, lz4={lz4}):", rel(p));
-        // the start of the file (decompressed when it is an LZ4 frame), searched for the first test draws' positions
-        let head: Vec<u8> = if lz4 {
-            gowring_gow::lz4::read_file_prefix(p, 64 << 20).map(|(b, _)| b).unwrap_or_default()
-        } else {
-            let mut b = Vec::new();
-            let _ = std::fs::File::open(p).and_then(|f| f.take(64 << 20).read_to_end(&mut b));
-            b
-        };
-        for k in tests.iter().take(3) {
-            let r = &rs[*k];
-            match find_positions(&head, r) {
-                Some(at) => line.push_str(&format!(" draw {k} ({} vertices, offset {}) found at {at} (base {});", r.vertices, r.vertex_offset, at as i64 - r.vertex_offset as i64)),
-                None => line.push_str(&format!(" draw {k} not in the first {} bytes;", head.len())),
-            }
-        }
-        // where the offsets point, read directly (plain files only)
-        if !lz4 {
-            if let Ok(mut f) = std::fs::File::open(p) {
-                for k in &tests {
-                    let r = &rs[*k];
-                    let mut b = vec![0u8; r.vertices as usize * 12];
-                    let ok = f.seek(SeekFrom::Start(r.vertex_offset)).is_ok() && f.read_exact(&mut b).is_ok();
-                    line.push_str(&format!(" at {}: {}/{} inside;", r.vertex_offset, if ok { r.positions_inside(&b) } else { 0 }, r.vertices));
+        searched += 1;
+        match gowring_gow::kratos::find_bytes_in_file(p, sig(a), || std::time::Instant::now() < until) {
+            Ok(Some(at)) => {
+                let base = at as i64 - rs[a].vertex_offset as i64;
+                o.push_str(&format!("  FOUND in {} ({n} bytes, lz4={}): at {at}, so the buffer starts at {base}\n", rel(p), gowring_gow::lz4::is_frame(p)));
+                // confirm with the second resident draw and a detailed one, where the base says they are
+                if !gowring_gow::lz4::is_frame(p) && base >= 0 {
+                    if let Ok(mut f) = std::fs::File::open(p) {
+                        let mut check = |k: usize| {
+                            let r = &rs[k];
+                            let mut v = vec![0u8; r.vertices as usize * 12];
+                            let ok = f.seek(SeekFrom::Start(base as u64 + r.vertex_offset)).is_ok() && f.read_exact(&mut v).is_ok();
+                            format!("draw {k} ({} vertices at {}): {}/{} inside", r.vertices, r.vertex_offset, if ok { r.positions_inside(&v) } else { 0 }, r.vertices)
+                        };
+                        let detailed = (0..rs.len()).filter(|k| !resident.contains(k)).max_by_key(|k| rs[*k].vertices).unwrap_or(0);
+                        o.push_str(&format!("    {}; {}\n", check(b), check(detailed)));
+                    }
                 }
+                let _ = std::fs::write(out.join("mesh_stream.txt"), format!("{}\t{base}\n", rel(p)));
+                return o;
             }
+            Ok(None) => {}
+            Err(e) => o.push_str(&format!("  {}: {e:#}\n", rel(p))),
         }
-        o.push_str(&line);
-        o.push('\n');
     }
-    if cands.is_empty() {
-        o.push_str("  no candidate files (nothing named heroa00 besides the WAD and .as files, nothing large enough)\n");
-    }
+    o.push_str(&format!("  not found in the {searched} files searched\n"));
     o
 }
 

@@ -349,7 +349,11 @@ impl Skeleton {
 /// index, index count (+0x5C); at +0x80 the stream count (+0x84); at the offset in +0x60 one 8-byte entry per stream
 /// (semantic, format, components) and at the offset in +0x64 each stream's start within the vertex bytes. Streams
 /// are stored one after another, not interleaved. The vertex and index offsets address the character's whole GPU
-/// buffer, most of which is streamed from outside the WAD; the WAD's `MG_<name>_gpu` holds only the lowest levels.
+/// buffer, most of which is streamed from outside the WAD; the WAD's `MG_<name>_gpu` holds only the lowest level of
+/// each part, and for those the stream starts are absolute offsets in that chunk, the vertex-bytes field is where the
+/// streams end, and the u16 indices follow there. Stream formats (bytes per component): 0 f32, 1 16-bit, 2 32-bit,
+/// 3 packed 10:10:10:2 (one per vertex), 4 u16, 6 f16, 7 unorm16, 8 u8. Semantics: 0 position, 1 normal, 2 tangent,
+/// 3/4/5 UV sets, 9 bone indices (global joint numbers), 10 bone weights.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshRecord {
     pub lod_distance: f32,
@@ -442,6 +446,60 @@ pub fn find_positions(bytes: &[u8], rec: &MeshRecord) -> Option<usize> {
         o += 4;
     }
     None
+}
+
+/// Where `needle` first occurs in the file at `path` (its decompressed bytes when it is an LZ4 frame), read start to
+/// end with little memory; `more` is asked between reads and stops the search when false.
+pub fn find_bytes_in_file(path: &Path, needle: &[u8], mut more: impl FnMut() -> bool) -> anyhow::Result<Option<u64>> {
+    use std::io::Read;
+    if needle.is_empty() {
+        return Ok(None);
+    }
+    let file = std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?);
+    let mut lz = if crate::lz4::is_frame(path) { Some(crate::lz4::FrameReader::open(file)?) } else { None };
+    let mut raw = if lz.is_none() { Some(std::io::BufReader::with_capacity(1 << 20, std::fs::File::open(path)?)) } else { None };
+    let (mut buf, mut base, mut scanned) = (Vec::<u8>::new(), 0u64, 0usize);
+    let keep = needle.len().max(64 << 10);
+    let first = needle[0];
+    loop {
+        let got = match (&mut lz, &mut raw) {
+            (Some(f), _) => f.next_block(&mut buf)?,
+            (_, Some(r)) => {
+                let at = buf.len();
+                buf.resize(at + (4 << 20), 0);
+                let n = r.read(&mut buf[at..])?;
+                buf.truncate(at + n);
+                n > 0
+            }
+            _ => false,
+        };
+        // only what is new since the last pass (less a needle's length, for a match straddling two reads)
+        let from = scanned.saturating_sub(needle.len() - 1);
+        let mut i = from;
+        while i + needle.len() <= buf.len() {
+            match buf[i..buf.len() + 1 - needle.len()].iter().position(|b| *b == first) {
+                Some(j) => {
+                    i += j;
+                    if &buf[i..i + needle.len()] == needle {
+                        return Ok(Some(base + i as u64));
+                    }
+                    i += 1;
+                }
+                None => break,
+            }
+        }
+        scanned = buf.len();
+        if !got || !more() {
+            return Ok(None);
+        }
+        // keep the tail (a match can straddle reads, and LZ4 matches reach 64 KiB back)
+        if buf.len() > keep + (8 << 20) {
+            let cut = buf.len() - keep;
+            buf.drain(..cut);
+            base += cut as u64;
+            scanned -= cut;
+        }
+    }
 }
 
 /// Words in a set's name that mark Kratos's everyday moves: such sets are saved whole for working out how bone motion
@@ -879,6 +937,29 @@ mod tests {
         assert_eq!(rs[1].positions_inside(&gpu), rs[1].vertices as usize);
         let far = rs.iter().map(|r| r.vertex_offset + r.vertex_bytes as u64).max().unwrap();
         println!("the whole buffer spans {far} bytes; the WAD holds {}", gpu.len());
+        // resident draws, as the launcher's probe finds them, and a fingerprint search in a planted stream file
+        let mut resident: Vec<usize> = (0..rs.len())
+            .filter(|k| {
+                let r = &rs[*k];
+                r.vertices >= 64 && r.streams.first().is_some_and(|s| s.0 == 0) && gpu.get(r.streams[0].3 as usize..).is_some_and(|b| r.positions_inside(b) == r.vertices as usize)
+            })
+            .collect();
+        resident.sort_by_key(|k| std::cmp::Reverse(rs[*k].vertices));
+        println!("{} resident draws; largest {:?}", resident.len(), resident.iter().take(3).map(|k| (k, rs[*k].vertices)).collect::<Vec<_>>());
+        assert!(resident.len() >= 50);
+        let a = resident[0];
+        let at = rs[a].streams[0].3 as usize;
+        let sig = &gpu[at..at + (rs[a].vertices as usize * 12).min(192)];
+        // planted a little way into a small file (the real one sits at the base plus the draw's buffer offset)
+        let base = 12345u64;
+        let mut fake = vec![0u8; base as usize];
+        fake.extend_from_slice(&gpu[at..at + rs[a].vertices as usize * 12]);
+        let dir = std::env::temp_dir().join(format!("gowring-stream-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("stream.bin"), &fake).unwrap();
+        let found = find_bytes_in_file(&dir.join("stream.bin"), sig, || true).unwrap();
+        assert_eq!(found, Some(base));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -891,5 +972,29 @@ mod tests {
         b.extend([0xFFu8; 8]);
         assert_eq!(find_positions(&b, &rec), Some(20));
         assert_eq!(find_positions(&b[..40], &rec), None);
+    }
+
+    #[test]
+    fn bytes_are_found_in_plain_and_lz4_files_across_reads() {
+        let dir = std::env::temp_dir().join(format!("gowring-find-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut f = vec![7u8; 9 << 20];
+        let at = (4 << 20) - 3; // straddles the first 4 MiB read
+        f[at..at + 6].copy_from_slice(b"KRATOS");
+        let plain = dir.join("a.bin");
+        std::fs::write(&plain, &f).unwrap();
+        assert_eq!(find_bytes_in_file(&plain, b"KRATOS", || true).unwrap(), Some(at as u64));
+        assert_eq!(find_bytes_in_file(&plain, b"ATREUS", || true).unwrap(), None);
+        let mut lz = crate::lz4::MAGIC.to_vec();
+        lz.extend_from_slice(&[0x60, 0x40, 0x82]);
+        for c in f.chunks(64 << 10) {
+            lz.extend_from_slice(&(c.len() as u32 | 0x8000_0000).to_le_bytes());
+            lz.extend_from_slice(c);
+        }
+        lz.extend_from_slice(&0u32.to_le_bytes());
+        let packed = dir.join("b.bin");
+        std::fs::write(&packed, &lz).unwrap();
+        assert_eq!(find_bytes_in_file(&packed, b"KRATOS", || true).unwrap(), Some(at as u64));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
