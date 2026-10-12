@@ -226,8 +226,9 @@ pub enum Command {
     /// Mask these ER actions this frame.
     Mask(ActionBits),
     AnimSpeed(f32),
-    /// Make Kratos play this Elden Ring animation (a gesture or event animation, e.g. the roar as Rage starts).
-    PlayAnim(i32),
+    /// Kratos plays an Elden Ring skill (SwordArtsParam id) on his weapon, as a runic does: `tag` names it in the log
+    /// (Spartan Rage's roar). The weapon's own skill is put back once it has played.
+    Skill { tag: &'static str, weapon: &'static str, skill: i32 },
     /// Play a converted Ragnarök sound by asset id.
     Sfx(&'static str),
     /// Ask the host to pick and play a Mimir line from this voice set.

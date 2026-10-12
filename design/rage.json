@@ -1,7 +1,7 @@
 {
  "sheet": "rage",
  "struct": "RageDef",
- "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost): 3.0 filled the bar in about 85 s of fighting in 0.1.15 (good for testing); the release pace is 0.8 (1.5 in 0.1.21 was 'still a bit fast', 1.25 in 0.1.22 'feels the same': 0 -> 87 in about 30 s against a summon), with gain_per_pct_hp_lost 0.45. Turning Rage on heals activation_heal_pct of max HP and knocks down everything within burst_radius_m for burst_stagger_s; each kill while raging adds kill_extend_s (up to duration_s). er_anim: an Elden Ring animation Kratos plays as Rage starts (0 = none). 81000 (the Rallying Cry gesture) was sent in 0.1.35 through the event module's override animation and locked the player in it for good (test 8ad0e286), so it is off; a roar has to go through the game's own paths (a skill or a gesture request).",
+ "about": "Spartan Rage. Meter is 0-100. Activation chord is bindings.b_rage. While active the DLL scales damage dealt/taken, regenerates health, speeds animations and tints the screen. gain_scale multiplies every Rage gain (per-move rage_gain and gain_per_pct_hp_lost): 3.0 filled the bar in about 85 s of fighting in 0.1.15 (good for testing); the release pace is 0.8 (1.5 in 0.1.21 was 'still a bit fast', 1.25 in 0.1.22 'feels the same': 0 -> 87 in about 30 s against a summon), with gain_per_pct_hp_lost 0.45. Turning Rage on heals activation_heal_pct of max HP and knocks down everything within burst_radius_m for burst_stagger_s; each kill while raging adds kill_extend_s (up to duration_s). er_skill: the Elden Ring skill (SwordArtsParam id) Kratos plays as Rage starts, through the same path as the runics (put on his weapon, skill button pressed, his old skill put back after); 652 = Beast's Roar, a roar with a shockwave and no lasting buff (Barbaric Roar 650 and War Cry 651 change heavy attacks for 40 s); 0 = none. 0.1.35 forced the Rallying Cry (81000) through the event module's override animation instead, which held the player in it for good (test 8ad0e286).",
  "columns": {
   "id": {
    "type": "id"
@@ -103,7 +103,7 @@
    "min": 0,
    "max": 30
   },
-  "er_anim": {
+  "er_skill": {
    "type": "int",
    "min": 0,
    "max": 999999999
@@ -133,7 +133,7 @@
    "burst_stagger_s": 3.0,
    "activation_heal_pct": 20,
    "kill_extend_s": 2.0,
-   "er_anim": 0
+   "er_skill": 652
   }
  ]
 }

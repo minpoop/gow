@@ -5,7 +5,7 @@
 
 use eldenring::cs::{CharaInitParam, EquipParamWeapon, SoloParam, SoloParamRepository, SwordArtsParam};
 use fromsoftware_shared::FromStatic;
-use gowring_core::sheets::{WeaponKind, ER_TEMPLATES, RUNICS, WEAPONS};
+use gowring_core::sheets::{WeaponKind, ER_TEMPLATES, RAGE, RUNICS, WEAPONS};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -41,6 +41,16 @@ pub fn set_weapon_skill(weapon: &str, skill: i32) -> Vec<(u32, i32)> {
             Some((row, was))
         })
         .collect()
+}
+
+/// Put back the skills `set_weapon_skill` reported: (row, skill).
+pub fn set_rows_skill(rows: &[(u32, i32)]) {
+    let Ok(repo) = (unsafe { SoloParamRepository::instance_mut() }) else { return };
+    for (row, skill) in rows {
+        if let Some(r) = repo.get_mut::<EquipParamWeapon>(*row) {
+            r.set_sword_arts_param_id(*skill);
+        }
+    }
 }
 
 pub struct Carriers {
@@ -117,8 +127,8 @@ pub fn apply() -> Result<Carriers, String> {
         }
     }
 
-    // ---- the runics' skills cost no FP (Kratos' runics run on their own cooldowns) -----------------------------------------
-    let mut skills: Vec<i32> = RUNICS.iter().map(|r| r.er_skill).filter(|s| *s > 0).collect();
+    // ---- the runics' skills (and Spartan Rage's roar) cost no FP (Kratos' runics run on their own cooldowns) ------------
+    let mut skills: Vec<i32> = RUNICS.iter().map(|r| r.er_skill).chain(RAGE.iter().map(|r| r.er_skill)).filter(|s| *s > 0).collect();
     skills.sort();
     skills.dedup();
     let mut category = HashMap::new();

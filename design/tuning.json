@@ -1,7 +1,7 @@
 {
  "sheet": "tuning",
  "struct": "TuningDef",
- "about": "Every remaining constant of the rules layer (detection ranges, timers, thresholds). Health stones (Ragnarok's healing): a regular enemy drops one with health_stone_chance, a boss (or summon) health_stone_boss_count; each heals health_stone_heal_pct of max health when Kratos walks within health_stone_pickup_m while hurt, and fades after health_stone_life_s.",
+ "about": "Every remaining constant of the rules layer (detection ranges, timers, thresholds). Health stones (Ragnarok's healing): a hostile that dies within health_stone_drop_m of Kratos (whoever dealt the blow) drops one with health_stone_chance, a boss (or summon) health_stone_boss_count; each heals health_stone_heal_pct of max health when Kratos walks within health_stone_pickup_m while hurt, and fades after health_stone_life_s.",
  "columns": {
   "id": {
    "type": "id"
@@ -155,6 +155,11 @@
    "type": "float",
    "min": 0.2,
    "max": 10
+  },
+  "health_stone_drop_m": {
+   "type": "float",
+   "min": 1,
+   "max": 200
   }
  },
  "rows": [
@@ -186,10 +191,11 @@
    "status_decay_after_s": 2.5,
    "status_decay_per_s": 25,
    "health_stone_heal_pct": 12.0,
-   "health_stone_chance": 0.6,
+   "health_stone_chance": 0.75,
    "health_stone_boss_count": 3,
    "health_stone_life_s": 30.0,
-   "health_stone_pickup_m": 1.6
+   "health_stone_pickup_m": 1.6,
+   "health_stone_drop_m": 25.0
   }
  ]
 }

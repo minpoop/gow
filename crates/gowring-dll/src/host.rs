@@ -68,8 +68,11 @@ struct Frozen {
 /// A runic's animation being started: the skill (Ash of War) put on the weapon, when its button went down and for
 /// how many frames it has been held.
 struct SkillCast {
-    runic: &'static str,
+    /// The runic (or `spartan_rage`) it plays for.
+    tag: &'static str,
     skill: i32,
+    /// The weapon rows' own skills, put back once this one has played (empty: a runic's skill stays on its weapon).
+    restore: Vec<(u32, i32)>,
     /// The animation category the skill's animations are in (600 + its type), when the patch read it.
     category: Option<i32>,
     at: f64,
@@ -112,14 +115,14 @@ pub struct Bridge {
     anim_seen: (i32, u32),
     anim_tally: HashMap<i32, u32>,
     anim_tally_at: f64,
-    /// The runic animation being started, the misses in a row per runic, and the last animation asked for by id
-    /// (with when, so the log can say whether it played).
+    /// The skill animation being started (a runic's or Spartan Rage's roar) and the misses in a row per runic.
     skill_cast: Option<SkillCast>,
     /// Until when the skill button is kept out of the game's queue after a runic's skill started (a skill such as
     /// Thunderbolt strikes again if the button is pressed during it, which made runics come out twice).
     skill_quiet_until: f64,
     skill_misses: HashMap<&'static str, u32>,
-    anim_asked: Option<(i32, f64)>,
+    /// Weapon skills to put back (row, skill) and when: after Spartan Rage's roar has played.
+    skill_restore: Option<(Vec<(u32, i32)>, f64)>,
     /// The spell and quick-item slots kept while the mod owns D-pad up/down (the game still switches them even with
     /// the actions masked), when the mod last owned them, and how many switches were put back (for the log).
     slot_lock: Option<(i32, i32)>,
@@ -185,7 +188,7 @@ impl Bridge {
             skill_cast: None,
             skill_quiet_until: 0.0,
             skill_misses: HashMap::new(),
-            anim_asked: None,
+            skill_restore: None,
             slot_lock: None,
             dpad_owned_at: f64::NEG_INFINITY,
             slot_restores: 0,
@@ -384,11 +387,6 @@ impl Bridge {
             if last.anim_id != self.anim_seen.0 && last.anim_id > 0 {
                 self.anim_seen.0 = last.anim_id;
                 *self.anim_tally.entry(last.anim_id).or_default() += 1;
-                if let Some((asked, at)) = self.anim_asked {
-                    if time - at < 1.5 {
-                        crate::glog!("player_anim", "{:.2}s after asking for animation {asked}: now a{:03}_{:06}{}", time - at, last.anim_id / 1_000_000, last.anim_id % 1_000_000, if last.anim_id == asked { " (the one asked for)" } else { "" });
-                    }
-                }
                 if self.anim_seen.1 < 600 {
                     self.anim_seen.1 += 1;
                     crate::glog!("player_anim", "{time:.2}s a{:03}_{:06} ({} s long), buttons {:?}", last.anim_id / 1_000_000, last.anim_id % 1_000_000, (last.anim_length * 100.0).round() / 100.0, bits_from_er(&ar.new_action_presses));
@@ -709,32 +707,13 @@ impl Bridge {
                 Command::Cast { runic } => {
                     // Kratos plays the runic's Elden Ring skill: put it on the weapon and press the skill button
                     // (held below until the skill's animation starts)
-                    let def = RUNICS.iter().find(|r| r.id == *runic);
-                    let misses = self.skill_misses.get(runic).copied().unwrap_or(0);
-                    match def.filter(|r| r.er_skill > 0) {
-                        Some(r) if misses >= SKILL_GIVE_UP => crate::log::once("skill-gave-up", r.id, &format!("runic `{}`: skill {} showed no animation {SKILL_GIVE_UP} times in a row; cast without one for the rest of the session", r.id, r.er_skill)),
-                        Some(r) => {
-                            let rows = crate::params::set_weapon_skill(r.weapon, r.er_skill);
-                            if rows.is_empty() {
-                                crate::log::once("skill-no-carrier", r.weapon, &format!("runic `{}`: no carrier row for {} yet; no animation", r.id, r.weapon));
-                            } else {
-                                let category = crate::params::skill_category(r.er_skill);
-                                crate::glog!("skill_anim", "{now:.2}s runic `{}`: skill {} (animations a{}) on carrier rows (row, skill it had) {rows:?}; pressing the skill button", r.id, r.er_skill, category.map(|c| format!("{c:03}")).unwrap_or_else(|| "?".into()));
-                                self.skill_cast = Some(SkillCast { runic: r.id, skill: r.er_skill, category, at: now, frames: 0 });
-                            }
-                        }
+                    match RUNICS.iter().find(|r| r.id == *runic).filter(|r| r.er_skill > 0) {
+                        Some(r) => self.start_skill(r.id, r.weapon, r.er_skill, false, now),
                         None => crate::log::once("cast-visual", "enemy_damage", &format!("runic `{runic}`: effects applied; no animation set for it")),
                     }
                 }
-                // An override animation skips the behaviour that ends it: the Rallying Cry sent this way at Rage in
-                // 0.1.35 held the player in it until the game was closed. Nothing sends one now (rage.er_anim 0).
-                Command::PlayAnim(id) => {
-                    if let Some(p) = wcm.main_player.as_mut() {
-                        p.chr_ins.modules.event.request_animation_id = *id;
-                        self.anim_asked = Some((*id, now));
-                        crate::glog!("player_anim", "{now:.2}s asked the game to play animation {id} (a{:03}_{:06})", id / 1_000_000, id % 1_000_000);
-                    }
-                }
+                // Spartan Rage's roar: the same path, and the weapon gets its own skill back once it has played
+                Command::Skill { tag, weapon, skill } => self.start_skill(tag, weapon, *skill, true, now),
                 Command::Raycast { .. } | Command::Fx { .. } | Command::Shake(_) => {}
             }
         }
@@ -794,14 +773,20 @@ impl Bridge {
                 let (cur, len) = (slot.anim_id, slot.anim_length);
                 let age = now - sc.at;
                 if is_skill_anim(cur, sc.category) {
-                    crate::glog!("skill_anim", "runic `{}`: skill {} animation a{:03}_{:06} started after {age:.2}s ({} frames held)", sc.runic, sc.skill, cur / 1_000_000, cur % 1_000_000, sc.frames);
-                    self.skill_misses.insert(sc.runic, 0);
+                    crate::glog!("skill_anim", "`{}`: skill {} animation a{:03}_{:06} started after {age:.2}s ({} frames held)", sc.tag, sc.skill, cur / 1_000_000, cur % 1_000_000, sc.frames);
+                    self.skill_misses.insert(sc.tag, 0);
                     self.skill_quiet_until = now + (len as f64).clamp(0.5, 4.0);
+                    if !sc.restore.is_empty() {
+                        self.skill_restore = Some((std::mem::take(&mut sc.restore), self.skill_quiet_until));
+                    }
                     self.skill_cast = None;
                 } else if age > SKILL_WAIT_S {
-                    let n = self.skill_misses.entry(sc.runic).or_default();
+                    let n = self.skill_misses.entry(sc.tag).or_default();
                     *n += 1;
-                    crate::glog!("skill_anim", "runic `{}`: no skill animation after {age:.2}s (playing a{:03}_{:06}); miss {n} of {SKILL_GIVE_UP}", sc.runic, cur / 1_000_000, cur % 1_000_000);
+                    crate::glog!("skill_anim", "`{}`: no skill animation after {age:.2}s (playing a{:03}_{:06}); miss {n} of {SKILL_GIVE_UP}", sc.tag, cur / 1_000_000, cur % 1_000_000);
+                    if !sc.restore.is_empty() {
+                        crate::params::set_rows_skill(&sc.restore);
+                    }
                     self.skill_cast = None;
                 } else {
                     // one press, then held: nothing left queued for the game to read as a second press
@@ -825,8 +810,36 @@ impl Bridge {
             if let Some(s) = anim_speed {
                 p.chr_ins.modules.behavior.animation_speed = s;
             }
+            if self.skill_restore.as_ref().is_some_and(|(_, at)| now >= *at) {
+                let (rows, _) = self.skill_restore.take().unwrap();
+                crate::params::set_rows_skill(&rows);
+                crate::glog!("skill_anim", "{now:.2}s weapon skills put back (row, skill) {rows:?}");
+            }
         }
         self.tick_statuses(wcm, now, player_handle);
+    }
+
+    /// Put `skill` on every row carrying `weapon` and start pressing the skill button (see `apply`); `restore`: give the
+    /// rows their own skill back once it has played.
+    fn start_skill(&mut self, tag: &'static str, weapon: &'static str, skill: i32, restore: bool, now: f64) {
+        let misses = self.skill_misses.get(tag).copied().unwrap_or(0);
+        if misses >= SKILL_GIVE_UP {
+            crate::log::once("skill-gave-up", tag, &format!("`{tag}`: skill {skill} showed no animation {SKILL_GIVE_UP} times in a row; played without one for the rest of the session"));
+            return;
+        }
+        // a skill still waiting to be put back goes back first, so its row's own skill is what gets restored later
+        if let Some((rows, _)) = self.skill_restore.take() {
+            crate::params::set_rows_skill(&rows);
+        }
+        let rows = crate::params::set_weapon_skill(weapon, skill);
+        if rows.is_empty() {
+            crate::log::once("skill-no-carrier", weapon, &format!("`{tag}`: no carrier row for {weapon} yet; no animation"));
+            return;
+        }
+        let category = crate::params::skill_category(skill);
+        crate::glog!("skill_anim", "{now:.2}s `{tag}`: skill {skill} (animations a{}) on carrier rows (row, skill it had) {rows:?}; pressing the skill button", category.map(|c| format!("{c:03}")).unwrap_or_else(|| "?".into()));
+        let restore = if restore { rows.into_iter().filter(|(_, was)| *was != skill).collect() } else { Vec::new() };
+        self.skill_cast = Some(SkillCast { tag, skill, restore, category, at: now, frames: 0 });
     }
 
     fn freeze(&mut self, wcm: &mut WorldChrMan, target: u64, now: f64, seconds: f32) {

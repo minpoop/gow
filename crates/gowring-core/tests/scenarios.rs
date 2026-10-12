@@ -716,7 +716,7 @@ fn soldiers_drop_a_stone_now_and_then_and_the_setting_turns_them_off() {
         w.add_enemy(SimEnemy::new(100 + i, 0.0, 2.2, 900.0));
         kill(&mut w, 100 + i);
     }
-    let dropped = w.log.iter().filter(|l| l.contains("health stone(s) dropped")).count();
+    let dropped = w.log.iter().filter(|l| l.starts_with("health stones:") && l.ends_with("; 1 dropped")).count();
     let chance = gowring_core::Data::get().tuning.health_stone_chance;
     assert!(dropped > 0 && dropped < 40, "{dropped} of 40 soldiers dropped one (chance {chance})");
 
@@ -742,4 +742,44 @@ fn the_debug_key_fills_rage_but_not_while_it_burns() {
     w.idle(1.0);
     w.engine.debug_fill_rage();
     assert!(w.engine.rage().frac() < before, "a burning meter keeps draining");
+}
+
+#[test]
+fn stones_come_from_deaths_near_kratos_whoever_struck_and_not_from_far_away() {
+    let t = &gowring_core::Data::get().tuning;
+    // a boss that dies untouched by Kratos (Elden Ring did not credit the blow) still drops its stones
+    let mut w = SimWorld::new();
+    let mut boss = SimEnemy::new(7, 0.0, 5.0, 60000.0);
+    boss.boss = true;
+    w.add_enemy(boss);
+    w.idle(0.2);
+    w.enemies[0].hp = 0.0;
+    w.idle(0.1);
+    assert_eq!(w.engine.stones().len(), t.health_stone_boss_count as usize, "log: {:?}", w.log);
+    // one that dies beyond the drop range leaves nothing
+    let mut w = SimWorld::new();
+    let mut far = SimEnemy::new(8, 0.0, t.health_stone_drop_m + 5.0, 60000.0);
+    far.boss = true;
+    w.add_enemy(far);
+    w.idle(0.2);
+    w.enemies[0].hp = 0.0;
+    w.idle(0.1);
+    assert!(w.engine.stones().is_empty());
+}
+
+#[test]
+fn rage_starts_with_a_roar_skill_and_a_lone_l3_does_not_crouch_while_it_is_ready() {
+    let mut w = SimWorld::new();
+    w.engine.debug_fill_rage();
+    // L3 a frame before R3: masked, so Elden Ring does not crouch
+    let out = w.step(&[L3], &[]);
+    assert!(out.commands.iter().any(|c| matches!(c, Command::Mask(m) if m.has(L3) && !m.has(R3))));
+    w.step(&[R3], &[L3]);
+    assert!(w.engine.rage().active);
+    let d = gowring_core::Data::get();
+    assert_eq!(w.skills, vec![("spartan_rage", d.right_weapon(0).id, d.rage.er_skill)]);
+    // with the meter not full, L3 is crouch again
+    let mut w = SimWorld::new();
+    let out = w.step(&[L3], &[]);
+    assert!(!out.commands.iter().any(|c| matches!(c, Command::Mask(m) if m.has(L3))));
 }

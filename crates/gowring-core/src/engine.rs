@@ -91,8 +91,10 @@ pub struct Stone {
 
 pub struct Engine {
     d: &'static Data,
-    /// Health stones dropped by enemies, waiting to be walked over.
+    /// Health stones dropped by enemies, waiting to be walked over, and the hostiles alive last frame (a death near
+    /// Kratos drops stones whoever dealt the blow).
     stones: Vec<Stone>,
+    stone_alive: HashSet<EnemyId>,
     tuning: Tuning,
     rage: Rage,
     runics: Runics,
@@ -204,6 +206,7 @@ impl Engine {
             hp_hit_at: f64::NEG_INFINITY,
             hud_started: false,
             stones: Vec::new(),
+            stone_alive: HashSet::new(),
         }
     }
 
@@ -446,7 +449,7 @@ impl Engine {
             // Spartan Rage
             if inp.rage_pressed && self.rage.ready() {
                 let base = self.all_base_damage_max();
-                self.rage.activate(f, base, d.mv(d.rage.burst_move), &mut out, &mut ev);
+                self.rage.activate(f, base, d.mv(d.rage.burst_move), weapon.id, &mut out, &mut ev);
                 self.rage_on_at = now;
             }
             // Melee bookkeeping (ER plays the swing)
@@ -559,6 +562,11 @@ impl Engine {
             if axe_away {
                 mask = mask.with(ErAction::R1).with(ErAction::R2);
             }
+            // L3 alone is Elden Ring's crouch: with the meter full it is the start of L3 + R3, so a stick pressed a
+            // moment before the other does not crouch Kratos instead of raging (R3 alone stays lock-on)
+            if self.rage.ready() && f.actions_down.has(ErAction::L3) {
+                mask = mask.with(ErAction::L3);
+            }
         }
         if !mask.is_empty() {
             out.push(Command::Mask(mask));
@@ -617,7 +625,7 @@ impl Engine {
         }
 
         // ---- health stones: dropped by the dead, healing Kratos when he walks over one while hurt -----------------------
-        self.health_stones(f, now, &ev, &mut out, &mut logs);
+        self.health_stones(f, now, &mut out, &mut logs);
 
         // ---- camera & HUD ------------------------------------------------------------------------------------------------------
         let since = (now - self.finisher_at) as f32;
@@ -716,27 +724,36 @@ impl Engine {
         }
     }
 
-    fn health_stones(&mut self, f: &Frame, now: f64, ev: &[Event], out: &mut Vec<Command>, logs: &mut Vec<String>) {
+    fn health_stones(&mut self, f: &Frame, now: f64, out: &mut Vec<Command>, logs: &mut Vec<String>) {
         let t = &self.d.tuning;
         if !self.tuning.health_stones {
             self.stones.clear();
             return;
         }
-        for e in ev {
-            let Event::Kill { enemy, boss } = e else { continue };
-            let Some(body) = f.enemies.iter().find(|x| x.id == *enemy) else { continue };
+        // a hostile seen alive that is now dead near Kratos (Elden Ring does not always say who struck the blow,
+        // so the kill credit is not asked for)
+        for e in &f.enemies {
+            if e.alive && e.hp > 0.0 {
+                continue;
+            }
+            if !self.stone_alive.remove(&e.id) {
+                continue;
+            }
+            let dist = (e.pos - f.player.pos).len();
+            if dist > t.health_stone_drop_m {
+                continue;
+            }
             // a repeatable roll from the enemy's id: one stone with the sheet's chance, a boss drops several
-            let roll = ((*enemy).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) as f32 / (1u64 << 24) as f32;
-            let n = if *boss { t.health_stone_boss_count.max(0) as usize } else if roll < t.health_stone_chance { 1 } else { 0 };
+            let roll = (e.id.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) as f32 / (1u64 << 24) as f32;
+            let n = if e.boss { t.health_stone_boss_count.max(0) as usize } else if roll < t.health_stone_chance { 1 } else { 0 };
             for k in 0..n {
                 let a = k as f32 * std::f32::consts::TAU / n.max(1) as f32 + roll * 6.0;
                 let r = if n > 1 { 1.2 } else { 0.0 };
-                self.stones.push(Stone { pos: body.pos + Vec3::new(r * a.cos(), 0.0, r * a.sin()), born: now });
+                self.stones.push(Stone { pos: e.pos + Vec3::new(r * a.cos(), 0.0, r * a.sin()), born: now });
             }
-            if n > 0 {
-                logs.push(format!("{n} health stone(s) dropped by {enemy:#x}"));
-            }
+            logs.push(format!("health stones: {:#x} died {dist:.1} m away{}; {n} dropped", e.id, if e.boss { " (boss)" } else { "" }));
         }
+        self.stone_alive = f.enemies.iter().filter(|e| e.alive && e.hp > 0.0).map(|e| e.id).collect();
         let life = t.health_stone_life_s as f64;
         self.stones.retain(|s| now - s.born < life);
         let hurt = f.player.alive && f.player.hp < f.player.max_hp - 0.5;

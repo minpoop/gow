@@ -58,16 +58,16 @@ impl Rage {
         }
     }
 
-    pub fn activate(&mut self, f: &Frame, base_damage: f32, burst: &'static MoveDef, out: &mut Vec<Command>, ev: &mut Vec<Event>) {
+    pub fn activate(&mut self, f: &Frame, base_damage: f32, burst: &'static MoveDef, weapon: &'static str, out: &mut Vec<Command>, ev: &mut Vec<Event>) {
         self.active = true;
         self.time_left = self.d.rage.duration_s;
         out.push(Command::Sfx(self.d.rage.sfx_on));
         out.push(Command::AnimSpeed(self.d.rage.anim_speed));
         out.push(Command::Shake(1.0));
         let r = self.d.rage;
-        if r.er_anim > 0 {
-            // Kratos roars as Rage takes hold
-            out.push(Command::PlayAnim(r.er_anim));
+        if r.er_skill > 0 {
+            // Kratos roars as Rage takes hold (an Elden Ring skill, played the way the runics' are)
+            out.push(Command::Skill { tag: "spartan_rage", weapon, skill: r.er_skill });
         }
         if f.player.alive && r.activation_heal_pct > 0.0 {
             out.push(Command::Heal { amount: f.player.max_hp * r.activation_heal_pct / 100.0 });
@@ -140,15 +140,15 @@ mod tests {
         f.enemies.push(EnemyView { id: 1, pos: Vec3::new(2.0, 0.0, 0.0), hp: 900.0, max_hp: 900.0, alive: true, boss: false, engaged: true, radius: 0.6, staggered: false });
         f.enemies.push(EnemyView { id: 2, pos: Vec3::new(30.0, 0.0, 0.0), hp: 900.0, max_hp: 900.0, alive: true, boss: false, engaged: true, radius: 0.6, staggered: false });
         let (mut out, mut ev) = (vec![], vec![]);
-        r.activate(&f, 420.0, d.mv("rage_burst"), &mut out, &mut ev);
+        r.activate(&f, 420.0, d.mv("rage_burst"), "leviathan_axe", &mut out, &mut ev);
         assert!(r.active);
         // only the near enemy is hit by the burst
         let hits: Vec<_> = out.iter().filter(|c| matches!(c, Command::Damage { .. })).collect();
         assert_eq!(hits.len(), 1);
         assert!(matches!(ev[0], Event::RageOn));
-        // no forced animation: the override one sent in 0.1.35 left Kratos stuck in it
-        assert_eq!(d.rage.er_anim, 0);
-        assert!(!out.iter().any(|c| matches!(c, Command::PlayAnim(_))));
+        // Kratos roars through the skill path (the override animation sent in 0.1.35 left him stuck in it)
+        assert!(d.rage.er_skill > 0);
+        assert!(out.iter().any(|c| matches!(c, Command::Skill { tag: "spartan_rage", weapon: "leviathan_axe", skill } if *skill == d.rage.er_skill)));
         assert_eq!(r.damage_mult(), d.rage.damage_mult);
         // gains are ignored while burning
         let before = r.meter;
