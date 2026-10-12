@@ -449,28 +449,53 @@ fn probe_mesh_stream(gow: &std::path::Path, buf: &[u8], out: &std::path::Path) -
         &gpu[at..at + (rs[k].vertices as usize * 12).min(192)]
     };
     let (a, b) = (resident[0], resident[1]);
-    // candidates: named for him, then beside his WAD, then the biggest; never his WAD, animation sets or audio
+    // the packs' small index files and the heads of the shared packs, for working out the pack format
+    let packs = out.join("packs");
+    let _ = std::fs::create_dir_all(&packs);
+    let mut copied = 0u64;
+    for (p, n) in &files {
+        let l = p.to_string_lossy().to_ascii_lowercase();
+        let small_index = (l.ends_with(".lodpack.toc") || l.ends_with(".texpack.toc") || l.ends_with("filehashes.csv") || l.ends_with("resource_dependency_graph.json")) && *n <= 8 << 20;
+        let head = l.ends_with("root.lodpack") || l.ends_with("valhalla.lodpack");
+        if !(small_index || head) {
+            continue;
+        }
+        let name = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut b = Vec::new();
+        if std::fs::File::open(p).and_then(|f| f.take(if head { 4 << 20 } else { 8 << 20 }).read_to_end(&mut b)).is_ok() {
+            copied += b.len() as u64;
+            let _ = std::fs::write(packs.join(if head { format!("{name}.head") } else { name }), &b);
+        }
+    }
+    o.push_str(&format!("saved {copied} bytes of pack indexes and pack heads under packs/\n"));
+    // candidates: named for him, then the shared level-of-detail pack, then the other level-of-detail packs, then
+    // anything else that could hold meshes (not textures, shaders, video, sound, programs, his WAD or animation sets)
     let wad_dir = files.iter().find(|(p, _)| p.file_name().is_some_and(|n| n.eq_ignore_ascii_case("r_heroa00.wad"))).and_then(|(p, _)| p.parent().map(|d| d.to_path_buf()));
+    let skip = [".wad", ".as", ".texpack", ".shaderpack", ".bk2", ".msi", ".sbp", ".dcb", ".dll", ".exe", ".toc", ".audiopack"];
     let mut cands: Vec<&(std::path::PathBuf, u64)> = files
         .iter()
         .filter(|(p, n)| {
             let l = p.to_string_lossy().to_ascii_lowercase();
-            *n >= 1 << 20 && !l.ends_with(".wad") && !l.ends_with(".as") && !l.contains("audiopack") && !l.ends_with(".dll") && !l.ends_with(".exe")
+            *n >= 1 << 20 && !skip.iter().any(|x| l.ends_with(x)) && !l.contains("audiopack")
         })
         .collect();
     let rank = |p: &std::path::Path| {
         let n = p.file_name().map(|x| x.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         if n.contains("heroa00") {
             0
-        } else if n.contains("hero") || n.contains("kratos") {
+        } else if n == "root.lodpack" {
             1
-        } else if wad_dir.as_deref() == p.parent() {
+        } else if n.ends_with(".lodpack") {
             2
-        } else {
+        } else if n.contains("hero") || n.contains("kratos") {
             3
+        } else if wad_dir.as_deref() == p.parent() {
+            4
+        } else {
+            5
         }
     };
-    cands.sort_by_key(|(p, n)| (rank(p), std::cmp::Reverse(*n)));
+    cands.sort_by_key(|(p, n)| (rank(p), *n));
     o.push_str(&format!("searching up to {} files for draw {a}'s first positions ({} vertices, buffer offset {})\n", cands.len(), rs[a].vertices, rs[a].vertex_offset));
     let until = std::time::Instant::now() + std::time::Duration::from_secs(240);
     let mut searched = 0;
