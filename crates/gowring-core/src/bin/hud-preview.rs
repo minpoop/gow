@@ -214,13 +214,37 @@ fn main() {
         }
     }
     let d = Data::get();
+    if args.iter().any(|a| a == "--runics") {
+        // every runic on its plate, one row per weapon: light ones, then heavy ones
+        for (row, w) in ["leviathan_axe", "blades_of_chaos", "draupnir_spear"].iter().enumerate() {
+            let y = 150.0 + row as f32 * 300.0;
+            cv.text(60.0, y - 120.0, 30.0, d.weapon(w).name, 0xFFD27A, 1.0);
+            let list: Vec<_> = d.all_runics().filter(|r| r.weapon == *w).collect();
+            for (i, r) in list.iter().enumerate() {
+                let x = 150.0 + i as f32 * 290.0 + if r.tier == gowring_core::sheets::RunicTier::Heavy { 60.0 } else { 0.0 };
+                let (rx, ry) = (58.0, 51.0);
+                let w = d.weapon(r.weapon);
+                cv.prims(&vector::runic_plate(x, y, rx, ry, w.runic_color, w.runic_light, 1.0, w.runic_glow, 1.0));
+                if let Some(v) = r.icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: x - 32.0, y: y - 32.0, w: 64.0, h: 64.0 }, 0xFFFFFF, 1.0)) {
+                    cv.prims(&v);
+                }
+                let tier = if r.tier == gowring_core::sheets::RunicTier::Heavy { "heavy" } else { "light" };
+                let tw = cv.text_w(r.name, 24.0);
+                cv.text(x - tw / 2.0, y + 66.0, 24.0, r.name, 0xF4EFE4, 1.0);
+                let tw = cv.text_w(tier, 18.0);
+                cv.text(x - tw / 2.0, y + 96.0, 18.0, tier, 0xB8BEC6, 1.0);
+            }
+        }
+        save(&cv, &out);
+        return;
+    }
     let matching = HudState {
         hp_frac: 1.0,
         hp_trail_frac: 1.0,
         rage_frac: 0.89,
         rage_ready: true,
-        runic_light: Some(RunicHud { id: "axe_runic_light", name: "Frost Shockwave", remaining_frac: 0.0, ready: true }),
-        runic_heavy: Some(RunicHud { id: "axe_runic_heavy", name: "Glacial Cleave", remaining_frac: 0.0, ready: true }),
+        runic_light: Some(RunicHud { id: "axe_runic_light", name: "Frost Shockwave", remaining_frac: 0.0, ready: true, ..Default::default() }),
+        runic_heavy: Some(RunicHud { id: "axe_runic_heavy", name: "Glacial Cleave", remaining_frac: 0.0, ready: true, ..Default::default() }),
         weapon_icon: d.weapon("leviathan_axe").icon,
         weapon_name: "Leviathan Axe",
         shield_drawn: true,
@@ -232,8 +256,8 @@ fn main() {
         hp_trail_frac: 0.84,
         rage_frac: 1.0,
         rage_ready: true,
-        runic_light: Some(RunicHud { id: "axe_runic_light", name: "Frost Shockwave", remaining_frac: 0.45, ready: false }),
-        runic_heavy: Some(RunicHud { id: "axe_runic_heavy", name: "Glacial Cleave", remaining_frac: 0.0, ready: true }),
+        runic_light: Some(RunicHud { id: "axe_runic_light", name: "Frost Shockwave", remaining_frac: 0.45, ready: false, ..Default::default() }),
+        runic_heavy: Some(RunicHud { id: "axe_runic_heavy", name: "Glacial Cleave", remaining_frac: 0.0, ready: true, ..Default::default() }),
         weapon_icon: d.weapon("leviathan_axe").icon,
         weapon_name: "Leviathan Axe",
         shield_drawn: true,
@@ -252,7 +276,37 @@ fn main() {
         pulse: 0.2,
         ..Default::default()
     };
-    let state = if backdrop.is_some() { matching } else { busy };
+    let mut state = if backdrop.is_some() { matching } else { busy };
+    // `--time T`: the HUD clock (the fire around L3 + R3 moves with it); `--picker`: show the light runic picker
+    if let Some(t) = args.iter().position(|a| a == "--time").and_then(|i| args.get(i + 1)).and_then(|t| t.parse().ok()) {
+        state.time_s = t;
+    }
+    if let Some(wi) = args.iter().position(|a| a == "--weapon").and_then(|i| args.get(i + 1)).and_then(|t| t.parse::<u8>().ok()) {
+        let w = d.right_weapon(wi);
+        let slot = |id: Option<&'static str>, cd: f32| {
+            id.map(|id| {
+                let r = d.runic(id);
+                RunicHud { id: r.id, name: r.name, remaining_frac: cd, ready: cd <= 0.0, color: w.runic_color, light: w.runic_light, glow: w.runic_glow }
+            })
+        };
+        state.weapon_icon = w.icon;
+        state.weapon_name = w.name;
+        let cd = state.runic_light.as_ref().map(|r| r.remaining_frac).unwrap_or(0.0);
+        state.runic_light = slot(w.light_runic, cd);
+        state.runic_heavy = slot(w.heavy_runic, 0.0);
+    }
+    if args.iter().any(|a| a == "--picker") {
+        let opts: Vec<_> = d.all_runics().filter(|r| r.weapon == "leviathan_axe" && r.tier == gowring_core::sheets::RunicTier::Light).collect();
+        state.runic_light = Some(RunicHud { id: opts[1].id, name: opts[1].name, remaining_frac: 0.0, ready: true, ..Default::default() });
+        state.runic_picker = Some(gowring_core::hud::RunicPicker {
+            heavy: false,
+            weapon_name: "Leviathan Axe",
+            options: opts.iter().map(|r| (r.name, r.icon, r.effect)).collect(),
+            chosen: 1,
+            colors: (0x4A7FB4, 0x8AB4DC, 0.0),
+            alpha: 1.0,
+        });
+    }
     let project = |p: Vec3| -> Option<(f32, f32)> {
         if p.z <= 0.5 {
             return None;
@@ -264,9 +318,13 @@ fn main() {
         match c {
             DrawCmd::Overlay { color, alpha } => cv.rect(0.0, 0.0, w as f32, h as f32, color, alpha),
             DrawCmd::Shapes { prims } => cv.prims(&prims),
+            DrawCmd::Label { x, y, px, text, color, alpha, align } => {
+                let x = if align == Align::Center { x - cv.text_w(&text, px) / 2.0 } else { x };
+                cv.text(x, y, px, &text, color, alpha);
+            }
             DrawCmd::Bar { rect, frac, trail, color, lead, segments, alpha, .. } => cv.prims(&vector::rbar(&rect, frac, trail, color, lead, segments, alpha)),
-            DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, alpha, .. } => {
-                cv.prims(&vector::plate(vector::PlateShape::Diamond, cx, cy, rx, ry, color, light, 1.0 - remaining, alpha));
+            DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, aura, alpha, .. } => {
+                cv.prims(&vector::runic_plate(cx, cy, rx, ry, color, light, 1.0 - remaining, aura, alpha));
                 let s = ry * 0.62;
                 if let Some(v) = icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: cx - s, y: cy - s, w: s * 2.0, h: s * 2.0 }, 0xFFFFFF, alpha)) {
                     cv.prims(&v);

@@ -2,7 +2,7 @@
 
 use crate::camera::Camera;
 use crate::data::Data;
-use crate::hud::{EnemyBar, HudState, RunicHud};
+use crate::hud::{EnemyBar, HudState, RunicHud, RunicPicker};
 use crate::status::StatusMeters;
 use crate::input::{self, Inputs};
 use crate::melee::{Ledger, Melee};
@@ -13,7 +13,7 @@ use crate::sheets::*;
 use crate::stun::StunTracker;
 use crate::thrown::Thrown;
 use crate::types::*;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Things that happened this frame; consumed by Mimir and the log.
 #[derive(Clone, Debug)]
@@ -30,6 +30,8 @@ pub enum Event {
     Parry { attacker: Option<EnemyId> },
     Finisher { enemy: EnemyId },
     WeaponChanged { weapon: &'static str },
+    /// A different runic was put in a weapon's light or heavy slot (L1 + D-pad).
+    RunicEquipped { runic: &'static RunicDef },
 }
 
 /// Rage and stun that subsystems earned this frame.
@@ -50,7 +52,12 @@ pub struct TickOutput {
     pub logs: Vec<String>,
     /// Thrown weapons to draw: (weapon id, position).
     pub projectiles: Vec<(&'static str, Vec3)>,
+    /// Runics equipped in game this frame (the DLL keeps the choice in settings.json).
+    pub equipped: Vec<&'static str>,
 }
+
+/// How long the runic picker stays on screen after a slot is changed.
+const PICKER_S: f64 = 3.0;
 
 /// How much of a weapon's burn or freeze build-up, and of its duration, a boss takes.
 const BOSS_STATUS_RESIST: f32 = 0.5;
@@ -112,6 +119,10 @@ pub struct Engine {
     /// When the last finisher landed (drives the camera punch-in).
     finisher_at: f64,
     status_gc_at: f64,
+    /// The runic in each weapon's light and heavy slot, where it differs from the weapon's own pick.
+    equipped: HashMap<(&'static str, RunicTier), &'static str>,
+    /// The slot the runic picker shows, and until when.
+    picker: Option<(RunicTier, f64)>,
 }
 
 impl Engine {
@@ -151,7 +162,50 @@ impl Engine {
             hit_logs: 0,
             finisher_at: f64::NEG_INFINITY,
             status_gc_at: 0.0,
+            equipped: HashMap::new(),
+            picker: None,
         }
+    }
+
+    /// The runic in a weapon's light or heavy slot (`None` for a weapon without runics).
+    pub fn equipped(&self, weapon: &WeaponDef, tier: RunicTier) -> Option<&'static RunicDef> {
+        let own = match tier {
+            RunicTier::Light => weapon.light_runic,
+            RunicTier::Heavy => weapon.heavy_runic,
+        }?;
+        Some(self.d.runic(self.equipped.get(&(weapon.id, tier)).copied().unwrap_or(own)))
+    }
+
+    /// Put a runic (by id) in its weapon's slot, as the player's settings ask. Returns whether anything changed;
+    /// an unknown runic, or one for a weapon without that slot, is ignored.
+    pub fn equip(&mut self, runic_id: &str) -> bool {
+        let Some(r) = self.d.all_runics().find(|r| r.id == runic_id) else { return false };
+        let w = self.d.weapon(r.weapon);
+        if self.equipped(w, r.tier).is_none() {
+            return false;
+        }
+        self.equipped.insert((r.weapon, r.tier), r.id) != Some(r.id)
+    }
+
+    /// The runics a weapon can put in a slot, in the sheet's order.
+    pub fn runic_options(&self, weapon_id: &str, tier: RunicTier) -> Vec<&'static RunicDef> {
+        self.d.all_runics().filter(|r| r.weapon == weapon_id && r.tier == tier).collect()
+    }
+
+    /// L1 + D-pad: the next runic for the current weapon's slot, shown in the picker.
+    fn cycle_runic(&mut self, tier: RunicTier, now: f64, out: &mut Vec<Command>, ev: &mut Vec<Event>) -> Option<&'static RunicDef> {
+        let weapon = self.weapon;
+        let cur = self.equipped(weapon, tier)?;
+        let opts = self.runic_options(weapon.id, tier);
+        let i = opts.iter().position(|r| r.id == cur.id).unwrap_or(0);
+        let next = opts[(i + 1) % opts.len()];
+        self.equipped.insert((weapon.id, tier), next.id);
+        self.picker = Some((tier, now + PICKER_S));
+        if let Some(s) = weapon.swap_sfx {
+            out.push(Command::Sfx(s));
+        }
+        ev.push(Event::RunicEquipped { runic: next });
+        Some(next)
     }
 
     pub fn rage(&self) -> &Rage {
@@ -357,12 +411,13 @@ impl Engine {
                     self.melee.heavy_pressed(d, weapon, now);
                 }
             }
-            // Runics
-            if melee_weapon {
-                if inp.runic_light {
-                    self.runics.press(RunicTier::Light, weapon.id, now, &mut out);
-                } else if inp.runic_heavy {
-                    self.runics.press(RunicTier::Heavy, weapon.id, now, &mut out);
+            // Runics: D-pad up / down casts; with L1 held it changes the runic in that slot instead
+            if melee_weapon && (inp.runic_light || inp.runic_heavy) {
+                let tier = if inp.runic_light { RunicTier::Light } else { RunicTier::Heavy };
+                if inp.guard_held {
+                    self.cycle_runic(tier, now, &mut out, &mut ev);
+                } else if let Some(r) = self.equipped(weapon, tier) {
+                    self.runics.press(r, now, &mut out);
                 }
             }
         }
@@ -493,6 +548,7 @@ impl Engine {
                 Event::AxeCaught => logs.push("axe caught".into()),
                 Event::SpearThrown => logs.push("spear thrown".into()),
                 Event::WeaponChanged { weapon } => logs.push(format!("weapon changed to {weapon}")),
+                Event::RunicEquipped { runic } => logs.push(format!("{:?} runic for {} is now {}", runic.tier, runic.weapon, runic.name)),
                 Event::RunicUsed { runic, hit, damage } => logs.push(format!("runic {} hit {hit} for {damage:.0} each", runic.name)),
                 Event::Finisher { enemy } => logs.push(format!("finisher on {enemy}")),
                 Event::StunFull { enemy } => logs.push(format!("stun full on {enemy}")),
@@ -507,7 +563,8 @@ impl Engine {
         let camera = self.camera.update(f.dt, self.thrown.aiming, controllable, punch);
         let hud = self.build_hud(f, now, hp_frac, in_combat, finisher_target, &inp);
 
-        TickOutput { commands: out, hud, camera, logs, projectiles: self.thrown.positions() }
+        let equipped = ev.iter().filter_map(|e| if let Event::RunicEquipped { runic } = e { Some(runic.id) } else { None }).collect();
+        TickOutput { commands: out, hud, camera, logs, projectiles: self.thrown.positions(), equipped }
     }
 
     fn mimir_ctx(&self, f: &Frame, now: f64) -> MimirCtx {
@@ -604,10 +661,10 @@ impl Engine {
         let fall = if d.tuning.hp_trail_s > 0.0 { f.dt / d.tuning.hp_trail_s } else { 1.0 };
         self.hp_trail = if hp_frac >= self.hp_trail { hp_frac } else { (self.hp_trail - fall).max(hp_frac) };
 
-        let runic = |id: Option<&'static str>| {
-            id.map(|id| {
-                let r = d.runic(id);
-                RunicHud { id: r.id, name: r.name, remaining_frac: self.runics.cooldown_frac(r), ready: self.runics.ready(r) }
+        let runic = |r: Option<&'static RunicDef>| {
+            r.map(|r| {
+                let w = d.weapon(r.weapon);
+                RunicHud { id: r.id, name: r.name, remaining_frac: self.runics.cooldown_frac(r), ready: self.runics.ready(r), color: w.runic_color, light: w.runic_light, glow: w.runic_glow }
             })
         };
         let bar = |e: &EnemyView, st: &StunTracker| EnemyBar {
@@ -663,8 +720,21 @@ impl Engine {
             rage_frac: self.rage.frac(),
             rage_ready: self.rage.ready(),
             rage_active: self.rage.active,
-            runic_light: runic(weapon.light_runic),
-            runic_heavy: runic(weapon.heavy_runic),
+            runic_light: runic(self.equipped(weapon, RunicTier::Light)),
+            runic_heavy: runic(self.equipped(weapon, RunicTier::Heavy)),
+            runic_picker: self.picker.filter(|(_, until)| now < *until).and_then(|(tier, until)| {
+                let cur = self.equipped(weapon, tier)?;
+                let opts = self.runic_options(weapon.id, tier);
+                Some(RunicPicker {
+                    heavy: tier == RunicTier::Heavy,
+                    weapon_name: weapon.name,
+                    chosen: opts.iter().position(|r| r.id == cur.id).unwrap_or(0),
+                    options: opts.iter().map(|r| (r.name, r.icon, r.effect)).collect(),
+                    colors: (weapon.runic_color, weapon.runic_light, weapon.runic_glow),
+                    alpha: ((until - now) / 0.4).clamp(0.0, 1.0) as f32,
+                })
+            }),
+            time_s: (now % 3600.0) as f32,
             weapon_icon: weapon.icon,
             weapon_name: weapon.name,
             shield_drawn: f.shield_drawn && weapon.kind != WeaponKind::Blades,

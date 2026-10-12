@@ -284,12 +284,67 @@ fn weapon_swap_changes_hud_runics_and_stows_shield() {
     let hud = w.idle(0.1).hud;
     assert_eq!(hud.weapon_name, "Blades of Chaos");
     assert!(!hud.shield_drawn, "Blades stow the shield");
-    assert_eq!(hud.runic_light.unwrap().name, "Flame Lash");
+    assert_eq!(hud.runic_light.as_ref().unwrap().name, "Flame Lash");
+    assert_eq!(hud.runic_heavy.unwrap().name, "Inferno Whirl");
+    assert_eq!(hud.weapon_icon, Some("hud_icon_blades"), "the weapon plate shows the Blades");
+    let blades_plate = hud.runic_light.as_ref().map(|r| (r.color, r.glow)).unwrap();
+    assert!(blades_plate.1 > 0.0, "the Blades' runic plates glow");
     assert!(w.sfx.contains(&"sfx_weapon_swap"));
     w.right_slot = 2;
     let hud = w.idle(0.1).hud;
     assert_eq!(hud.weapon_name, "Draupnir Spear");
+    assert_eq!(hud.weapon_icon, Some("hud_icon_spear"));
+    assert_eq!((hud.runic_light.as_ref().unwrap().name, hud.runic_heavy.as_ref().unwrap().name), ("Spark Volley", "Spear Storm"));
+    // each weapon colours its runic plates: frozen blue, red-orange, sandy yellow
+    let spear_plate = hud.runic_light.as_ref().unwrap().color;
+    w.right_slot = 0;
+    let axe_plate = w.idle(0.1).hud.runic_light.unwrap().color;
+    assert!(axe_plate != blades_plate.0 && blades_plate.0 != spear_plate && axe_plate != spear_plate);
     assert!(hud.shield_drawn);
+}
+
+#[test]
+fn l1_and_dpad_change_the_equipped_runic_and_the_cast_follows() {
+    let mut w = SimWorld::new();
+    w.add_enemy(soldier(30, 0.0, 3.0));
+    w.add_enemy(soldier(31, 0.0, -3.0));
+    // hold L1, press D-pad up: the light slot moves to the axe's next runic, nothing is cast
+    let out = w.step(&[SwitchForm], &[L1]);
+    assert!(w.casts.is_empty(), "changing a runic does not cast it");
+    assert_eq!(out.equipped, vec!["axe_rime_ring"], "the DLL is told, to keep the choice");
+    let hud = w.idle(0.1).hud;
+    assert_eq!(hud.runic_light.as_ref().unwrap().name, "Rime Ring");
+    let p = hud.runic_picker.expect("the picker shows");
+    assert!(!p.heavy && p.weapon_name == "Leviathan Axe" && p.chosen == 1);
+    assert_eq!(p.options.iter().map(|o| o.0).collect::<Vec<_>>(), vec!["Frost Shockwave", "Rime Ring", "Ice Lance"]);
+    // D-pad up alone now casts Rime Ring, which reaches the enemy behind Kratos as well
+    w.step(&[SwitchForm], &[]);
+    assert_eq!(w.casts, vec!["axe_rime_ring"]);
+    w.idle(0.5);
+    assert!(w.enemy(30).hp < 900.0 && w.enemy(31).hp < 900.0, "a ring hits all around");
+    // the picker goes away after a few seconds; the heavy slot is separate and wraps round
+    assert!(w.idle(3.5).hud.runic_picker.is_none());
+    for _ in 0..3 {
+        w.step(&[ChangeItem], &[L1]);
+        w.idle(0.1);
+    }
+    let hud = w.idle(0.1).hud;
+    assert_eq!(hud.runic_heavy.unwrap().name, "Glacial Cleave", "three presses go all the way round");
+    assert_eq!(hud.runic_light.unwrap().name, "Rime Ring");
+    // other weapons keep their own picks
+    w.right_slot = 1;
+    assert_eq!(w.idle(0.1).hud.runic_light.unwrap().name, "Flame Lash");
+}
+
+#[test]
+fn settings_equip_runics_into_their_own_weapons_slot() {
+    let mut w = SimWorld::new();
+    assert!(w.engine.equip("spear_sky_lance"));
+    assert!(!w.engine.equip("spear_sky_lance"), "the same again changes nothing");
+    assert!(!w.engine.equip("no_such_runic"));
+    assert_eq!(w.idle(0.1).hud.runic_heavy.unwrap().name, "Glacial Cleave", "the axe is untouched");
+    w.right_slot = 2;
+    assert_eq!(w.idle(0.1).hud.runic_heavy.unwrap().name, "Sky Lance");
 }
 
 #[test]

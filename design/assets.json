@@ -209,6 +209,126 @@
    "status": "unverified"
   },
   {
+   "id": "hud_icon_runic_rime_ring",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,rime|runic,rime,ring",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_rime_ring.png",
+   "describes": "Runic icon: Rime Ring (axe, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_ice_lance",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,ice|runic,ice,lance",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_ice_lance.png",
+   "describes": "Runic icon: Ice Lance (axe, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_winters_maw",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,winters|runic,winters,maw",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_winters_maw.png",
+   "describes": "Runic icon: Winter's Maw (axe, heavy)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_frostfall",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,frostfall|runic,frostfall",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_frostfall.png",
+   "describes": "Runic icon: Frostfall (axe, heavy)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_ember_whip",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,ember|runic,ember,whip",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_ember_whip.png",
+   "describes": "Runic icon: Ember Whip (blades, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_cinder_rush",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,cinder|runic,cinder,rush",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_cinder_rush.png",
+   "describes": "Runic icon: Cinder Rush (blades, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_pyre_pillar",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,pyre|runic,pyre,pillar",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_pyre_pillar.png",
+   "describes": "Runic icon: Pyre Pillar (blades, heavy)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_scorched_arc",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,scorched|runic,scorched,arc",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_scorched_arc.png",
+   "describes": "Runic icon: Scorched Arc (blades, heavy)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_shard_burst",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,shard|runic,shard,burst",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_shard_burst.png",
+   "describes": "Runic icon: Shard Burst (spear, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_thunder_step",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,thunder|runic,thunder,step",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_thunder_step.png",
+   "describes": "Runic icon: Thunder Step (spear, light)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_blast_ring",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,blast|runic,blast,ring",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_blast_ring.png",
+   "describes": "Runic icon: Blast Ring (spear, heavy)",
+   "status": "unverified"
+  },
+  {
+   "id": "hud_icon_runic_sky_lance",
+   "kind": "texture",
+   "role": "hud",
+   "search": "icon,runic,sky|runic,sky,lance",
+   "converter": "dds_to_png",
+   "output": "hud/icon_runic_sky_lance.png",
+   "describes": "Runic icon: Sky Lance (spear, heavy)",
+   "status": "unverified"
+  },
+  {
    "id": "hud_icon_shield",
    "kind": "texture",
    "role": "hud",

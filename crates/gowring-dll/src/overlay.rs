@@ -49,6 +49,9 @@ pub struct Overlay {
     /// Textures that are white shapes (tinted by the HUD colour when drawn).
     masks: std::collections::HashSet<&'static str>,
     big_font: Option<SendFont>,
+    /// Two more sizes for HUD labels (about 20 and 16 px).
+    mid_font: Option<SendFont>,
+    small_font: Option<SendFont>,
     /// The weapon in hand and when it was taken up: its name shows for a moment after a switch.
     weapon_seen: (&'static str, std::time::Instant),
 }
@@ -61,7 +64,7 @@ unsafe impl Sync for SendFont {}
 
 impl Overlay {
     pub fn new(shared: Shared, store: Arc<Store>) -> Self {
-        Overlay { shared, store, textures: HashMap::new(), masks: Default::default(), big_font: None, weapon_seen: ("", std::time::Instant::now()) }
+        Overlay { shared, store, textures: HashMap::new(), masks: Default::default(), big_font: None, mid_font: None, small_font: None, weapon_seen: ("", std::time::Instant::now()) }
     }
 }
 
@@ -85,6 +88,8 @@ fn col(rgb: u32, alpha: f32) -> [f32; 4] {
 impl ImguiRenderLoop for Overlay {
     fn initialize<'a>(&'a mut self, ctx: &mut imgui::Context, render_context: &'a mut dyn RenderContext) {
         self.big_font = Some(SendFont(ctx.fonts().add_font(&[FontSource::DefaultFontData { config: Some(FontConfig { size_pixels: 30.0, oversample_h: 2, ..FontConfig::default() }) }])));
+        self.mid_font = Some(SendFont(ctx.fonts().add_font(&[FontSource::DefaultFontData { config: Some(FontConfig { size_pixels: 20.0, oversample_h: 2, ..FontConfig::default() }) }])));
+        self.small_font = Some(SendFont(ctx.fonts().add_font(&[FontSource::DefaultFontData { config: Some(FontConfig { size_pixels: 16.0, oversample_h: 2, ..FontConfig::default() }) }])));
         let mut ok = 0;
         for (id, t) in &self.store.textures {
             match render_context.load_texture(&t.rgba, t.w, t.h) {
@@ -150,6 +155,13 @@ impl ImguiRenderLoop for Overlay {
                         }
                     }
                     DrawCmd::Shapes { prims } => draw_prims(&dl, prims),
+                    DrawCmd::Label { x, y, px, text, color, alpha, align } => {
+                        // the loaded size nearest the one asked for
+                        let font = if *px >= 25.0 { &self.big_font } else if *px >= 18.0 { &self.mid_font } else { &self.small_font };
+                        let _f = font.as_ref().map(|f| ui.push_font(f.0));
+                        let x = if *align == Align::Center { x - ui.calc_text_size(text)[0] / 2.0 } else { *x };
+                        dl.add_text([x, *y], col(*color, *alpha), text);
+                    }
                     // Ragnarök's own bar pictures are plain white bar shapes, so bars are drawn in Ragnarök's look by the
                     // HUD itself; only a full-colour picture chosen for a bar replaces that drawing.
                     DrawCmd::Bar { rect, frac, trail, frame, fill, color, lead, segments, alpha } if !is_picture(*frame) && !is_picture(*fill) => {
@@ -177,8 +189,8 @@ impl ImguiRenderLoop for Overlay {
                         }
                     }
                     // a runic plate in Ragnarök's look, lit from the bottom up as it recharges, with the runic's glyph
-                    DrawCmd::Ring { cx, cy, rx, ry, remaining, frame, icon, color, light, alpha, .. } if !is_picture(*frame) => {
-                        draw_prims(&dl, &gowring_core::vector::plate(gowring_core::vector::PlateShape::Diamond, *cx, *cy, *rx, *ry, *color, *light, 1.0 - remaining, *alpha));
+                    DrawCmd::Ring { cx, cy, rx, ry, remaining, frame, icon, color, light, aura, alpha, .. } if !is_picture(*frame) => {
+                        draw_prims(&dl, &gowring_core::vector::runic_plate(*cx, *cy, *rx, *ry, *color, *light, 1.0 - remaining, *aura, *alpha));
                         let side = ry * 0.62;
                         let inner = Rect { x: cx - side, y: cy - side, w: side * 2.0, h: side * 2.0 };
                         let dim = if *remaining > 0.001 { 0.6 } else { 1.0 };
@@ -353,6 +365,7 @@ impl ImguiRenderLoop for Overlay {
                 "D-pad right: Axe > Blades > Spear",
                 "L1: block (tap just before a hit: parry)",
                 "D-pad up / down: light / heavy runic",
+                "L1 + D-pad up / down: change light / heavy runic",
                 "L3 + R3: Spartan Rage (full bar)",
                 "R3 near a staggered enemy: finisher (wear them down first)",
                 "Tweak things live: settings.json",

@@ -36,6 +36,35 @@ pub struct Settings {
     pub debug_enemy_health: f32,
     /// How much harder a summoned enemy hits than its original.
     pub debug_enemy_damage_multiplier: f32,
+    /// The runic (id) in each weapon's light and heavy slot, in the order of `RUNIC_SLOTS`.
+    pub runics: [&'static str; 6],
+}
+
+/// The six runic slots: (settings key, weapon, heavy?, the weapon's own pick).
+pub const RUNIC_SLOTS: [(&str, &str, bool, &str); 6] = [
+    ("axe_light_runic", "leviathan_axe", false, "axe_runic_light"),
+    ("axe_heavy_runic", "leviathan_axe", true, "axe_runic_heavy"),
+    ("blades_light_runic", "blades_of_chaos", false, "blades_runic_light"),
+    ("blades_heavy_runic", "blades_of_chaos", true, "blades_runic_heavy"),
+    ("spear_light_runic", "draupnir_spear", false, "spear_runic_light"),
+    ("spear_heavy_runic", "draupnir_spear", true, "spear_runic_heavy"),
+];
+const OWN_RUNICS: [&str; 6] = [RUNIC_SLOTS[0].3, RUNIC_SLOTS[1].3, RUNIC_SLOTS[2].3, RUNIC_SLOTS[3].3, RUNIC_SLOTS[4].3, RUNIC_SLOTS[5].3];
+
+/// The runics that fit a slot, in the sheet's order.
+fn slot_options(slot: usize) -> impl Iterator<Item = &'static gowring_core::sheets::RunicDef> {
+    let (_, weapon, heavy, _) = RUNIC_SLOTS[slot];
+    gowring_core::sheets::RUNICS.iter().filter(move |r| r.weapon == weapon && (r.tier == gowring_core::sheets::RunicTier::Heavy) == heavy)
+}
+
+/// A runic named in the file (its name or id, any case) that fits the slot.
+fn runic_for(slot: usize, text: &str) -> Option<&'static str> {
+    let t = text.trim();
+    slot_options(slot).find(|r| r.id.eq_ignore_ascii_case(t) || r.name.eq_ignore_ascii_case(t)).map(|r| r.id)
+}
+
+fn runic_name(id: &str) -> &'static str {
+    gowring_core::sheets::RUNICS.iter().find(|r| r.id == id).map(|r| r.name).unwrap_or("")
 }
 
 impl Default for Settings {
@@ -58,12 +87,13 @@ impl Default for Settings {
             debug_spawn_key: 9,
             debug_enemy_health: 20000.0,
             debug_enemy_damage_multiplier: 3.5,
+            runics: OWN_RUNICS,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 6;
+const FILE_VERSION: u32 = 7;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -83,7 +113,7 @@ fn render(s: &Settings) -> String {
 
   "finisher_when_wounded": {wounded},
   "_finisher_when_wounded": "A regular enemy worn down to a quarter of its health is staggered once, so you can finish it with R3. false = only a full stun bar stuns.",
-
+{runic_lines}
   "hud_scale": {scale:?},
   "_hud_scale": "HUD size. 1.0 = normal, 1.3 = bigger, 0.8 = smaller (0.4 to 3.0).",
 
@@ -142,7 +172,43 @@ fn render(s: &Settings) -> String {
         dkey = s.debug_spawn_key,
         dhp = s.debug_enemy_health,
         ddm = s.debug_enemy_damage_multiplier,
+        runic_lines = runic_lines(s),
     )
+}
+
+/// The runic slots in the file: the equipped runic's name, and what else fits.
+fn runic_lines(s: &Settings) -> String {
+    let mut o = String::new();
+    for (i, (key, weapon, heavy, _)) in RUNIC_SLOTS.iter().enumerate() {
+        let names: Vec<&str> = slot_options(i).map(|r| r.name).collect();
+        let wname = gowring_core::sheets::WEAPONS.iter().find(|w| w.id == *weapon).map(|w| w.name).unwrap_or(weapon);
+        let (tier, pad) = if *heavy { ("heavy", "down") } else { ("light", "up") };
+        o.push_str(&format!(
+            "\n  \"{key}\": \"{}\",\n  \"_{key}\": \"The {wname}'s {tier} runic (D-pad {pad}). One of: {}. In game, hold L1 and press D-pad {pad} to go to the next one; the choice is saved here.\",\n",
+            runic_name(s.runics[i]),
+            names.join(", ")
+        ));
+    }
+    o
+}
+
+/// Put a runic (by id) in its slot, as chosen in game, and save the file. Unknown ids are ignored.
+pub fn set_runic(id: &str) {
+    let Some((slot, new)) = (0..RUNIC_SLOTS.len()).find_map(|i| runic_for(i, id).map(|r| (i, r))) else { return };
+    let mut s = get();
+    if s.runics[slot] == new {
+        return;
+    }
+    s.runics[slot] = new;
+    if let Ok(mut g) = CURRENT.write() {
+        *g = s;
+    }
+    if let Some(path) = PATH.get() {
+        match std::fs::write(path, render(&s)) {
+            Ok(()) => crate::glog!("settings", "{} = {} (chosen in game, saved)", RUNIC_SLOTS[slot].0, runic_name(id)),
+            Err(e) => crate::glog!("settings", "could not save the runic choice to {}: {e}", path.display()),
+        }
+    }
 }
 
 static CURRENT: RwLock<Settings> = RwLock::new(Settings {
@@ -163,6 +229,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     debug_spawn_key: 9,
     debug_enemy_health: 20000.0,
     debug_enemy_damage_multiplier: 3.5,
+    runics: OWN_RUNICS,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -216,6 +283,11 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     }
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
     num(&v, "debug_enemy_damage_multiplier", 1.0, 10.0, &mut s.debug_enemy_damage_multiplier);
+    for (i, (key, ..)) in RUNIC_SLOTS.iter().enumerate() {
+        if let Some(id) = v.get(*key).and_then(|x| x.as_str()).and_then(|t| runic_for(i, t)) {
+            s.runics[i] = id;
+        }
+    }
     Ok(s)
 }
 
@@ -272,7 +344,7 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
         s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
-    // version 3 only added keys: re-rendering the file shows them with their notes
+    // versions 3 and 7 only added keys (7: the runic slots): re-rendering the file shows them with their notes
     Some(render(&s))
 }
 
@@ -362,6 +434,7 @@ mod tests {
             debug_spawn_key: 11,
             debug_enemy_health: 5000.0,
             debug_enemy_damage_multiplier: 4.0,
+            runics: ["axe_ice_lance", "axe_frostfall", "blades_runic_light", "blades_scorched_arc", "spear_thunder_step", "spear_runic_heavy"],
         };
         assert_eq!(parse(&render(&s)).unwrap(), s);
     }
@@ -412,5 +485,28 @@ mod tests {
         assert_eq!((s.debug_enemy_health, s.debug_enemy_damage_multiplier), (15000.0, 2.0), "the player's own values stay");
         let s = parse(&migrated_text(r#"{ "settings_version": 3, "debug_enemy_health": 4500.0 }"#).unwrap()).unwrap();
         assert_eq!(s.debug_enemy_health, 4500.0, "a value the player chose is kept");
+    }
+
+    #[test]
+    fn runic_slots_take_names_or_ids_and_only_runics_that_fit() {
+        // the defaults are each weapon's own picks
+        for (i, (_, weapon, heavy, own)) in RUNIC_SLOTS.iter().enumerate() {
+            let w = gowring_core::sheets::WEAPONS.iter().find(|w| w.id == *weapon).unwrap();
+            assert_eq!(Some(*own), if *heavy { w.heavy_runic } else { w.light_runic });
+            assert_eq!(Settings::default().runics[i], *own);
+        }
+        let s = parse(r#"{ "axe_light_runic": "rime ring", "axe_heavy_runic": "axe_frostfall", "blades_light_runic": "Sky Lance", "spear_heavy_runic": "nonsense" }"#).unwrap();
+        assert_eq!(s.runics[0], "axe_rime_ring", "by name, any case");
+        assert_eq!(s.runics[1], "axe_frostfall", "by id");
+        assert_eq!(s.runics[2], "blades_runic_light", "a spear runic does not fit a Blades slot");
+        assert_eq!(s.runics[5], "spear_runic_heavy", "an unknown name keeps the default");
+        // the file lists the choices for each slot
+        let text = render(&Settings::default());
+        assert!(text.contains("\"axe_light_runic\": \"Frost Shockwave\""), "{text}");
+        assert!(text.contains("One of: Frost Shockwave, Rime Ring, Ice Lance."));
+        // a version 6 file gains the runic slots and keeps its values
+        let v6 = r#"{ "settings_version": 6, "hud_scale": 1.4 }"#;
+        let s = parse(&migrated_text(v6).expect("v6 is brought forward")).unwrap();
+        assert_eq!((s.hud_scale, s.runics), (1.4, OWN_RUNICS));
     }
 }

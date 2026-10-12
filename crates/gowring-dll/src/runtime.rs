@@ -181,8 +181,16 @@ impl Runtime {
             enemy_health: st.enemy_health_multiplier,
             wounded_stun: st.finisher_when_wounded,
         });
+        // the runics chosen in settings.json (or earlier in game) go in their slots
+        for id in st.runics {
+            self.engine.equip(id);
+        }
         let mut out = self.engine.tick(&frame);
         out.hud.ui_scale = st.hud_scale;
+        // a runic changed in game (L1 + D-pad) is kept in settings.json for next time
+        for id in &out.equipped {
+            crate::settings::set_runic(id);
+        }
         for l in &out.logs {
             crate::glog!("rules", "{l}");
         }

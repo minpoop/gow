@@ -21,13 +21,17 @@ pub struct EnemyBar {
     pub status_label: Option<&'static str>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RunicHud {
     pub id: &'static str,
     pub name: &'static str,
     /// 1.0 = just used … 0.0 = ready.
     pub remaining_frac: f32,
     pub ready: bool,
+    /// The plate's colours from the runic's weapon (0 = the HUD sheet's): face, lit tone, soft halo (0..1).
+    pub color: u32,
+    pub light: u32,
+    pub glow: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -57,6 +61,24 @@ pub struct HudState {
     pub pulse: f32,
     /// HUD size multiplier from the player's settings (0 or unset = 1.0). Elements scale about their own anchor corner.
     pub ui_scale: f32,
+    /// Seconds on a running clock; drives the HUD's moving parts (the fire around the Rage prompt).
+    pub time_s: f32,
+    /// The runic picker, shown for a moment after L1 + D-pad changes a slot.
+    pub runic_picker: Option<RunicPicker>,
+}
+
+/// The runics a weapon can put in the slot just changed, with the chosen one marked.
+#[derive(Clone, Debug, Default)]
+pub struct RunicPicker {
+    pub heavy: bool,
+    pub weapon_name: &'static str,
+    /// (name, icon, what it does), in the sheet's order.
+    pub options: Vec<(&'static str, Option<&'static str>, &'static str)>,
+    /// The weapon's plate colours: face, lit tone, soft halo.
+    pub colors: (u32, u32, f32),
+    pub chosen: usize,
+    /// 1 while shown, fading to 0 at the end.
+    pub alpha: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -92,8 +114,8 @@ pub struct Rect {
 pub enum DrawCmd {
     /// `color` fills the bar, glowing to `lead` at the leading edge; `segments` > 1 splits it (the Rage meter).
     Bar { rect: Rect, frac: f32, trail: f32, frame: Option<&'static str>, fill: Option<&'static str>, color: u32, lead: u32, segments: u32, alpha: f32 },
-    /// A runic plate `rx` by `ry` from its centre: `color` its face, `light` its lit tone.
-    Ring { cx: f32, cy: f32, rx: f32, ry: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, light: u32, alpha: f32 },
+    /// A runic plate `rx` by `ry` from its centre: `color` its face, `light` its lit tone, `aura` a soft halo (0..1).
+    Ring { cx: f32, cy: f32, rx: f32, ry: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, light: u32, aura: f32, alpha: f32 },
     /// `mono`: drawn as a white silhouette (Ragnarök's glyph style) when there is no picture for it.
     Icon { rect: Rect, asset: Option<&'static str>, color: u32, alpha: f32, mono: bool },
     Text { rect: Rect, px: f32, text: String, color: u32, alpha: f32, align: Align, plate: Option<&'static str>, portrait: Option<&'static str> },
@@ -101,6 +123,8 @@ pub enum DrawCmd {
     Overlay { color: u32, alpha: f32 },
     /// Plain vector shapes drawn as they are (plates behind icons, small hints).
     Shapes { prims: Vec<Prim> },
+    /// A line of text, `px` tall, with its top at `y` and starting at `x` (or centred on `x`).
+    Label { x: f32, y: f32, px: f32, text: String, color: u32, alpha: f32, align: Align },
 }
 
 fn visible(v: HudVisibleWhen, s: &HudState) -> bool {
@@ -192,7 +216,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                 alpha: if s.rage_active { pulse_alpha } else { 1.0 },
             }),
             // Ragnarök's prompt: the two stick buttons, on fire
-            HudBind::RageReady => out.push(DrawCmd::Shapes { prims: vector::rage_prompt(&rect_at(h), s.pulse, 1.0) }),
+            HudBind::RageReady => out.push(DrawCmd::Shapes { prims: vector::rage_prompt(&rect_at(h), s.time_s, 1.0) }),
             HudBind::RunicLightCd | HudBind::RunicHeavyCd => {
                 let r = if h.bind == HudBind::RunicLightCd { &s.runic_light } else { &s.runic_heavy };
                 let Some(r) = r else { continue };
@@ -209,8 +233,10 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     frame: h.frame,
                     glow: h.fill,
                     icon: d.runic(r.id).icon.or(s.weapon_icon),
-                    color,
-                    light: lead,
+                    // the runic's weapon colours its plate (frozen blue, burning red-orange, sandy yellow)
+                    color: if r.color != 0 { r.color } else { color },
+                    light: if r.light != 0 { r.light } else { lead },
+                    aura: r.glow,
                     alpha: 1.0,
                 });
             }
@@ -264,7 +290,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                             if let Some(label) = e.status_label {
                                 let tag = Rect { y: rc.y + rc.h * 2.0 + 6.0 * k * us, h: 16.0 * k * us, ..rc };
                                 let tint = if label == "FROZEN" { 0x7FD8FF } else { 0xFF8A3A };
-                                out.push(DrawCmd::Text { rect: tag, px: 14.0 * k * us, text: label.to_string(), color: tint, alpha: 1.0, align: Align::Center, plate: None, portrait: None });
+                                out.push(DrawCmd::Label { x: tag.x + tag.w / 2.0, y: tag.y, px: 14.0 * k * us, text: label.to_string(), color: tint, alpha: 1.0, align: Align::Center });
                             }
                         }
                         _ if e.stunned => out.push(DrawCmd::Icon { rect: rc, asset: h.glyph, color, alpha: pulse_alpha, mono: false }),
@@ -302,7 +328,84 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             HudBind::LowHealthOverlay => out.push(DrawCmd::Overlay { color, alpha: s.low_health_overlay * 0.5 }),
         }
     }
+    if let Some(p) = &s.runic_picker {
+        picker(p, &mut out, (k, ox, oy), us);
+    }
     out
+}
+
+/// The runic picker: a panel above the runic plates listing the weapon's runics for the slot just changed, the
+/// chosen one lit with what it does. Laid out on the 1920x1080 canvas from the bottom-left corner, like the cluster.
+fn picker(p: &RunicPicker, out: &mut Vec<DrawCmd>, (k, ox, oy): (f32, f32, f32), us: f32) {
+    let a = p.alpha.clamp(0.0, 1.0);
+    if a <= 0.01 || p.options.is_empty() {
+        return;
+    }
+    let at = |x: f32, y: f32| (ox + x * us * k, oy + (1080.0 + (y - 1080.0) * us) * k);
+    let sz = |v: f32| v * k * us;
+    let (x0, w) = (36.0, 480.0);
+    let row_h = 54.0;
+    let desc_px = 17.0;
+    let per_line = ((w - 40.0) / (desc_px * 0.52)) as usize;
+    let desc = wrap_chars(p.options.get(p.chosen).map(|o| o.2).unwrap_or(""), per_line.max(10));
+    let h = 46.0 + row_h * p.options.len() as f32 + 10.0 + 24.0 * desc.len() as f32 + 34.0;
+    let bottom = 872.0;
+    let top = bottom - h;
+    // the panel
+    let (px0, py0) = at(x0, top);
+    let (px1, py1) = at(x0 + w, bottom);
+    let frame = vec![(px0, py0), (px1, py0), (px1, py1), (px0, py1)];
+    let mut bg = vec![Prim::Poly { pts: frame.clone(), color: 0x0B0D12, alpha: 0.78 * a }];
+    for i in 0..4 {
+        bg.push(Prim::Line { a: frame[i], b: frame[(i + 1) % 4], thick: sz(1.5).max(1.0), color: 0xB8BEC6, alpha: 0.55 * a });
+    }
+    out.push(DrawCmd::Shapes { prims: bg });
+    let (tx, ty) = at(x0 + 20.0, top + 12.0);
+    let title = format!("{} RUNIC  -  {}", if p.heavy { "HEAVY" } else { "LIGHT" }, p.weapon_name);
+    out.push(DrawCmd::Label { x: tx, y: ty, px: sz(20.0), text: title, color: 0xFFD27A, alpha: a, align: Align::Left });
+    for (i, (name, icon, _)) in p.options.iter().enumerate() {
+        let chosen = i == p.chosen;
+        let cy = top + 46.0 + row_h * (i as f32 + 0.5);
+        let mut prims = Vec::new();
+        if chosen {
+            let (hx0, hy0) = at(x0 + 8.0, cy - row_h / 2.0 + 3.0);
+            let (hx1, hy1) = at(x0 + w - 8.0, cy + row_h / 2.0 - 3.0);
+            prims.push(Prim::Poly { pts: vec![(hx0, hy0), (hx1, hy0), (hx1, hy1), (hx0, hy1)], color: 0xFFFFFF, alpha: 0.08 * a });
+            let (bx1, _) = at(x0 + 12.0, cy);
+            prims.push(Prim::Poly { pts: vec![(hx0, hy0), (bx1, hy0), (bx1, hy1), (hx0, hy1)], color: 0xFFD27A, alpha: 0.9 * a });
+        }
+        let (cx, ccy) = at(x0 + 46.0, cy);
+        let (face, lit, aura) = p.colors;
+        prims.extend(vector::runic_plate(cx, ccy, sz(22.0), sz(19.0), face, lit, if chosen { 1.0 } else { 0.0 }, if chosen { aura } else { 0.0 }, a));
+        out.push(DrawCmd::Shapes { prims });
+        let g = sz(13.0);
+        out.push(DrawCmd::Icon { rect: Rect { x: cx - g, y: ccy - g, w: g * 2.0, h: g * 2.0 }, asset: *icon, color: 0xFFFFFF, alpha: if chosen { a } else { 0.55 * a }, mono: true });
+        let (nx, ny) = at(x0 + 80.0, cy - 11.0);
+        out.push(DrawCmd::Label { x: nx, y: ny, px: sz(22.0), text: name.to_string(), color: if chosen { 0xFFFFFF } else { 0x9AA0A8 }, alpha: a, align: Align::Left });
+    }
+    let mut y = top + 46.0 + row_h * p.options.len() as f32 + 10.0;
+    for line in desc {
+        let (lx, ly) = at(x0 + 20.0, y);
+        out.push(DrawCmd::Label { x: lx, y: ly, px: sz(desc_px), text: line, color: 0xC8CCD2, alpha: a, align: Align::Left });
+        y += 24.0;
+    }
+    let (hx, hy) = at(x0 + 20.0, y + 6.0);
+    out.push(DrawCmd::Label { x: hx, y: hy, px: sz(15.0), text: "Hold L1, press D-pad up / down: next light / heavy runic".into(), color: 0x8A9098, alpha: a, align: Align::Left });
+}
+
+/// Greedy word wrap by character count (the HUD has no font metrics here).
+fn wrap_chars(text: &str, per_line: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(l) if l.len() + 1 + word.len() <= per_line => {
+                l.push(' ');
+                l.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -319,8 +422,8 @@ mod tests {
             hp_frac: 0.8,
             hp_trail_frac: 0.9,
             rage_frac: 0.4,
-            runic_light: Some(RunicHud { id: "axe_runic_light", name: "Frost Shockwave", remaining_frac: 0.5, ready: false }),
-            runic_heavy: Some(RunicHud { id: "axe_runic_heavy", name: "Glacial Cleave", remaining_frac: 0.0, ready: true }),
+            runic_light: Some(RunicHud { id: "axe_runic_light", name: "Frost Shockwave", remaining_frac: 0.5, ready: false, ..Default::default() }),
+            runic_heavy: Some(RunicHud { id: "axe_runic_heavy", name: "Glacial Cleave", remaining_frac: 0.0, ready: true, ..Default::default() }),
             weapon_icon: d.weapon("leviathan_axe").icon,
             weapon_name: "Leviathan Axe",
             shield_drawn: true,

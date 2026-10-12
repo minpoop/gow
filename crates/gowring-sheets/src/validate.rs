@@ -310,12 +310,14 @@ fn project_rules(sheets: &Sheets, r: &mut Report) {
     }
 
     // --- runic <-> weapon -----------------------------------------------------------------------
+    // A weapon's `light_runic` / `heavy_runic` is the one it starts with; any other runic of the same weapon and tier
+    // can be equipped in its place, so every runic must belong to a weapon that has runic slots.
     for run in &runics.rows {
         let rid = text(run, "id");
         let Some(w) = weapons.find(text(run, "weapon")) else { continue };
         let key = if text(run, "tier") == "light" { "light_runic" } else { "heavy_runic" };
-        if opt_text(w, key) != Some(rid) {
-            r.err("runics", Some(rid), Some("weapon"), format!("weapon `{}` does not point back at this runic in `{key}`", text(w, "id")));
+        if opt_text(w, key).is_none() {
+            r.err("runics", Some(rid), Some("weapon"), format!("weapon `{}` has no {key} slot to equip this runic in", text(w, "id")));
         }
     }
     for w in &weapons.rows {
@@ -490,7 +492,8 @@ fn project_rules(sheets: &Sheets, r: &mut Report) {
             }
         }
     }
-    for name in ["assets", "bindings", "moves", "er_templates", "runics"] {
+    // (runics are not listed: a weapon names only the runic it starts with; the others are equipped in game)
+    for name in ["assets", "bindings", "moves", "er_templates"] {
         if let Some(s) = get(name) {
             for id in s.ids() {
                 if !referenced.contains_key(&(s.name.as_str(), id.to_string())) {

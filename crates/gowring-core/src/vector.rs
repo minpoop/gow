@@ -192,6 +192,20 @@ pub fn plate(shape: PlateShape, cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, li
     c.out
 }
 
+/// A runic plate in its weapon's colours, with an optional soft halo around it (`aura` 0..1; the Blades' plates glow).
+pub fn runic_plate(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, aura: f32, alpha: f32) -> Vec<Prim> {
+    let mut out = Vec::new();
+    if aura > 0.0 {
+        let face = plate_outline(PlateShape::Diamond, cx, cy, rx, ry);
+        let glow = mix(light, 0xFF7A2A, 0.5);
+        for (d, a) in [(rx * 0.4, 0.16f32), (rx * 0.26, 0.26), (rx * 0.13, 0.4)] {
+            out.push(Prim::Poly { pts: grow(&face, (cx, cy), d), color: glow, alpha: a * aura * alpha * (0.35 + 0.65 * charge.clamp(0.0, 1.0)) });
+        }
+    }
+    out.extend(plate(PlateShape::Diamond, cx, cy, rx, ry, mid, light, charge, alpha));
+    out
+}
+
 /// An icon as a white (or `color`) silhouette with a soft dark outline, the way Ragnarök draws its glyphs.
 pub fn mono_icon(asset: &str, rect: &Rect, color: u32, alpha: f32) -> Option<Vec<Prim>> {
     let shapes = glyph_prims(asset, rect, color, alpha).or_else(|| icon_prims(asset, rect, color, alpha))?;
@@ -293,6 +307,115 @@ pub fn glyph_prims(asset: &str, rect: &Rect, color: u32, alpha: f32) -> Option<V
                 c.line(p(x, top), p(x, 0.66), th(0.06), color, a);
                 c.fan(p(x, 0.76), &[p(x - 0.07, 0.64), p(x + 0.07, 0.64), p(x, 0.92)], color, a);
             }
+        }
+        "hud_icon_runic_rime_ring" => {
+            // a ring of rime with frost barbs pointing out
+            c.circle(p(0.5, 0.5), s * 0.24, false, th(0.07), color, a);
+            for k in 0..8 {
+                let ang = k as f32 * std::f32::consts::FRAC_PI_4;
+                let (cx, cy) = (ang.cos(), ang.sin());
+                c.line(p(0.5 + 0.28 * cx, 0.5 + 0.28 * cy), p(0.5 + 0.44 * cx, 0.5 + 0.44 * cy), th(0.05), color, a);
+                c.circle(p(0.5 + 0.44 * cx, 0.5 + 0.44 * cy), s * 0.035, true, 0.0, color, a);
+            }
+            c.circle(p(0.5, 0.5), s * 0.07, true, 0.0, color, a);
+        }
+        "hud_icon_runic_ice_lance" => {
+            // a long ice lance flying up and to the right, with shards breaking off its base
+            c.fan(p(0.46, 0.54), &[p(0.08, 0.92), p(0.22, 0.56), p(0.92, 0.08), p(0.44, 0.78)], color, a);
+            c.tri(p(0.08, 0.5), p(0.2, 0.46), p(0.16, 0.36), color, a);
+            c.tri(p(0.5, 0.92), p(0.54, 0.8), p(0.64, 0.86), color, a);
+        }
+        "hud_icon_runic_winters_maw" => {
+            // jaws of ice: fangs down from the top, fangs up from the bottom
+            c.line(p(0.1, 0.2), p(0.9, 0.2), th(0.08), color, a);
+            c.line(p(0.1, 0.84), p(0.9, 0.84), th(0.08), color, a);
+            for i in 0..4 {
+                let x = 0.2 + 0.2 * i as f32;
+                c.tri(p(x - 0.08, 0.22), p(x + 0.08, 0.22), p(x, 0.5), color, a);
+                let x = 0.3 + 0.2 * i as f32;
+                if x < 0.85 {
+                    c.tri(p(x - 0.08, 0.82), p(x + 0.08, 0.82), p(x, 0.56), color, a);
+                }
+            }
+        }
+        "hud_icon_runic_frostfall" => {
+            // a great icicle falling, with the cracks of its landing
+            c.fan(p(0.5, 0.4), &[p(0.3, 0.06), p(0.7, 0.06), p(0.58, 0.6), p(0.5, 0.86), p(0.42, 0.6)], color, a);
+            for (dx, dy) in [(-0.3f32, 0.02f32), (-0.18, 0.08), (0.18, 0.08), (0.3, 0.02)] {
+                c.line(p(0.5 + dx * 0.4, 0.9), p(0.5 + dx, 0.9 + dy), th(0.05), color, a);
+            }
+        }
+        "hud_icon_runic_ember_whip" => {
+            // a whip of chain curling up to a flaming tip
+            c.stroke(&[p(0.14, 0.88), p(0.26, 0.66), p(0.44, 0.64), p(0.58, 0.5), p(0.58, 0.34)], false, th(0.07), color, a);
+            c.fan(p(0.66, 0.24), &[p(0.68, 0.02), p(0.78, 0.16), p(0.84, 0.3), p(0.72, 0.42), p(0.54, 0.36), p(0.56, 0.18)], color, a);
+        }
+        "hud_icon_runic_cinder_rush" => {
+            // three chevrons charging right, the last one alight
+            for (i, x) in [0.14f32, 0.36, 0.58].iter().enumerate() {
+                let w = 0.05 + 0.02 * i as f32;
+                c.stroke(&[p(*x, 0.24), p(x + 0.2, 0.5), p(*x, 0.76)], false, th(w), color, a);
+            }
+            c.fan(p(0.86, 0.5), &[p(0.86, 0.26), p(0.94, 0.44), p(0.9, 0.62), p(0.8, 0.62), p(0.78, 0.46)], color, a);
+        }
+        "hud_icon_runic_pyre_pillar" => {
+            // a pillar of fire rising from the ground
+            c.fan(p(0.5, 0.64), &[p(0.3, 0.88), p(0.7, 0.88), p(0.74, 0.62), p(0.8, 0.38), p(0.66, 0.46), p(0.64, 0.22), p(0.56, 0.36), p(0.5, 0.04), p(0.44, 0.36), p(0.36, 0.2), p(0.34, 0.46), p(0.2, 0.38), p(0.26, 0.62)], color, a);
+            c.fan(p(0.5, 0.74), &[p(0.5, 0.5), p(0.58, 0.68), p(0.56, 0.84), p(0.44, 0.84), p(0.42, 0.68)], 0x101010, 0.5 * a);
+            c.line(p(0.12, 0.93), p(0.88, 0.93), th(0.06), color, a);
+        }
+        "hud_icon_runic_scorched_arc" => {
+            // a wide fan of fire sweeping out in front
+            let arc: Vec<(f32, f32)> = (0..=8)
+                .map(|i| {
+                    let ang = std::f32::consts::PI * (1.15 + 0.7 * i as f32 / 8.0);
+                    p(0.5 + 0.42 * ang.cos(), 0.86 + 0.6 * ang.sin())
+                })
+                .collect();
+            let mut wedge = vec![p(0.5, 0.88)];
+            wedge.extend(arc.iter().copied());
+            c.fan(p(0.5, 0.6), &wedge, color, a);
+            for q in arc.iter().step_by(2) {
+                let (dx, dy) = (q.0 - p(0.5, 0.88).0, q.1 - p(0.5, 0.88).1);
+                let l = (dx * dx + dy * dy).sqrt().max(1e-3);
+                c.tri((q.0 - dy / l * s * 0.05, q.1 + dx / l * s * 0.05), (q.0 + dx / l * s * 0.12, q.1 + dy / l * s * 0.12 - s * 0.03), (q.0 + dy / l * s * 0.05, q.1 - dx / l * s * 0.05), color, a);
+            }
+            c.fan(p(0.5, 0.72), &[p(0.5, 0.56), p(0.58, 0.7), p(0.5, 0.84), p(0.42, 0.7)], 0x101010, 0.55 * a);
+        }
+        "hud_icon_runic_shard_burst" => {
+            // shards bursting up and out in a fan
+            for k in 0..5 {
+                let ang = -std::f32::consts::FRAC_PI_2 + (k as f32 - 2.0) * 0.36;
+                let (cx, cy) = (ang.cos(), ang.sin());
+                let (tx, ty) = (-cy, cx);
+                let o = (0.5 + 0.12 * cx, 0.8 + 0.12 * cy);
+                c.tri(p(o.0 - 0.05 * tx, o.1 - 0.05 * ty), p(0.5 + 0.7 * cx, 0.8 + 0.7 * cy), p(o.0 + 0.05 * tx, o.1 + 0.05 * ty), color, a);
+            }
+            c.circle(p(0.5, 0.82), s * 0.07, true, 0.0, color, a);
+        }
+        "hud_icon_runic_thunder_step" => {
+            // a spear point driving right, speed lines behind it
+            c.fan(p(0.74, 0.5), &[p(0.56, 0.4), p(0.92, 0.5), p(0.56, 0.6), p(0.62, 0.5)], color, a);
+            c.line(p(0.3, 0.5), p(0.6, 0.5), th(0.06), color, a);
+            for (y, x0) in [(0.32f32, 0.1f32), (0.5, 0.06), (0.68, 0.1)] {
+                c.line(p(x0, y), p(x0 + 0.22, y), th(0.04), color, a);
+            }
+        }
+        "hud_icon_runic_blast_ring" => {
+            // spear heads planted in a ring, pointing out
+            for k in 0..8 {
+                let ang = k as f32 * std::f32::consts::FRAC_PI_4 - std::f32::consts::FRAC_PI_2;
+                let (cx, cy) = (ang.cos(), ang.sin());
+                let (tx, ty) = (-cy, cx);
+                c.tri(p(0.5 + 0.24 * cx - 0.07 * tx, 0.5 + 0.24 * cy - 0.07 * ty), p(0.5 + 0.46 * cx, 0.5 + 0.46 * cy), p(0.5 + 0.24 * cx + 0.07 * tx, 0.5 + 0.24 * cy + 0.07 * ty), color, a);
+            }
+            c.circle(p(0.5, 0.5), s * 0.12, true, 0.0, color, a);
+        }
+        "hud_icon_runic_sky_lance" => {
+            // a giant spear striking down, lightning beside it
+            c.line(p(0.4, 0.06), p(0.4, 0.62), th(0.07), color, a);
+            c.fan(p(0.4, 0.74), &[p(0.3, 0.6), p(0.5, 0.6), p(0.4, 0.94)], color, a);
+            c.stroke(&[p(0.74, 0.08), p(0.62, 0.36), p(0.76, 0.4), p(0.62, 0.7)], false, th(0.05), color, a);
         }
         _ => return None,
     }
@@ -433,25 +556,43 @@ fn strokes(ch: char) -> Vec<Vec<(f32, f32)>> {
     }
 }
 
-/// A stick button glyph ("L3" / "R3"): white disc, dark rim and lettering, ringed by flames when `fire` > 0.
-pub fn stick_button(cx: f32, cy: f32, r: f32, label: &str, fire: f32, flicker: f32, alpha: f32) -> Vec<Prim> {
+/// A stick button glyph ("L3" / "R3"): white disc, dark rim and lettering, ringed by burning fire when `fire` > 0.
+/// `t` is a running clock in seconds: the flames rise, sway and flicker, and embers drift up off the top.
+pub fn stick_button(cx: f32, cy: f32, r: f32, label: &str, fire: f32, t: f32, alpha: f32) -> Vec<Prim> {
     let mut c = Canvas { out: Vec::new() };
     if fire > 0.0 {
-        // a soft fiery halo, a little taller above the button, with short flickering tongues
-        let up = r * 0.12;
-        c.circle((cx, cy - up), r * 1.5, true, 0.0, 0x9A2414, 0.35 * fire * alpha);
-        c.circle((cx, cy - up * 0.5), r * 1.36, true, 0.0, 0xD03A22, 0.6 * fire * alpha);
-        c.circle((cx, cy), r * 1.22, true, 0.0, 0xF06A34, 0.55 * fire * alpha);
-        for k in 0..12 {
-            let a = k as f32 * std::f32::consts::TAU / 12.0 + 0.2;
-            let wob = 0.8 + 0.3 * ((flicker * std::f32::consts::TAU * 3.0) + k as f32 * 1.7).sin();
-            let lean = if a.sin() < 0.0 { 1.2 } else { 0.7 };
-            let len = r * 0.38 * wob * lean;
-            let (ca, sa) = (a.cos(), a.sin());
-            let base_l = (cx + (ca * 1.2 - sa * 0.22) * r, cy + (sa * 1.2 + ca * 0.22) * r);
-            let base_r = (cx + (ca * 1.2 + sa * 0.22) * r, cy + (sa * 1.2 - ca * 0.22) * r);
-            let tip = (cx + ca * (r * 1.2 + len), cy + sa * (r * 1.2 + len) - 0.3 * len);
-            c.tri(base_l, tip, base_r, if k % 2 == 0 { 0xD8452A } else { 0xFF8A3A }, 0.7 * fire * alpha);
+        let fa = fire * alpha;
+        // a soft halo that breathes, taller above the button
+        let breathe = 0.85 + 0.15 * (t * 6.3).sin() * (t * 2.9 + 1.0).cos();
+        c.circle((cx, cy - r * 0.14), r * 1.55, true, 0.0, 0x8E2010, 0.3 * fa * breathe);
+        c.circle((cx, cy - r * 0.07), r * 1.38, true, 0.0, 0xC8381F, 0.5 * fa * breathe);
+        c.circle((cx, cy), r * 1.22, true, 0.0, 0xF06A34, 0.5 * fa);
+        // three layers of tongues (red, orange, yellow), each tongue with its own rhythm; fire rises, so the tongues
+        // on top are long and lean up, the ones underneath short
+        for (layer, (col, reach, n)) in [(0xC8381Fu32, 1.0f32, 14usize), (0xFF8A3A, 0.68, 12), (0xFFD27A, 0.38, 9)].iter().enumerate() {
+            for k in 0..*n {
+                let ph = k as f32 * 1.37 + layer as f32 * 0.71;
+                let ang = k as f32 * std::f32::consts::TAU / *n as f32 + layer as f32 * 0.4 + 0.15 * (t * 1.7 + ph).sin();
+                let (ca, sa) = (ang.cos(), ang.sin());
+                let up = (-sa).max(0.0); // 1 at the top, 0 at the sides and below
+                let lick = 0.55 + 0.3 * (t * 9.0 + ph).sin() + 0.15 * (t * 14.3 + ph * 2.0).sin();
+                let len = r * reach * (0.22 + 0.5 * up) * lick.max(0.15) * 1.25;
+                let w = r * (0.2 + 0.08 * up) * (1.0 - 0.25 * layer as f32);
+                let base = r * (1.08 - 0.06 * layer as f32);
+                let (bx, by) = (cx + ca * base, cy + sa * base);
+                let sway = len * 0.35 * (t * 6.0 + ph).sin();
+                let tip = (bx + ca * len * 0.6 - sa * sway, by + sa * len * 0.6 - len * 0.55 + ca * sway * 0.3);
+                let side = (-sa * w, ca * w);
+                let a = if layer == 2 { 0.75 } else { 0.85 } * fa * (0.75 + 0.25 * lick.min(1.0));
+                c.tri((bx - side.0, by - side.1), tip, (bx + side.0, by + side.1), *col, a);
+            }
+        }
+        // embers drifting up off the top and fading
+        for i in 0..6 {
+            let u = (t * 0.75 + i as f32 / 6.0 + label.len() as f32 * 0.13).fract();
+            let x = cx + r * 0.75 * ((i as f32 * 2.3 + t * 1.9).sin()) * (1.0 - 0.5 * u);
+            let y = cy - r * 1.05 - u * r * 1.7;
+            c.circle((x, y), (r * 0.085 * (1.0 - u)).max(0.6), true, 0.0, if i % 2 == 0 { 0xFFB060 } else { 0xFF7A3A }, 0.9 * (1.0 - u) * fa);
         }
     }
     c.circle((cx, cy), r * 1.08, true, 0.0, 0x141414, 0.95 * alpha);
@@ -474,13 +615,13 @@ pub fn stick_button(cx: f32, cy: f32, r: f32, label: &str, fire: f32, flicker: f
     c.out
 }
 
-/// Ragnarök's Spartan Rage prompt in `rect`: L3 + R3, both buttons on fire.
-pub fn rage_prompt(rect: &Rect, flicker: f32, alpha: f32) -> Vec<Prim> {
+/// Ragnarök's Spartan Rage prompt in `rect`: L3 + R3, both buttons on fire (`t`: running clock, seconds).
+pub fn rage_prompt(rect: &Rect, t: f32, alpha: f32) -> Vec<Prim> {
     let r = rect.h * 0.34;
     let cy = rect.y + rect.h / 2.0;
     let (lx, rx) = (rect.x + rect.w * 0.2, rect.x + rect.w * 0.8);
-    let mut out = stick_button(lx, cy, r, "L3", 1.0, flicker, alpha);
-    out.extend(stick_button(rx, cy, r, "R3", 1.0, flicker + 0.37, alpha));
+    let mut out = stick_button(lx, cy, r, "L3", 1.0, t, alpha);
+    out.extend(stick_button(rx, cy, r, "R3", 1.0, t + 0.37, alpha));
     let mx = (lx + rx) / 2.0;
     let arm = r * 0.42;
     let t = (r * 0.22).max(1.5);

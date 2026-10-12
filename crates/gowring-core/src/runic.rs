@@ -47,14 +47,8 @@ impl Runics {
         self.pending.clear();
     }
 
-    /// Start a runic (windup begins now, effect lands after `windup_s`).
-    pub fn press(&mut self, tier: RunicTier, weapon_id: &str, now: f64, out: &mut Vec<Command>) -> Option<&'static RunicDef> {
-        let w = self.d.weapon(weapon_id);
-        let id = match tier {
-            RunicTier::Light => w.light_runic,
-            RunicTier::Heavy => w.heavy_runic,
-        }?;
-        let r = self.d.runic(id);
+    /// Start a runic (windup begins now, effect lands after `windup_s`). `None` while it is cooling down.
+    pub fn press(&mut self, r: &'static RunicDef, now: f64, out: &mut Vec<Command>) -> Option<&'static RunicDef> {
         if !self.ready(r) {
             return None;
         }
@@ -186,6 +180,16 @@ mod tests {
         (out, ev, stun)
     }
 
+    /// A weapon's own runic for a slot.
+    fn own(d: &'static Data, weapon: &str, tier: RunicTier) -> &'static RunicDef {
+        let w = d.weapon(weapon);
+        d.runic(match tier {
+            RunicTier::Light => w.light_runic,
+            RunicTier::Heavy => w.heavy_runic,
+        }
+        .unwrap())
+    }
+
     #[test]
     fn cone_hits_front_not_back_and_cools_down() {
         let d = Data::get();
@@ -193,11 +197,11 @@ mod tests {
         let mut f = Frame::default();
         f.enemies = vec![enemy(1, 0.0, 3.0), enemy(2, 0.0, -3.0), enemy(3, 6.0, 3.0)];
         let mut out = vec![];
-        let run1 = r.press(RunicTier::Light, "leviathan_axe", 0.0, &mut out).unwrap();
+        let run1 = r.press(own(d, "leviathan_axe", RunicTier::Light), 0.0, &mut out).unwrap();
         assert_eq!(run1.id, "axe_runic_light");
         assert!(!r.ready(run1));
         // second press during cooldown does nothing
-        assert!(r.press(RunicTier::Light, "leviathan_axe", 0.1, &mut out).is_none());
+        assert!(r.press(own(d, "leviathan_axe", RunicTier::Light), 0.1, &mut out).is_none());
         let (cmds, ev, stun) = run(&mut r, &f, 0.0, 1.0);
         let hit: Vec<_> = cmds
             .iter()
@@ -222,7 +226,7 @@ mod tests {
         f.enemies = vec![enemy(1, 4.0, 0.0), enemy(2, -4.0, 0.0), enemy(3, 0.0, 4.0), enemy(4, 0.0, 30.0)];
         let mut r = Runics::new(d);
         let mut out = vec![];
-        r.press(RunicTier::Light, "blades_of_chaos", 0.0, &mut out).unwrap();
+        r.press(own(d, "blades_of_chaos", RunicTier::Light), 0.0, &mut out).unwrap();
         let (cmds, ev, _) = run(&mut r, &f, 0.0, 0.5);
         let n = cmds.iter().filter(|c| matches!(c, Command::Damage { .. })).count();
         assert_eq!(n, 3); // radius 7
@@ -231,7 +235,7 @@ mod tests {
         // heavy axe runic is a line: only the enemy straight ahead
         f.enemies = vec![enemy(1, 0.0, 6.0), enemy(2, 5.0, 6.0), enemy(3, 0.0, -6.0)];
         let mut r = Runics::new(d);
-        r.press(RunicTier::Heavy, "leviathan_axe", 0.0, &mut out).unwrap();
+        r.press(own(d, "leviathan_axe", RunicTier::Heavy), 0.0, &mut out).unwrap();
         let (cmds, _, _) = run(&mut r, &f, 0.0, 1.0);
         let ids: Vec<_> = cmds.iter().filter_map(|c| if let Command::Damage { target, .. } = c { Some(*target) } else { None }).collect();
         assert_eq!(ids, vec![1]);
@@ -244,7 +248,7 @@ mod tests {
         let mut f = Frame::default();
         f.enemies = vec![enemy(1, 0.0, 2.0)];
         let mut out = vec![];
-        r.press(RunicTier::Light, "draupnir_spear", 0.0, &mut out).unwrap();
+        r.press(own(d, "draupnir_spear", RunicTier::Light), 0.0, &mut out).unwrap();
         let (mut cmds, mut ev) = (vec![], vec![]);
         let mut t = 0.0;
         while t < 0.6 {
@@ -259,8 +263,23 @@ mod tests {
     #[test]
     fn shield_has_no_runics() {
         let d = Data::get();
+        assert!(d.weapon("guardian_shield").light_runic.is_none() && d.weapon("guardian_shield").heavy_runic.is_none());
+    }
+
+    #[test]
+    fn an_equipped_alternative_resolves_by_its_own_shape() {
+        // Rime Ring: a small ring around Kratos, so the enemy behind is hit and the far one is not
+        let d = Data::get();
         let mut r = Runics::new(d);
+        let mut f = Frame::default();
+        f.enemies = vec![enemy(1, 0.0, 3.0), enemy(2, 0.0, -3.0), enemy(3, 0.0, 9.0)];
         let mut out = vec![];
-        assert!(r.press(RunicTier::Light, "guardian_shield", 0.0, &mut out).is_none());
+        let rime = d.runic("axe_rime_ring");
+        r.press(rime, 0.0, &mut out).unwrap();
+        assert!(!r.ready(rime) && r.ready(own(d, "leviathan_axe", RunicTier::Light)), "each runic keeps its own cooldown");
+        let (cmds, _, _) = run(&mut r, &f, 0.0, 0.5);
+        let mut ids: Vec<_> = cmds.iter().filter_map(|c| if let Command::Damage { target, .. } = c { Some(*target) } else { None }).collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2]);
     }
 }
