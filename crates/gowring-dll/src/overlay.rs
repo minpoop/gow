@@ -49,6 +49,8 @@ pub struct Overlay {
     /// Textures that are white shapes (tinted by the HUD colour when drawn).
     masks: std::collections::HashSet<&'static str>,
     big_font: Option<SendFont>,
+    /// The weapon in hand and when it was taken up: its name shows for a moment after a switch.
+    weapon_seen: (&'static str, std::time::Instant),
 }
 
 /// `FontId` wraps a raw pointer into ImGui's atlas; it is only ever used on the render thread.
@@ -59,7 +61,7 @@ unsafe impl Sync for SendFont {}
 
 impl Overlay {
     pub fn new(shared: Shared, store: Arc<Store>) -> Self {
-        Overlay { shared, store, textures: HashMap::new(), masks: Default::default(), big_font: None }
+        Overlay { shared, store, textures: HashMap::new(), masks: Default::default(), big_font: None, weapon_seen: ("", std::time::Instant::now()) }
     }
 }
 
@@ -130,11 +132,14 @@ impl ImguiRenderLoop for Overlay {
                 Some(((nx * 0.5 + 0.5) * w, (0.5 - ny * 0.5) * h))
             };
             let cmds = hud::draw_list(Data::get(), &snap.hud, Screen { w, h }, &project);
+            if self.weapon_seen.0 != snap.hud.weapon_name {
+                self.weapon_seen = (snap.hud.weapon_name, std::time::Instant::now());
+            }
+            let weapon_age = self.weapon_seen.1.elapsed().as_secs_f32();
             let tex = |id: Option<&'static str>| id.and_then(|i| self.textures.get(i).copied());
             let image = |t: (TextureId, f32, f32), r: &Rect, a: f32, tint: u32| {
                 dl.add_image(t.0, [r.x, r.y], [r.x + r.w, r.y + r.h]).col(col(tint, a)).build();
             };
-            let mut ring_no = 0;
             for c in &cmds {
                 match c {
                     DrawCmd::Overlay { color, alpha } => {
@@ -142,6 +147,7 @@ impl ImguiRenderLoop for Overlay {
                             dl.add_rect([0.0, 0.0], [w, h], col(*color, *alpha)).filled(true).build();
                         }
                     }
+                    DrawCmd::Shapes { prims } => draw_prims(&dl, prims),
                     DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha } if tex(*frame).is_none() && tex(*fill).is_none() => {
                         draw_prims(&dl, &gowring_core::vector::bar(rect, *frac, *trail, *color, *alpha));
                     }
@@ -188,11 +194,6 @@ impl ImguiRenderLoop for Overlay {
                     }
                     DrawCmd::Ring { cx, cy, r, remaining, ready, frame, icon, color, alpha, .. } if tex(*frame).is_none() => {
                         draw_prims(&dl, &gowring_core::vector::ring(*cx, *cy, *r, *remaining, *ready, *color, *alpha, *icon));
-                        // which runic this ring is (the sheet lists the light one first)
-                        let label = if ring_no == 0 { "LIGHT" } else { "HEAVY" };
-                        ring_no += 1;
-                        let sz = ui.calc_text_size(label);
-                        dl.add_text([cx - sz[0] / 2.0, cy + r + 6.0], col(0xE8E2C8, 0.75 * alpha), label);
                     }
                     DrawCmd::Ring { cx, cy, r, remaining, ready, frame, glow, icon, color, alpha } => {
                         let rect = Rect { x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0 };
@@ -228,14 +229,19 @@ impl ImguiRenderLoop for Overlay {
                         }
                     }
                     DrawCmd::Icon { rect, asset, color, alpha } => {
+                        // a moment after a switch, the weapon's name next to its plate, above the health bar
+                        if asset.is_some() && *asset == snap.hud.weapon_icon && weapon_age < 2.6 && !snap.hud.weapon_name.is_empty() {
+                            let a = if weapon_age < 2.0 { 1.0 } else { (2.6 - weapon_age) / 0.6 };
+                            let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));
+                            let sz = ui.calc_text_size(snap.hud.weapon_name);
+                            let plate_r = rect.w / 2.0 / 0.68;
+                            let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                            dl.add_text([cx + plate_r + 10.0, cy - plate_r - sz[1] + 2.0], col(0xE8E2C8, 0.95 * a), snap.hud.weapon_name);
+                        }
                         if let Some(t) = tex(*asset) {
                             image(t, rect, *alpha, *color);
                         } else if let Some(v) = asset.and_then(|id| gowring_core::vector::icon_prims(id, rect, *color, *alpha)) {
                             draw_prims(&dl, &v);
-                            if matches!(*asset, Some("hud_icon_axe" | "hud_icon_blades" | "hud_icon_spear")) && !snap.hud.weapon_name.is_empty() {
-                                let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));
-                                dl.add_text([rect.x, rect.y + rect.h + 8.0], col(0xE8E2C8, 0.9 * alpha), snap.hud.weapon_name);
-                            }
                         } else {
                             dl.add_rect([rect.x, rect.y], [rect.x + rect.w, rect.y + rect.h], col(*color, 0.5 * alpha)).thickness(2.0).build();
                             if let Some(id) = asset {

@@ -155,6 +155,33 @@ pub fn ring(cx: f32, cy: f32, r: f32, remaining: f32, ready: bool, color: u32, a
     c.out
 }
 
+/// A plate behind an icon: a disc (`sides` 0) or a regular polygon with a flat top, dark with a pale rim.
+pub fn badge(cx: f32, cy: f32, r: f32, sides: u32, fill: u32, rim: u32, alpha: f32) -> Vec<Prim> {
+    let mut c = Canvas { out: Vec::new() };
+    let thick = (r * 0.07).max(1.5);
+    if sides < 3 {
+        c.circle((cx, cy), r, true, 0.0, fill, alpha);
+        c.circle((cx, cy), r - thick / 2.0, false, thick, rim, alpha);
+        return c.out;
+    }
+    let step = std::f32::consts::TAU / sides as f32;
+    let pts: Vec<(f32, f32)> = (0..sides)
+        .map(|i| {
+            let a = -std::f32::consts::FRAC_PI_2 + step * (i as f32 + 0.5);
+            (cx + r * a.cos(), cy + r * a.sin())
+        })
+        .collect();
+    c.fan((cx, cy), &pts, fill, alpha);
+    c.stroke(&pts, true, thick, rim, alpha);
+    c.out
+}
+
+/// A small solid triangle pointing up or down with its tip at (`x`, `tip_y`): which way on the D-pad.
+pub fn pointer(x: f32, tip_y: f32, size: f32, up: bool, color: u32, alpha: f32) -> Vec<Prim> {
+    let base = if up { tip_y + size } else { tip_y - size };
+    vec![Prim::Tri { p: [(x, tip_y), (x + size, base), (x - size, base)], color, alpha }]
+}
+
 /// The same shapes turned by `angle` radians about `centre` (for thrown weapons that spin in flight).
 pub fn rotated(prims: &[Prim], centre: (f32, f32), angle: f32) -> Vec<Prim> {
     let (sn, cs) = angle.sin_cos();

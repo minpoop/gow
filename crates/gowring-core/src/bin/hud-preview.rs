@@ -164,9 +164,9 @@ fn main() {
         recall_label: "Recall",
         in_combat: true,
         enemies: vec![
-            EnemyBar { id: 1, pos: Vec3::new(-3.0, 0.0, 9.0), hp_frac: 0.55, stun_frac: 0.7, stunned: false, boss: false },
-            EnemyBar { id: 2, pos: Vec3::new(2.5, 0.0, 7.0), hp_frac: 0.9, stun_frac: 1.0, stunned: true, boss: false },
-            EnemyBar { id: 3, pos: Vec3::new(7.0, 0.0, 14.0), hp_frac: 0.3, stun_frac: 0.1, stunned: false, boss: false },
+            EnemyBar { id: 1, pos: Vec3::new(-3.0, 0.0, 9.0), hp_frac: 0.55, stun_frac: 0.7, stunned: false, boss: false, status_frac: 0.6, status_color: 0x7FD8FF, status_label: None },
+            EnemyBar { id: 2, pos: Vec3::new(2.5, 0.0, 7.0), hp_frac: 0.9, stun_frac: 1.0, stunned: true, boss: false, status_frac: 0.0, status_color: 0, status_label: None },
+            EnemyBar { id: 3, pos: Vec3::new(7.0, 0.0, 14.0), hp_frac: 0.3, stun_frac: 0.1, stunned: false, boss: false, status_frac: 1.0, status_color: 0xFF8A3A, status_label: Some("BURNING") },
         ],
         finisher_target: Some(2),
         subtitle: Some("(Mimir's subtitle appears here, from Ragnarök's own text)".into()),
@@ -184,6 +184,7 @@ fn main() {
     for c in hud::draw_list(d, &state, Screen { w: w as f32, h: h as f32 }, &project) {
         match c {
             DrawCmd::Overlay { color, alpha } => cv.rect(0.0, 0.0, w as f32, h as f32, color, alpha),
+            DrawCmd::Shapes { prims } => cv.prims(&prims),
             DrawCmd::Bar { rect, frac, trail, color, alpha, .. } => cv.prims(&vector::bar(&rect, frac, trail, color, alpha)),
             DrawCmd::Ring { cx, cy, r, remaining, ready, icon, color, alpha, .. } => cv.prims(&vector::ring(cx, cy, r, remaining, ready, color, alpha, icon)),
             DrawCmd::Icon { rect, asset, color, alpha } => match asset.and_then(|id| vector::icon_prims(id, &rect, color, alpha)) {
@@ -217,7 +218,7 @@ fn main() {
         }
     }
     let banner = "LAYOUT PREVIEW - original vector HUD art on a stand-in backdrop; not gameplay and not Ragnarok art";
-    cv.text(24.0, h as f32 - 34.0, 22.0, banner, 0xFFD27A, 0.95);
+    cv.text(24.0, 14.0, 22.0, banner, 0xFFD27A, 0.95);
     let mut buf = Vec::with_capacity(w * h * 3);
     for p in &cv.px {
         for c in p {

@@ -4,6 +4,7 @@
 use crate::data::Data;
 use crate::sheets::*;
 use crate::types::*;
+use crate::vector::{self, Prim};
 
 #[derive(Clone, Debug, Default)]
 pub struct EnemyBar {
@@ -95,6 +96,8 @@ pub enum DrawCmd {
     Text { rect: Rect, px: f32, text: String, color: u32, alpha: f32, align: Align, plate: Option<&'static str>, portrait: Option<&'static str> },
     Prompt { rect: Rect, text: Option<String>, glyph: Option<&'static str>, backing: Option<&'static str>, color: u32, alpha: f32 },
     Overlay { color: u32, alpha: f32 },
+    /// Plain vector shapes drawn as they are (plates behind icons, small hints).
+    Shapes { prims: Vec<Prim> },
 }
 
 fn visible(v: HudVisibleWhen, s: &HudState) -> bool {
@@ -182,7 +185,7 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             }),
             HudBind::RageReady => out.push(DrawCmd::Prompt {
                 rect: rect_at(h),
-                text: Some("Spartan Rage".into()),
+                text: Some("L3 + R3".into()),
                 glyph: h.glyph,
                 backing: h.frame,
                 color,
@@ -192,6 +195,10 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                 let r = if h.bind == HudBind::RunicLightCd { &s.runic_light } else { &s.runic_heavy };
                 let Some(r) = r else { continue };
                 let rc = rect_at(h);
+                // light on top, heavy below, like Ragnarök's pair; a small pointer says which way on the D-pad
+                let up = h.bind == HudBind::RunicLightCd;
+                let tip = if up { rc.y - 12.0 * k * us } else { rc.y + rc.h + 12.0 * k * us };
+                out.push(DrawCmd::Shapes { prims: vector::pointer(rc.x + rc.w / 2.0, tip, 6.0 * k * us, up, vector::lighten(color, 0.3), 0.8) });
                 out.push(DrawCmd::Ring {
                     cx: rc.x + rc.w / 2.0,
                     cy: rc.y + rc.h / 2.0,
@@ -205,8 +212,19 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     alpha: if r.ready { pulse_alpha } else { 0.9 },
                 });
             }
-            HudBind::WeaponCurrent => out.push(DrawCmd::Icon { rect: rect_at(h), asset: s.weapon_icon, color, alpha: 1.0 }),
-            HudBind::ShieldState => out.push(DrawCmd::Icon { rect: rect_at(h), asset: h.glyph, color, alpha: if s.shield_drawn { 1.0 } else { 0.35 } }),
+            HudBind::WeaponCurrent | HudBind::ShieldState => {
+                // Ragnarök's cluster: the weapon on a round plate next to the bars, the shield on an octagon where
+                // Ragnarök keeps the relic
+                let rc = rect_at(h);
+                let (cx, cy, r) = (rc.x + rc.w / 2.0, rc.y + rc.h / 2.0, rc.w.min(rc.h) / 2.0);
+                let (sides, asset, alpha) = match h.bind {
+                    HudBind::WeaponCurrent => (0, s.weapon_icon, 1.0),
+                    _ => (8, h.glyph, if s.shield_drawn { 1.0 } else { 0.35 }),
+                };
+                out.push(DrawCmd::Shapes { prims: vector::badge(cx, cy, r, sides, 0x22201C, 0xB9AE92, 0.85) });
+                let inner = r * 0.68;
+                out.push(DrawCmd::Icon { rect: Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 }, asset, color, alpha });
+            }
             HudBind::ThrowAim => out.push(DrawCmd::Icon { rect: rect_at(h), asset: h.glyph, color, alpha: 0.95 }),
             HudBind::RecallState => out.push(DrawCmd::Prompt { rect: rect_at(h), text: Some(s.recall_label.to_string()), glyph: h.glyph, backing: None, color, alpha: 1.0 }),
             HudBind::Finisher => out.push(DrawCmd::Prompt { rect: rect_at(h), text: Some("Finish".into()), glyph: h.glyph, backing: h.frame, color, alpha: pulse_alpha }),
@@ -301,7 +319,7 @@ mod tests {
         assert!(!cmds.iter().any(|c| matches!(c, DrawCmd::Overlay { .. } | DrawCmd::Text { .. })));
         // health bar sits where the sheet says (virtual == real at 1080p)
         let DrawCmd::Bar { rect, frac, .. } = &cmds[0] else { panic!() };
-        assert_eq!((rect.x, rect.y, rect.w, rect.h), (96.0, 64.0, 560.0, 26.0));
+        assert_eq!((rect.x, rect.y, rect.w, rect.h), (245.0, 939.0, 390.0, 19.0));
         assert_eq!(*frac, 0.8);
     }
 
@@ -312,12 +330,42 @@ mod tests {
         s.ui_scale = 2.0;
         let cmds = draw_list(d, &s, Screen { w: 1920.0, h: 1080.0 }, &project);
         let DrawCmd::Bar { rect, .. } = &cmds[0] else { panic!() };
-        // top-left anchored: position and size both double
-        assert_eq!((rect.x, rect.y, rect.w, rect.h), (192.0, 128.0, 1120.0, 52.0));
-        // bottom-left anchored weapon icon keeps its distance from the bottom-left corner times the scale
+        // bottom-left anchored: distance from the corner and size both double
+        assert_eq!((rect.x, 1080.0 - (rect.y + rect.h), rect.w, rect.h), (490.0, 244.0, 780.0, 38.0));
+        // the weapon icon's centre keeps its distance from the bottom-left corner times the scale
         let icon = cmds.iter().find_map(|c| if let DrawCmd::Icon { rect, .. } = c { Some(*rect) } else { None }).unwrap();
-        assert!((icon.x - 192.0).abs() < 1e-3 && ((1080.0 - (icon.y + icon.h)) - 192.0).abs() < 1e-3, "{icon:?}");
-        assert!((icon.w - 168.0).abs() < 1e-3);
+        let (cx, cy) = (icon.x + icon.w / 2.0, icon.y + icon.h / 2.0);
+        assert!((cx - 422.0).abs() < 1e-3 && ((1080.0 - cy) - 240.0).abs() < 1e-3, "{icon:?}");
+    }
+
+    #[test]
+    fn kratos_pieces_sit_together_in_the_bottom_left_like_ragnarok() {
+        let d = Data::get();
+        let mut s = base_state();
+        s.rage_ready = true;
+        s.shield_drawn = false;
+        let cmds = draw_list(d, &s, Screen { w: 1920.0, h: 1080.0 }, &project);
+        let mut rects = Vec::new();
+        for c in &cmds {
+            match c {
+                DrawCmd::Bar { rect, .. } | DrawCmd::Icon { rect, .. } | DrawCmd::Prompt { rect, .. } => rects.push(*rect),
+                DrawCmd::Ring { cx, cy, r, .. } => rects.push(Rect { x: cx - r, y: cy - r, w: r * 2.0, h: r * 2.0 }),
+                _ => {}
+            }
+        }
+        // health, rage, prompt, two runics, weapon, shield: all inside the corner, all on screen
+        assert_eq!(rects.len(), 7);
+        for r in &rects {
+            assert!(r.x >= 0.0 && r.x + r.w < 700.0 && r.y > 850.0 && r.y + r.h <= 1080.0, "{r:?}");
+        }
+        let ring_y: Vec<f32> = cmds.iter().filter_map(|c| if let DrawCmd::Ring { cy, .. } = c { Some(*cy) } else { None }).collect();
+        assert!(ring_y[0] < ring_y[1], "light runic above heavy");
+        // the weapon and the shield sit on plates, and each runic has its D-pad pointer
+        assert_eq!(cmds.iter().filter(|c| matches!(c, DrawCmd::Shapes { .. })).count(), 4);
+        // Rage sits under health, the prompt under Rage
+        let DrawCmd::Bar { rect: hp, .. } = &cmds[0] else { panic!() };
+        let DrawCmd::Bar { rect: rage, .. } = &cmds[1] else { panic!() };
+        assert!(rage.y > hp.y + hp.h && (rage.x - hp.x).abs() < 4.0);
     }
 
     #[test]
@@ -326,10 +374,10 @@ mod tests {
         let cmds = draw_list(d, &base_state(), Screen { w: 2560.0, h: 1080.0 }, &project);
         let DrawCmd::Bar { rect, .. } = &cmds[0] else { panic!() };
         // 21:9: scale 1.0, 320 px of side bars
-        assert!((rect.x - (320.0 + 96.0)).abs() < 1e-3);
+        assert!((rect.x - (320.0 + 245.0)).abs() < 1e-3);
         let cmds = draw_list(d, &base_state(), Screen { w: 3840.0, h: 2160.0 }, &project);
         let DrawCmd::Bar { rect, .. } = &cmds[0] else { panic!() };
-        assert!((rect.x - 192.0).abs() < 1e-3 && (rect.w - 1120.0).abs() < 1e-3);
+        assert!((rect.x - 490.0).abs() < 1e-3 && (rect.w - 780.0).abs() < 1e-3);
     }
 
     #[test]
@@ -353,7 +401,7 @@ mod tests {
         let icons = cmds.iter().filter(|c| matches!(c, DrawCmd::Icon { .. })).count();
         assert_eq!(icons, 4 + 0, "weapon, shield, crosshair, one stunned marker");
         let prompts: Vec<_> = cmds.iter().filter_map(|c| if let DrawCmd::Prompt { text: Some(t), .. } = c { Some(t.clone()) } else { None }).collect();
-        assert!(prompts.contains(&"Recall".to_string()) && prompts.contains(&"Finish".to_string()) && prompts.contains(&"Spartan Rage".to_string()));
+        assert!(prompts.contains(&"Recall".to_string()) && prompts.contains(&"Finish".to_string()) && prompts.contains(&"L3 + R3".to_string()));
     }
 
     #[test]
