@@ -269,11 +269,11 @@
   {
    "id": "hud_recall",
    "kind": "prompt",
-   "anchor": "center",
-   "x": 0,
-   "y": 96,
-   "w": 160,
-   "h": 40,
+   "anchor": "bottom_left",
+   "x": 222,
+   "y": 82,
+   "w": 26,
+   "h": 26,
    "bind": "recall_state",
    "frame": null,
    "fill": null,
@@ -282,7 +282,7 @@
    "lead": "#ffffff",
    "segments": 1,
    "visible_when": "recall_available",
-   "notes": "'Recall' prompt while the axe or spears are out"
+   "notes": "Thrown spears: a small Triangle button on the weapon disc's lower edge (a thrown axe puts the button inside the disc instead), as in Ragnarök"
   },
   {
    "id": "hud_enemy_health",

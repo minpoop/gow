@@ -24,6 +24,10 @@ fn mix(c: u32, to: u32, t: f32) -> u32 {
     };
     (ch(16) << 16) | (ch(8) << 8) | ch(0)
 }
+/// `a` blended toward `b` by `t` (0..1).
+pub fn lerp_color(a: u32, b: u32, t: f32) -> u32 {
+    mix(a, b, t.clamp(0.0, 1.0))
+}
 pub fn lighten(c: u32, t: f32) -> u32 {
     mix(c, 0xFFFFFF, t)
 }
@@ -157,6 +161,12 @@ fn grow(pts: &[(f32, f32)], c: (f32, f32), d: f32) -> Vec<(f32, f32)> {
 /// bevel. `charge` (0..1) is how much of the face is lit from the bottom up; the rest is dimmed (a runic
 /// recharging). A disc is the weapon's plain grey plate.
 pub fn plate(shape: PlateShape, cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, alpha: f32) -> Vec<Prim> {
+    plate_fx(shape, cx, cy, rx, ry, mid, light, charge, 0.0, alpha)
+}
+
+/// `plate` with a white `flash` (0..1) over it. A plate still charging is drawn grey, as Ragnarök greys a runic that is
+/// recharging; the part already recharged rises from the bottom in a cooler grey, and the colour returns when ready.
+pub fn plate_fx(shape: PlateShape, cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, flash: f32, alpha: f32) -> Vec<Prim> {
     let mut c = Canvas { out: Vec::new() };
     let ctr = (cx, cy);
     let face = plate_outline(shape, cx, cy, rx, ry);
@@ -173,16 +183,22 @@ pub fn plate(shape: PlateShape, cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, li
     let top = cy - ry;
     let cut = top + 2.0 * ry * (1.0 - charge);
     // the dimmed part still to charge, then the lit part
-    if charge < 0.999 {
+    let cooling = charge < 0.999;
+    let (mid, light) = if cooling { (mix(shade(mid, 0.35), 0x707378, 0.75), mix(light, 0x9A9EA4, 0.75)) } else { (mid, light) };
+    if cooling {
         let dim = clip_y(&face, cut, false);
-        c.poly(&dim, shade(mid, 0.72), 0.95 * alpha);
+        c.poly(&dim, mix(shade(mid, 0.55), 0x2A2C30, 0.5), 0.92 * alpha);
     }
-    let lit = if charge >= 0.999 { face.clone() } else { clip_y(&face, cut, true) };
+    let lit = if cooling { clip_y(&face, cut, true) } else { face.clone() };
     if lit.len() >= 3 {
         c.poly(&lit, mid, alpha);
         // light from the top: the upper half brighter, the lowest fifth darker
         c.poly(&clip_y(&lit, cy, false), light, 0.45 * alpha);
         c.poly(&clip_y(&lit, cy + ry * 0.6, true), shade(mid, 0.35), 0.5 * alpha);
+    }
+    if flash > 0.0 {
+        c.poly(&face, 0xF4FAFF, 0.85 * flash * alpha);
+        c.stroke(&grow(&face, ctr, edge * 3.0), true, edge * 2.0, 0xFFFFFF, 0.8 * flash * alpha);
     }
     c.stroke(&grow(&face, ctr, -edge * 1.6), true, edge, lighten(light, 0.35), 0.55 * alpha);
     if charge < 0.999 && charge > 0.001 {
@@ -194,16 +210,55 @@ pub fn plate(shape: PlateShape, cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, li
 
 /// A runic plate in its weapon's colours, with an optional soft halo around it (`aura` 0..1; the Blades' plates glow).
 pub fn runic_plate(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, aura: f32, alpha: f32) -> Vec<Prim> {
+    runic_plate_fx(cx, cy, rx, ry, mid, light, charge, aura, 0.0, alpha)
+}
+
+/// `runic_plate` with a white `flash` (used, or ready again).
+pub fn runic_plate_fx(cx: f32, cy: f32, rx: f32, ry: f32, mid: u32, light: u32, charge: f32, aura: f32, flash: f32, alpha: f32) -> Vec<Prim> {
     let mut out = Vec::new();
-    if aura > 0.0 {
+    if aura > 0.0 && charge >= 0.999 {
         let face = plate_outline(PlateShape::Diamond, cx, cy, rx, ry);
         let glow = mix(light, 0xFF7A2A, 0.5);
         for (d, a) in [(rx * 0.4, 0.16f32), (rx * 0.26, 0.26), (rx * 0.13, 0.4)] {
             out.push(Prim::Poly { pts: grow(&face, (cx, cy), d), color: glow, alpha: a * aura * alpha * (0.35 + 0.65 * charge.clamp(0.0, 1.0)) });
         }
     }
-    out.extend(plate(PlateShape::Diamond, cx, cy, rx, ry, mid, light, charge, alpha));
+    out.extend(plate_fx(PlateShape::Diamond, cx, cy, rx, ry, mid, light, charge, flash, alpha));
     out
+}
+
+/// A PlayStation face button: white disc, dark rim, a dark triangle (Ragnarök's recall / detonate prompt).
+pub fn face_button(cx: f32, cy: f32, r: f32, alpha: f32) -> Vec<Prim> {
+    let mut c = Canvas { out: Vec::new() };
+    c.circle((cx, cy), r * 1.1, true, 0.0, 0x161616, 0.9 * alpha);
+    c.circle((cx, cy), r, true, 0.0, 0xF2F2F0, alpha);
+    let tri: Vec<(f32, f32)> = (0..3)
+        .map(|k| {
+            let a = -std::f32::consts::FRAC_PI_2 + k as f32 * std::f32::consts::TAU / 3.0;
+            (cx + r * 0.55 * a.cos(), cy + r * 0.08 + r * 0.55 * a.sin())
+        })
+        .collect();
+    c.stroke(&tri, true, (r * 0.14).max(1.2), 0x262626, alpha);
+    c.out
+}
+
+/// Spartan Rage's mark for the weapon disc while Rage burns: a fierce face with the red stripe over one eye.
+pub fn rage_mark(rect: &Rect, alpha: f32) -> Vec<Prim> {
+    let (sx, sy, s) = square(rect);
+    let p = |nx: f32, ny: f32| (sx + nx * s, sy + ny * s);
+    let mut c = Canvas { out: Vec::new() };
+    let head = [p(0.3, 0.1), p(0.7, 0.1), p(0.82, 0.34), p(0.78, 0.6), p(0.64, 0.92), p(0.36, 0.92), p(0.22, 0.6), p(0.18, 0.34)];
+    c.fan(p(0.5, 0.5), &head, 0x101010, 0.6 * alpha);
+    let head_in: Vec<(f32, f32)> = head.iter().map(|q| (q.0 + (p(0.5, 0.5).0 - q.0) * 0.06, q.1 + (p(0.5, 0.5).1 - q.1) * 0.06)).collect();
+    c.fan(p(0.5, 0.5), &head_in, 0xF2F2F0, alpha);
+    // angry brows and eyes, the set mouth, the beard's edge
+    c.fan(p(0.36, 0.44), &[p(0.24, 0.36), p(0.46, 0.44), p(0.44, 0.5), p(0.26, 0.44)], 0x1A1A1A, alpha);
+    c.fan(p(0.64, 0.44), &[p(0.76, 0.36), p(0.54, 0.44), p(0.56, 0.5), p(0.74, 0.44)], 0x1A1A1A, alpha);
+    c.line(p(0.38, 0.74), p(0.62, 0.74), (s * 0.05).max(1.0), 0x1A1A1A, alpha);
+    c.stroke(&[p(0.26, 0.64), p(0.34, 0.86), p(0.5, 0.94), p(0.66, 0.86), p(0.74, 0.64)], false, (s * 0.035).max(1.0), 0x1A1A1A, 0.8 * alpha);
+    // the red stripe from the crown down over the left eye
+    c.fan(p(0.4, 0.34), &[p(0.36, 0.11), p(0.45, 0.11), p(0.44, 0.6), p(0.36, 0.6)], 0xC8281E, alpha);
+    c.out
 }
 
 /// An icon as a white (or `color`) silhouette with a soft dark outline, the way Ragnarök draws its glyphs.
@@ -428,6 +483,11 @@ pub fn glyph_prims(asset: &str, rect: &Rect, color: u32, alpha: f32) -> Option<V
 /// lit along the bottom, with a pale tip. Several segments (the Rage meter): each full segment dark red with a bright
 /// upper band and glowing ends, warming from one segment to the next; the segment still filling burns in `lead`.
 pub fn rbar(rect: &Rect, frac: f32, trail: f32, mid: u32, lead: u32, segments: u32, alpha: f32) -> Vec<Prim> {
+    rbar_fx(rect, frac, trail, 0xF4EBD0, 0.5, mid, lead, segments, 0.0, alpha)
+}
+
+/// `rbar` with the lost chunk (`trail`) drawn in `trail_color` at `trail_alpha`, and a white-hot `flash` over the fill.
+pub fn rbar_fx(rect: &Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, mid: u32, lead: u32, segments: u32, flash: f32, alpha: f32) -> Vec<Prim> {
     let mut c = Canvas { out: Vec::new() };
     let (x0, y0, y1) = (rect.x, rect.y, rect.y + rect.h);
     let h = rect.h;
@@ -451,8 +511,8 @@ pub fn rbar(rect: &Rect, frac: f32, trail: f32, mid: u32, lead: u32, segments: u
         seg_x(i) + (u - i as f32) * sw
     };
     let fill_end = at(frac);
-    if trail > frac {
-        c.rect(fill_end, y0, at(trail), y1, 0xF4EBD0, 0.5 * alpha);
+    if trail > frac && trail_alpha > 0.0 {
+        c.rect(fill_end, y0, at(trail), y1, trail_color, trail_alpha * alpha);
     }
     // from `a` to `b`, coloured by `f(x)`: a few smooth gradient pieces
     let slices = |c: &mut Canvas, a: f32, b: f32, f: &dyn Fn(f32) -> u32| {
@@ -536,6 +596,15 @@ pub fn rbar(rect: &Rect, frac: f32, trail: f32, mid: u32, lead: u32, segments: u
     if n > 1 && frac > 0.002 && frac < 0.999 {
         let tip = (h * 0.2).max(1.5);
         c.rect(fill_end - tip, y0, fill_end, y1, lighten(lead, 0.7), 0.95 * alpha);
+    }
+    if flash > 0.0 {
+        // white-hot, segment by segment so the gaps stay dark
+        for i in 0..n {
+            let (a, b) = (seg_x(i), (seg_x(i) + sw).min(fill_end));
+            if b > a {
+                c.rect(a, y0, b, y1, 0xFFEDE4, 0.85 * flash * alpha);
+            }
+        }
     }
     c.out
 }
@@ -832,10 +901,12 @@ mod tests {
 
     #[test]
     fn a_recharging_plate_is_lit_from_the_bottom_up() {
+        // a ready plate is in its colour; one recharging is grey, its recharged part rising from the bottom
         let lit_top = |charge: f32| {
+            let face = if charge >= 0.999 { 0x4A7FB4 } else { mix(shade(0x4A7FB4, 0.35), 0x707378, 0.75) };
             plate(PlateShape::Diamond, 50.0, 50.0, 30.0, 26.0, 0x4A7FB4, 0x8AB4DC, charge, 1.0)
                 .iter()
-                .filter_map(|p| if let Prim::Poly { pts, color: 0x4A7FB4, .. } = p { Some(pts.iter().map(|q| q.1).fold(f32::MAX, f32::min)) } else { None })
+                .filter_map(|p| if let Prim::Poly { pts, color, .. } = p { (*color == face).then(|| pts.iter().map(|q| q.1).fold(f32::MAX, f32::min)) } else { None })
                 .fold(f32::MAX, f32::min)
         };
         assert!((lit_top(1.0) - 24.0).abs() < 0.01, "a ready plate is lit to its top");

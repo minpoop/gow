@@ -1,7 +1,7 @@
 {
  "sheet": "weapons",
  "struct": "WeaponDef",
- "about": "Kratos' kit. slot = the Elden Ring equipment slot that carries it (right 1-3, left 1). template = the vanilla ER category whose moveset it borrows. base_damage is per motion-value 1.0 hit in ER damage terms for a post-game Kratos. status / status_per_hit / status_s: ordinary hits fill an enemy's status meter (100 = full); full applies the status for status_s (the axe freezes, the Blades burn), as in Ragnarök. Runic plates on the HUD take the weapon's colours: `runic_color` (the plate), `runic_light` (its lit tone) and `runic_glow` (a soft halo, 0 = none): frozen blue for the Axe, glowing red-orange for the Blades, sandy yellow for the Spear.",
+ "about": "Kratos' kit. slot = the Elden Ring equipment slot that carries it (right 1-3, left 1). template = the vanilla ER category whose moveset it borrows. base_damage is per motion-value 1.0 hit in ER damage terms for a post-game Kratos. status / status_per_hit / status_s: ordinary hits fill an enemy's status meter (100 = full); full applies the status for status_s (the axe freezes, the Blades burn), as in Ragnarök. Runic plates on the HUD take the weapon's colours: `runic_color` (the plate), `runic_light` (its lit tone) and `runic_glow` (a soft halo, 0 = none): frozen blue for the Axe, glowing red-orange for the Blades, sandy yellow for the Spear. `disc_color` is the weapon disc next to the bars (grey Axe, red-orange Blades, sandy Spear, as in Ragnarök).",
  "columns": {
   "id": {
    "type": "id"
@@ -83,6 +83,9 @@
    "min": 0,
    "max": 1
   },
+  "disc_color": {
+   "type": "color"
+  },
   "swap_sfx": {
    "type": "ref?",
    "sheet": "assets"
@@ -148,6 +151,7 @@
    "runic_color": "#4a7fb4",
    "runic_light": "#8ab4dc",
    "runic_glow": 0.0,
+   "disc_color": "#55535a",
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
    "notes": "Frost axe: balanced, throw-and-recall.",
@@ -184,6 +188,7 @@
    "runic_color": "#b8402a",
    "runic_light": "#ff9a4e",
    "runic_glow": 0.55,
+   "disc_color": "#b8402a",
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
    "notes": "Chained fire blades: wide, fast, hit many. Shield is stowed while out.",
@@ -221,6 +226,7 @@
    "runic_color": "#a8905a",
    "runic_light": "#e8d49c",
    "runic_glow": 0.0,
+   "disc_color": "#a8905a",
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
    "notes": "Throw up to three spears and detonate them.",
@@ -251,6 +257,7 @@
    "runic_color": "#4a7fb4",
    "runic_light": "#8ab4dc",
    "runic_glow": 0.0,
+   "disc_color": "#55535a",
    "swap_sfx": "sfx_weapon_swap",
    "post_game": "max",
    "notes": "Block, parry, bash, charge.",
@@ -280,6 +287,7 @@
    "runic_color": "#4a7fb4",
    "runic_light": "#8ab4dc",
    "runic_glow": 0.0,
+   "disc_color": "#55535a",
    "swap_sfx": null,
    "post_game": "max",
    "notes": "Finishers and Rage.",

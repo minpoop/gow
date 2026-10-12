@@ -164,8 +164,8 @@ impl ImguiRenderLoop for Overlay {
                     }
                     // Ragnarök's own bar pictures are plain white bar shapes, so bars are drawn in Ragnarök's look by the
                     // HUD itself; only a full-colour picture chosen for a bar replaces that drawing.
-                    DrawCmd::Bar { rect, frac, trail, frame, fill, color, lead, segments, alpha } if !is_picture(*frame) && !is_picture(*fill) => {
-                        draw_prims(&dl, &gowring_core::vector::rbar(rect, *frac, *trail, *color, *lead, *segments, *alpha));
+                    DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, frame, fill, color, lead, segments, flash, alpha } if !is_picture(*frame) && !is_picture(*fill) => {
+                        draw_prims(&dl, &gowring_core::vector::rbar_fx(rect, *frac, *trail, *trail_color, *trail_alpha, *color, *lead, *segments, *flash, *alpha));
                     }
                     DrawCmd::Bar { rect, frac, trail, frame, fill, color, alpha, .. } => {
                         let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
@@ -189,8 +189,8 @@ impl ImguiRenderLoop for Overlay {
                         }
                     }
                     // a runic plate in Ragnarök's look, lit from the bottom up as it recharges, with the runic's glyph
-                    DrawCmd::Ring { cx, cy, rx, ry, remaining, frame, icon, color, light, aura, alpha, .. } if !is_picture(*frame) => {
-                        draw_prims(&dl, &gowring_core::vector::runic_plate(*cx, *cy, *rx, *ry, *color, *light, 1.0 - remaining, *aura, *alpha));
+                    DrawCmd::Ring { cx, cy, rx, ry, remaining, frame, icon, color, light, aura, flash, alpha, .. } if !is_picture(*frame) => {
+                        draw_prims(&dl, &gowring_core::vector::runic_plate_fx(*cx, *cy, *rx, *ry, *color, *light, 1.0 - remaining, *aura, *flash, *alpha));
                         let side = ry * 0.62;
                         let inner = Rect { x: cx - side, y: cy - side, w: side * 2.0, h: side * 2.0 };
                         let dim = if *remaining > 0.001 { 0.6 } else { 1.0 };

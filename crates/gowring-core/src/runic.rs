@@ -15,6 +15,8 @@ pub struct Runics {
     d: &'static Data,
     cd: HashMap<&'static str, f32>,
     pending: Vec<Pending>,
+    /// When each runic was last used or became ready again (the HUD flashes its plate).
+    changed_at: HashMap<&'static str, f64>,
 }
 
 /// Lateral half-width of a `line` runic.
@@ -26,7 +28,7 @@ const COLUMN_RADIUS: f32 = 4.5;
 
 impl Runics {
     pub fn new(d: &'static Data) -> Self {
-        Runics { d, cd: HashMap::new(), pending: Vec::new() }
+        Runics { d, cd: HashMap::new(), pending: Vec::new(), changed_at: HashMap::new() }
     }
 
     pub fn remaining(&self, r: &RunicDef) -> f32 {
@@ -42,6 +44,11 @@ impl Runics {
         (self.remaining(r) / r.cooldown_s).clamp(0.0, 1.0)
     }
 
+    /// When the runic was last used or came off cooldown.
+    pub fn changed_at(&self, r: &RunicDef) -> f64 {
+        self.changed_at.get(r.id).copied().unwrap_or(f64::NEG_INFINITY)
+    }
+
     pub fn reset_all(&mut self) {
         self.cd.clear();
         self.pending.clear();
@@ -53,6 +60,7 @@ impl Runics {
             return None;
         }
         self.cd.insert(r.id, r.cooldown_s);
+        self.changed_at.insert(r.id, now);
         self.pending.push(Pending { runic: r, fire_at: now + r.windup_s as f64 });
         out.push(Command::Cast { runic: r.id });
         Some(r)
@@ -71,6 +79,7 @@ impl Runics {
             }
         }
         for id in ready_now {
+            self.changed_at.insert(id, now);
             out.push(Command::Sfx(self.d.runic(id).sfx.unwrap_or("sfx_runic_ready")));
         }
         let mut stun_adds = Vec::new();

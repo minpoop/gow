@@ -32,12 +32,20 @@ pub struct RunicHud {
     pub color: u32,
     pub light: u32,
     pub glow: f32,
+    /// 1 just after the runic was used or came off cooldown, fading to 0 (the plate flashes white).
+    pub flash: f32,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct HudState {
     pub hp_frac: f32,
+    /// Top of the chunk of health just lost (shown red, then faded) and seconds since that loss.
     pub hp_trail_frac: f32,
+    pub hp_hit_age: f32,
+    /// 1 as Spartan Rage starts, fading to 0 (the Rage segments flash white-hot).
+    pub rage_flash: f32,
+    /// The weapon disc's colour (0 = the HUD sheet's).
+    pub weapon_disc: u32,
     pub rage_frac: f32,
     pub rage_ready: bool,
     pub rage_active: bool,
@@ -113,9 +121,10 @@ pub struct Rect {
 #[derive(Clone, Debug)]
 pub enum DrawCmd {
     /// `color` fills the bar, glowing to `lead` at the leading edge; `segments` > 1 splits it (the Rage meter).
-    Bar { rect: Rect, frac: f32, trail: f32, frame: Option<&'static str>, fill: Option<&'static str>, color: u32, lead: u32, segments: u32, alpha: f32 },
+    /// `trail`: top of the chunk just lost, drawn in `trail_color` at `trail_alpha`; `flash`: white-hot over the fill.
+    Bar { rect: Rect, frac: f32, trail: f32, trail_color: u32, trail_alpha: f32, frame: Option<&'static str>, fill: Option<&'static str>, color: u32, lead: u32, segments: u32, flash: f32, alpha: f32 },
     /// A runic plate `rx` by `ry` from its centre: `color` its face, `light` its lit tone, `aura` a soft halo (0..1).
-    Ring { cx: f32, cy: f32, rx: f32, ry: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, light: u32, aura: f32, alpha: f32 },
+    Ring { cx: f32, cy: f32, rx: f32, ry: f32, remaining: f32, ready: bool, frame: Option<&'static str>, glow: Option<&'static str>, icon: Option<&'static str>, color: u32, light: u32, aura: f32, flash: f32, alpha: f32 },
     /// `mono`: drawn as a white silhouette (Ragnarök's glyph style) when there is no picture for it.
     Icon { rect: Rect, asset: Option<&'static str>, color: u32, alpha: f32, mono: bool },
     Text { rect: Rect, px: f32, text: String, color: u32, alpha: f32, align: Align, plate: Option<&'static str>, portrait: Option<&'static str> },
@@ -193,27 +202,36 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
         let color = h.color;
         let (lead, segments) = (h.lead, h.segments.max(1) as u32);
         match h.bind {
-            HudBind::PlayerHp => out.push(DrawCmd::Bar {
-                rect: rect_at(h),
-                frac: s.hp_frac,
-                trail: s.hp_trail_frac,
-                frame: h.frame,
-                fill: h.fill,
-                color,
-                lead,
-                segments,
-                alpha: 1.0,
-            }),
+            HudBind::PlayerHp => {
+                let (trail_color, trail_alpha) = damage_chunk(s.hp_hit_age, d.tuning.hp_trail_hold_s, d.tuning.hp_trail_s);
+                out.push(DrawCmd::Bar {
+                    rect: rect_at(h),
+                    frac: s.hp_frac,
+                    trail: s.hp_trail_frac,
+                    trail_color,
+                    trail_alpha,
+                    frame: h.frame,
+                    fill: h.fill,
+                    color,
+                    lead,
+                    segments,
+                    flash: 0.0,
+                    alpha: 1.0,
+                })
+            }
             HudBind::PlayerRage => out.push(DrawCmd::Bar {
                 rect: rect_at(h),
                 frac: s.rage_frac,
                 trail: s.rage_frac,
+                trail_color: 0,
+                trail_alpha: 0.0,
                 frame: h.frame,
                 fill: h.fill,
                 color,
                 lead,
                 segments,
-                alpha: if s.rage_active { pulse_alpha } else { 1.0 },
+                flash: s.rage_flash,
+                alpha: 1.0,
             }),
             // Ragnarök's prompt: the two stick buttons, on fire
             HudBind::RageReady => out.push(DrawCmd::Shapes { prims: vector::rage_prompt(&rect_at(h), s.time_s, 1.0) }),
@@ -237,7 +255,9 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     color: if r.color != 0 { r.color } else { color },
                     light: if r.light != 0 { r.light } else { lead },
                     aura: r.glow,
-                    alpha: 1.0,
+                    flash: r.flash,
+                    // Ragnarök fades the runics while Spartan Rage burns
+                    alpha: if s.rage_active { 0.3 } else { 1.0 },
                 });
             }
             HudBind::WeaponCurrent | HudBind::ShieldState => {
@@ -247,7 +267,9 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                 let (cx, cy) = (rc.x + rc.w / 2.0, rc.y + rc.h / 2.0);
                 if h.bind == HudBind::WeaponCurrent {
                     let r = rc.w.min(rc.h) / 2.0;
-                    let mut prims = vector::plate(vector::PlateShape::Disc, cx, cy, r, r, vector::shade(lead, 0.5), lead, 1.0, 1.0);
+                    // the disc takes the weapon's colour (grey Axe, red-orange Blades, sandy Spear); slate while Rage burns
+                    let disc = if s.rage_active { 0x3A4250 } else if s.weapon_disc != 0 { s.weapon_disc } else { vector::shade(lead, 0.5) };
+                    let mut prims = vector::plate(vector::PlateShape::Disc, cx, cy, r, r, disc, lead, 1.0, 1.0);
                     // the fine line that runs from the plate between the health and Rage bars, with its stud
                     let len = 330.0 * k * us;
                     for i in 0..8 {
@@ -260,19 +282,38 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     for i in 0..4 {
                         prims.push(vector::Prim::Line { a: stud[i], b: stud[(i + 1) % 4], thick: (1.0 * k * us).max(1.0), color: 0xE8E4EC, alpha: 0.9 });
                     }
-                    out.push(DrawCmd::Shapes { prims });
                     let inner = r * 0.62;
-                    out.push(DrawCmd::Icon { rect: Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 }, asset: s.weapon_icon, color, alpha: 1.0, mono: true });
+                    let inner_rect = Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 };
+                    let axe_away = s.recall_available && s.recall_label == "Recall";
+                    if s.rage_active {
+                        prims.extend(vector::rage_mark(&inner_rect, 1.0));
+                        out.push(DrawCmd::Shapes { prims });
+                    } else if axe_away {
+                        // the axe is out of Kratos' hand: the disc shows the button that calls it back
+                        prims.extend(vector::face_button(cx, cy, r * 0.5, 1.0));
+                        out.push(DrawCmd::Shapes { prims });
+                    } else {
+                        out.push(DrawCmd::Shapes { prims });
+                        out.push(DrawCmd::Icon { rect: inner_rect, asset: s.weapon_icon, color, alpha: 1.0, mono: true });
+                    }
                 } else {
                     let (rx, ry) = (rc.w / 2.0 - 4.0 * k * us, rc.h / 2.0 - 4.0 * k * us);
-                    out.push(DrawCmd::Shapes { prims: vector::plate(vector::PlateShape::Octagon, cx, cy, rx, ry, vector::shade(lead, 0.35), lead, 1.0, 1.0) });
+                    let fade = if s.rage_active { 0.3 } else { 1.0 };
+                    out.push(DrawCmd::Shapes { prims: vector::plate(vector::PlateShape::Octagon, cx, cy, rx, ry, vector::shade(lead, 0.35), lead, 1.0, fade) });
                     let inner = ry * 0.66;
-                    let alpha = if s.shield_drawn { 1.0 } else { 0.55 };
+                    let alpha = fade * if s.shield_drawn { 1.0 } else { 0.55 };
                     out.push(DrawCmd::Icon { rect: Rect { x: cx - inner, y: cy - inner, w: inner * 2.0, h: inner * 2.0 }, asset: h.glyph, color, alpha, mono: true });
                 }
             }
             HudBind::ThrowAim => out.push(DrawCmd::Icon { rect: rect_at(h), asset: h.glyph, color, alpha: 0.95, mono: false }),
-            HudBind::RecallState => out.push(DrawCmd::Prompt { rect: rect_at(h), text: Some(s.recall_label.to_string()), glyph: h.glyph, backing: None, color, alpha: 1.0 }),
+            // Ragnarök puts the recall / detonate button on the weapon disc: a thrown axe leaves the button in the disc
+            // (drawn with the disc); thrown spears get a small button on the disc's lower edge
+            HudBind::RecallState => {
+                if s.recall_label != "Recall" {
+                    let rc = rect_at(h);
+                    out.push(DrawCmd::Shapes { prims: vector::face_button(rc.x + rc.w / 2.0, rc.y + rc.h / 2.0, rc.w.min(rc.h) / 2.0, 1.0) });
+                }
+            }
             HudBind::Finisher => out.push(DrawCmd::Prompt { rect: rect_at(h), text: Some("Finish".into()), glyph: h.glyph, backing: h.frame, color, alpha: pulse_alpha }),
             HudBind::EnemyHp | HudBind::EnemyStun | HudBind::EnemyStunned => {
                 for e in s.enemies.iter().filter(|e| !e.boss) {
@@ -280,12 +321,12 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
                     let (w, hh) = (h.w as f32 * k * us, h.h as f32 * k * us);
                     let rc = Rect { x: px - w / 2.0 + h.x as f32 * k * 0.0, y: py + h.y as f32 * k, w, h: hh };
                     match h.bind {
-                        HudBind::EnemyHp => out.push(DrawCmd::Bar { rect: rc, frac: e.hp_frac, trail: e.hp_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 0.95 }),
+                        HudBind::EnemyHp => out.push(DrawCmd::Bar { rect: rc, frac: e.hp_frac, trail: e.hp_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 0.95 }),
                         HudBind::EnemyStun => {
-                            out.push(DrawCmd::Bar { rect: rc, frac: e.stun_frac, trail: e.stun_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 0.95 });
+                            out.push(DrawCmd::Bar { rect: rc, frac: e.stun_frac, trail: e.stun_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 0.95 });
                             if e.status_frac > 0.01 && e.status_color != 0 {
                                 let thin = Rect { y: rc.y + rc.h + 2.0 * k * us, h: (rc.h * 0.5).max(2.0), ..rc };
-                                out.push(DrawCmd::Bar { rect: thin, frac: e.status_frac, trail: e.status_frac, frame: None, fill: None, color: e.status_color, lead: vector::lighten(e.status_color, 0.4), segments: 1, alpha: 0.95 });
+                                out.push(DrawCmd::Bar { rect: thin, frac: e.status_frac, trail: e.status_frac, trail_color: 0, trail_alpha: 0.0, frame: None, fill: None, color: e.status_color, lead: vector::lighten(e.status_color, 0.4), segments: 1, flash: 0.0, alpha: 0.95 });
                             }
                             if let Some(label) = e.status_label {
                                 let tag = Rect { y: rc.y + rc.h * 2.0 + 6.0 * k * us, h: 16.0 * k * us, ..rc };
@@ -300,12 +341,12 @@ pub fn draw_list(d: &Data, s: &HudState, screen: Screen, project: &dyn Fn(Vec3) 
             }
             HudBind::BossHp => {
                 if let Some(b) = &s.boss {
-                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.hp_frac, trail: b.hp_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 1.0 });
+                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.hp_frac, trail: b.hp_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 1.0 });
                 }
             }
             HudBind::BossStun => {
                 if let Some(b) = &s.boss {
-                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.stun_frac, trail: b.stun_frac, frame: h.frame, fill: h.fill, color, lead, segments, alpha: 1.0 });
+                    out.push(DrawCmd::Bar { rect: rect_at(h), frac: b.stun_frac, trail: b.stun_frac, trail_color: 0, trail_alpha: 0.0, frame: h.frame, fill: h.fill, color, lead, segments, flash: 0.0, alpha: 1.0 });
                 }
             }
             HudBind::MimirSubtitle => {
@@ -391,6 +432,15 @@ fn picker(p: &RunicPicker, out: &mut Vec<DrawCmd>, (k, ox, oy): (f32, f32, f32),
     }
     let (hx, hy) = at(x0 + 20.0, y + 6.0);
     out.push(DrawCmd::Label { x: hx, y: hy, px: sz(15.0), text: "Hold L1, press D-pad up / down: next light / heavy runic".into(), color: 0x8A9098, alpha: a, align: Align::Left });
+}
+
+/// The chunk of health just lost, as Ragnarök shows it (measured frame by frame from a recorded fight): a pale
+/// blue-white flash that turns red within a fifth of a second, held for `hold` seconds, then faded out over `fade`.
+pub fn damage_chunk(age: f32, hold: f32, fade: f32) -> (u32, f32) {
+    let (flash, red) = (0xD8E4FF, 0xE0342C);
+    let color = vector::lerp_color(flash, red, ((age - 0.06) / 0.14).clamp(0.0, 1.0));
+    let alpha = if age <= hold { 1.0 } else if fade > 0.0 { (1.0 - (age - hold) / fade).max(0.0) } else { 0.0 };
+    (color, 0.95 * alpha)
 }
 
 /// Greedy word wrap by character count (the HUD has no font metrics here).
@@ -541,9 +591,32 @@ mod tests {
         // 2 enemies x (hp + stun) + health + rage = 6 bars; one stunned marker; crosshair + weapon + shield icons
         assert_eq!(cmds.iter().filter(|c| matches!(c, DrawCmd::Bar { .. })).count(), 6);
         let icons = cmds.iter().filter(|c| matches!(c, DrawCmd::Icon { .. })).count();
-        assert_eq!(icons, 4 + 0, "weapon, shield, crosshair, one stunned marker");
+        assert_eq!(icons, 3, "shield, crosshair, one stunned marker: with the axe thrown, the disc shows the recall button instead");
         let prompts: Vec<_> = cmds.iter().filter_map(|c| if let DrawCmd::Prompt { text: Some(t), .. } = c { Some(t.clone()) } else { None }).collect();
-        assert!(prompts.contains(&"Recall".to_string()) && prompts.contains(&"Finish".to_string()));
+        assert!(prompts.contains(&"Finish".to_string()) && !prompts.contains(&"Recall".to_string()), "no recall box in mid-screen");
+    }
+
+    #[test]
+    fn a_lost_chunk_flashes_turns_red_holds_and_fades() {
+        let (c0, a0) = damage_chunk(0.0, 0.65, 0.3);
+        assert_eq!((c0, a0), (0xD8E4FF, 0.95), "pale blue-white at the hit");
+        let (c1, a1) = damage_chunk(0.3, 0.65, 0.3);
+        assert_eq!((c1, a1), (0xE0342C, 0.95), "red and solid while it holds");
+        let (_, a2) = damage_chunk(0.8, 0.65, 0.3);
+        assert!(a2 > 0.0 && a2 < 0.95, "fading");
+        assert_eq!(damage_chunk(1.0, 0.65, 0.3).1, 0.0, "gone");
+    }
+
+    #[test]
+    fn spartan_rage_fades_the_runics_marks_the_disc_and_flashes_the_meter() {
+        let d = Data::get();
+        let mut s = base_state();
+        s.rage_active = true;
+        s.rage_flash = 1.0;
+        let cmds = draw_list(d, &s, Screen { w: 1920.0, h: 1080.0 }, &project);
+        assert!(cmds.iter().filter_map(|c| if let DrawCmd::Ring { alpha, .. } = c { Some(*alpha) } else { None }).all(|a| (a - 0.3).abs() < 1e-6));
+        assert!(cmds.iter().any(|c| matches!(c, DrawCmd::Bar { flash, .. } if *flash == 1.0)));
+        assert!(!cmds.iter().any(|c| matches!(c, DrawCmd::Icon { asset: Some("hud_icon_axe"), .. })), "the disc shows Rage's mark, not the axe");
     }
 
     #[test]

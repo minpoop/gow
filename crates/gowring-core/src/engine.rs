@@ -130,8 +130,10 @@ pub struct Engine {
     /// What the health and Rage bars show: they ease toward the real values instead of jumping.
     hp_shown: f32,
     rage_shown: f32,
-    /// When health was last lost (the damage trail waits a moment before it drains).
+    /// When health was last lost (the damage chunk shows for a moment, then fades).
     hp_hit_at: f64,
+    /// The bars start where the player is (no red chunk for loading in hurt).
+    hud_started: bool,
 }
 
 /// How long a D-pad button must be up before L1 + D-pad changes a runic again.
@@ -189,6 +191,7 @@ impl Engine {
             hp_shown: 1.0,
             rage_shown: 0.0,
             hp_hit_at: f64::NEG_INFINITY,
+            hud_started: false,
         }
     }
 
@@ -695,26 +698,32 @@ impl Engine {
         let weapon = self.weapon;
         // The bars ease to their real values, like Ragnarök's: a loss drops quickly and leaves a pale trail that waits
         // a moment and then drains; a gain (healing, Rage) fills smoothly.
+        // Measured from a Ragnarök fight: health drops at once and the chunk just lost turns red, holds about 0.65 s and
+        // fades; a hit while it shows keeps its top. Healing and Rage gains ease in over about a quarter second.
         let t = &d.tuning;
+        if !self.hud_started {
+            self.hud_started = true;
+            (self.hp_shown, self.hp_trail, self.rage_shown) = (hp_frac, hp_frac, self.rage.frac());
+        }
+        let chunk_gone = now - self.hp_hit_at >= (t.hp_trail_hold_s + t.hp_trail_s) as f64;
         if hp_frac < self.hp_shown - 0.001 {
+            if chunk_gone {
+                self.hp_trail = self.hp_shown;
+            }
             self.hp_hit_at = now;
         }
         let tau = if hp_frac < self.hp_shown { t.bar_ease_down_s } else { t.bar_ease_up_s };
         self.hp_shown = ease(self.hp_shown, hp_frac, f.dt, tau);
-        if self.hp_shown >= self.hp_trail {
+        if self.hp_shown >= self.hp_trail || (chunk_gone && now - self.hp_hit_at > 0.0) {
             self.hp_trail = self.hp_shown;
-        } else if now - self.hp_hit_at >= t.hp_trail_hold_s as f64 {
-            let fall = if t.hp_trail_s > 0.0 { f.dt / t.hp_trail_s } else { 1.0 };
-            self.hp_trail = (self.hp_trail - fall).max(self.hp_shown);
         }
-        let rage = self.rage.frac();
-        let tau = if rage < self.rage_shown { t.bar_ease_down_s } else { t.bar_ease_up_s };
-        self.rage_shown = ease(self.rage_shown, rage, f.dt, tau);
+        self.rage_shown = ease(self.rage_shown, self.rage.frac(), f.dt, t.bar_ease_up_s);
 
         let runic = |r: Option<&'static RunicDef>| {
             r.map(|r| {
                 let w = d.weapon(r.weapon);
-                RunicHud { id: r.id, name: r.name, remaining_frac: self.runics.cooldown_frac(r), ready: self.runics.ready(r), color: w.runic_color, light: w.runic_light, glow: w.runic_glow }
+                let flash = (1.0 - (now - self.runics.changed_at(r)) / 0.45).clamp(0.0, 1.0) as f32;
+                RunicHud { id: r.id, name: r.name, remaining_frac: self.runics.cooldown_frac(r), ready: self.runics.ready(r), color: w.runic_color, light: w.runic_light, glow: w.runic_glow, flash }
             })
         };
         let bar = |e: &EnemyView, st: &StunTracker| EnemyBar {
@@ -767,6 +776,9 @@ impl Engine {
         HudState {
             hp_frac: self.hp_shown,
             hp_trail_frac: self.hp_trail,
+            hp_hit_age: (now - self.hp_hit_at).min(1000.0) as f32,
+            rage_flash: if self.rage.active { (1.0 - (now - self.rage_on_at) / 0.55).clamp(0.0, 1.0) as f32 } else { 0.0 },
+            weapon_disc: weapon.disc_color,
             rage_frac: self.rage_shown,
             rage_ready: self.rage.ready(),
             rage_active: self.rage.active,

@@ -286,22 +286,51 @@ fn main() {
         let slot = |id: Option<&'static str>, cd: f32| {
             id.map(|id| {
                 let r = d.runic(id);
-                RunicHud { id: r.id, name: r.name, remaining_frac: cd, ready: cd <= 0.0, color: w.runic_color, light: w.runic_light, glow: w.runic_glow }
+                RunicHud { id: r.id, name: r.name, remaining_frac: cd, ready: cd <= 0.0, color: w.runic_color, light: w.runic_light, glow: w.runic_glow, flash: 0.0 }
             })
         };
         state.weapon_icon = w.icon;
         state.weapon_name = w.name;
+        state.weapon_disc = w.disc_color;
         let cd = state.runic_light.as_ref().map(|r| r.remaining_frac).unwrap_or(0.0);
         state.runic_light = slot(w.light_runic, cd);
         state.runic_heavy = slot(w.heavy_runic, 0.0);
     }
-    // `--bars HP,TRAIL,RAGE`: set the bars (for frame-by-frame motion previews)
+    // `--bars HP,TRAIL,RAGE[,HIT_AGE[,RAGE_ON]]`: set the bars (for frame-by-frame motion previews); RAGE_ON > 0 shows
+    // Spartan Rage burning with that much of its start flash left
     if let Some(v) = args.iter().position(|a| a == "--bars").and_then(|i| args.get(i + 1)) {
         let n: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
-        if n.len() == 3 {
+        if n.len() >= 3 {
             (state.hp_frac, state.hp_trail_frac, state.rage_frac) = (n[0], n[1], n[2]);
             state.rage_ready = n[2] >= 0.999;
+            state.hp_hit_age = n.get(3).copied().unwrap_or(100.0);
+            if let Some(r) = n.get(4).filter(|r| **r > 0.0) {
+                state.rage_active = true;
+                state.rage_ready = false;
+                state.rage_flash = (*r - 1.0).clamp(0.0, 1.0);
+            }
         }
+    }
+    // `--cooling L,H`: the light and heavy runics' remaining cooldown (0..1), `--flash L,H`: their flash
+    for (key, cool) in [("--cooling", true), ("--flash", false)] {
+        if let Some(v) = args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)) {
+            let n: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+            for (slot, val) in [&mut state.runic_light, &mut state.runic_heavy].into_iter().zip(n) {
+                if let Some(r) = slot {
+                    if cool {
+                        r.remaining_frac = val;
+                        r.ready = val <= 0.0;
+                    } else {
+                        r.flash = val;
+                    }
+                }
+            }
+        }
+    }
+    // `--thrown`: the weapon held is out of Kratos' hand (axe) or has spears out
+    if args.iter().any(|a| a == "--thrown") {
+        state.recall_available = true;
+        state.recall_label = if state.weapon_name == "Draupnir Spear" { "Detonate" } else { "Recall" };
     }
     if args.iter().any(|a| a == "--picker") {
         let opts: Vec<_> = d.all_runics().filter(|r| r.weapon == "leviathan_axe" && r.tier == gowring_core::sheets::RunicTier::Light).collect();
@@ -330,9 +359,9 @@ fn main() {
                 let x = if align == Align::Center { x - cv.text_w(&text, px) / 2.0 } else { x };
                 cv.text(x, y, px, &text, color, alpha);
             }
-            DrawCmd::Bar { rect, frac, trail, color, lead, segments, alpha, .. } => cv.prims(&vector::rbar(&rect, frac, trail, color, lead, segments, alpha)),
-            DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, aura, alpha, .. } => {
-                cv.prims(&vector::runic_plate(cx, cy, rx, ry, color, light, 1.0 - remaining, aura, alpha));
+            DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha, .. } => cv.prims(&vector::rbar_fx(&rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha)),
+            DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, aura, flash, alpha, .. } => {
+                cv.prims(&vector::runic_plate_fx(cx, cy, rx, ry, color, light, 1.0 - remaining, aura, flash, alpha));
                 let s = ry * 0.62;
                 if let Some(v) = icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: cx - s, y: cy - s, w: s * 2.0, h: s * 2.0 }, 0xFFFFFF, alpha)) {
                     cv.prims(&v);
