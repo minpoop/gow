@@ -342,6 +342,108 @@ impl Skeleton {
     }
 }
 
+/// One draw of a character mesh, from its `MESH_<name>` chunk (layout worked out from Kratos's `MESH_heroa00_0`): a
+/// u32 record count at +0x10 and from +0x40 one self-relative u32 offset per record. A record holds a level-of-detail
+/// distance (+0x00), a bounding radius (+0x0C), half extents (+0x10) and centre (+0x1C), then from +0x30: vertex
+/// bytes, index offset (+0x38), vertex offset (+0x40), vertex count, triangle count, a format code, the record's
+/// index, index count (+0x5C); at +0x80 the stream count (+0x84); at the offset in +0x60 one 8-byte entry per stream
+/// (semantic, format, components) and at the offset in +0x64 each stream's start within the vertex bytes. Streams
+/// are stored one after another, not interleaved. The vertex and index offsets address the character's whole GPU
+/// buffer, most of which is streamed from outside the WAD; the WAD's `MG_<name>_gpu` holds only the lowest levels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshRecord {
+    pub lod_distance: f32,
+    pub centre: [f32; 3],
+    pub half_extent: [f32; 3],
+    pub vertex_bytes: u32,
+    pub index_offset: u64,
+    pub vertex_offset: u64,
+    pub vertices: u32,
+    pub triangles: u32,
+    pub format: u32,
+    pub indices: u32,
+    /// (semantic, format, components, start within the vertex bytes) for each stream.
+    pub streams: Vec<(u8, u8, u8, u32)>,
+}
+
+/// The draws in a `MESH_<name>` chunk.
+pub fn mesh_records(b: &[u8]) -> Vec<MeshRecord> {
+    let n = u32_at(b, 0x10).unwrap_or(0) as usize;
+    let f32_at = |o: usize| u32_at(b, o).map(f32::from_bits);
+    let mut out = Vec::new();
+    for i in 0..n.min(1 << 16) {
+        let at = 0x40 + 4 * i;
+        let Some(rel) = u32_at(b, at) else { break };
+        let o = at + rel as usize;
+        let rec = (|| {
+            let streams_n = *b.get(o + 0x84)? as usize;
+            let (lay, starts) = (o + u32_at(b, o + 0x60)? as usize, o + u32_at(b, o + 0x64)? as usize);
+            let streams = (0..streams_n)
+                .map(|s| Some((*b.get(lay + 8 * s)?, *b.get(lay + 8 * s + 1)?, *b.get(lay + 8 * s + 2)?, u32_at(b, starts + 4 * s)?)))
+                .collect::<Option<Vec<_>>>()?;
+            Some(MeshRecord {
+                lod_distance: f32_at(o)?,
+                centre: [f32_at(o + 0x1C)?, f32_at(o + 0x20)?, f32_at(o + 0x24)?],
+                half_extent: [f32_at(o + 0x10)?, f32_at(o + 0x14)?, f32_at(o + 0x18)?],
+                vertex_bytes: u32_at(b, o + 0x30)?,
+                index_offset: u32_at(b, o + 0x38)? as u64,
+                vertex_offset: u32_at(b, o + 0x40)? as u64,
+                vertices: u32_at(b, o + 0x44)?,
+                triangles: u32_at(b, o + 0x48)?,
+                format: u32_at(b, o + 0x4C)?,
+                indices: u32_at(b, o + 0x5C)?,
+                streams,
+            })
+        })();
+        match rec {
+            Some(r) => out.push(r),
+            None => break,
+        }
+    }
+    out
+}
+
+impl MeshRecord {
+    /// How many of the positions at the start of `bytes` (the record's vertex bytes) fall inside its bounds.
+    pub fn positions_inside(&self, bytes: &[u8]) -> usize {
+        let slack = 0.005;
+        (0..self.vertices as usize)
+            .filter(|v| {
+                (0..3).all(|c| {
+                    let o = v * 12 + c * 4;
+                    bytes.get(o..o + 4).map(|x| f32::from_le_bytes(x.try_into().unwrap())).is_some_and(|x| (x - self.centre[c]).abs() <= self.half_extent[c] + slack)
+                })
+            })
+            .count()
+    }
+}
+
+/// Where in `bytes` a run of `rec.vertices` positions inside the record's bounds starts (4-byte aligned), if anywhere.
+pub fn find_positions(bytes: &[u8], rec: &MeshRecord) -> Option<usize> {
+    let need = rec.vertices as usize;
+    if need == 0 {
+        return None;
+    }
+    let slack = 0.005;
+    let inside = |o: usize| (0..3).all(|c| bytes.get(o + 4 * c..o + 4 * c + 4).map(|x| f32::from_le_bytes(x.try_into().unwrap())).is_some_and(|x| (x - rec.centre[c]).abs() <= rec.half_extent[c] + slack));
+    // three interleaved runs, one per alignment of a 12-byte position against 4-byte steps
+    let mut run = [0usize; 3];
+    let mut o = 0;
+    while o + 12 <= bytes.len() {
+        let lane = (o / 4) % 3;
+        if inside(o) {
+            run[lane] += 1;
+            if run[lane] == need {
+                return Some(o + 12 - need * 12);
+            }
+        } else {
+            run[lane] = 0;
+        }
+        o += 4;
+    }
+    None
+}
+
 /// Words in a set's name that mark Kratos's everyday moves: such sets are saved whole for working out how bone motion
 /// is stored (the smallest sets are single curves, not bones).
 pub const STUDY_WORDS: &[&str] = &["Idle", "attAxe", "attBlade", "attSpear", "attFist", "Rage", "Dodge", "Evade", "Roll", "Block", "Parry", "Walk", "Run", "Turn", "Throw", "Recall", "Hit"];
@@ -727,5 +829,67 @@ mod tests {
         let (slo, shi) = skinned.iter().fold((f32::MAX, f32::MIN), |(l, h), y| (l.min(*y), h.max(*y)));
         println!("skinned joints stand {slo:.3}..{shi:.3}");
         assert!(shi > 1.5 && shi < 2.5 && slo > -0.1, "{slo}..{shi}");
+    }
+
+    #[test]
+    fn mesh_records_read_their_bounds_buffers_and_streams() {
+        // two records laid out as in Kratos's MESH chunk (self-relative offsets, streams after the record)
+        let rec = |lod: f32, nv: u32, vb: u32| {
+            let mut r = vec![0u8; 0x98];
+            r[0..4].copy_from_slice(&lod.to_le_bytes());
+            for (k, v) in [0.1f32, 0.2, 0.3, -0.2, 1.1, 0.05].iter().enumerate() {
+                r[0x10 + 4 * k..0x14 + 4 * k].copy_from_slice(&v.to_le_bytes());
+            }
+            for (o, v) in [(0x30, nv * 12), (0x38, vb + nv * 12), (0x40, vb), (0x44, nv), (0x48, nv / 3), (0x4C, 7170), (0x5C, nv), (0x60, 0x88), (0x64, 0x90)] {
+                r[o..o + 4].copy_from_slice(&(v as u32).to_le_bytes());
+            }
+            r[0x84] = 1;
+            r[0x88..0x8C].copy_from_slice(&[0, 0, 3, 0]);
+            r
+        };
+        let mut b = vec![0u8; 0x48];
+        b[0x10..0x14].copy_from_slice(&2u32.to_le_bytes());
+        let r0 = rec(1.5, 3, 0);
+        let r1 = rec(8.0, 6, 64);
+        b[0x40..0x44].copy_from_slice(&((0x48 - 0x40) as u32).to_le_bytes());
+        b[0x44..0x48].copy_from_slice(&((0x48 + r0.len() - 0x44) as u32).to_le_bytes());
+        b.extend(&r0);
+        b.extend(&r1);
+        let rs = mesh_records(&b);
+        assert_eq!(rs.len(), 2);
+        assert_eq!(rs[1].vertex_offset, 64);
+        assert_eq!(rs[1].vertices, 6);
+        assert_eq!(rs[0].centre, [-0.2, 1.1, 0.05]);
+        assert_eq!(rs[0].streams, vec![(0, 0, 3, 0)]);
+        // positions inside the bounds are counted, others not
+        let pos: Vec<u8> = [[-0.25f32, 1.0, 0.1], [-0.2, 1.1, 0.05], [5.0, 0.0, 0.0]].iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
+        assert_eq!(rs[0].positions_inside(&pos), 2);
+    }
+
+    /// Run against a player's own probe files: `GOWRING_MESH=MESH.bin GOWRING_MG_GPU=gpu.bin cargo test -p gowring-gow
+    /// real_mesh -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_mesh_records_and_a_resident_level_of_detail() {
+        let (Ok(mesh), Ok(gpu)) = (std::env::var("GOWRING_MESH"), std::env::var("GOWRING_MG_GPU")) else { return };
+        let rs = mesh_records(&std::fs::read(mesh).unwrap());
+        let gpu = std::fs::read(gpu).unwrap();
+        println!("{} records; first: {:?}", rs.len(), rs[0]);
+        // Kratos: record 1 (219 vertices, a belt piece's lowest level) is the first thing in the WAD's GPU chunk
+        assert_eq!(rs[1].positions_inside(&gpu), rs[1].vertices as usize);
+        let far = rs.iter().map(|r| r.vertex_offset + r.vertex_bytes as u64).max().unwrap();
+        println!("the whole buffer spans {far} bytes; the WAD holds {}", gpu.len());
+    }
+
+    #[test]
+    fn a_records_positions_are_found_after_unrelated_bytes() {
+        let rec = MeshRecord { lod_distance: 1.0, centre: [0.0, 1.0, 0.0], half_extent: [0.1, 0.1, 0.1], vertex_bytes: 36, index_offset: 0, vertex_offset: 0, vertices: 3, triangles: 1, format: 0, indices: 3, streams: vec![] };
+        let mut b = vec![0xFFu8; 20]; // not floats in range
+        for p in [[0.05f32, 1.02, -0.03], [0.0, 0.95, 0.01], [-0.08, 1.07, 0.09]] {
+            b.extend(p.iter().flat_map(|x| x.to_le_bytes()));
+        }
+        b.extend([0xFFu8; 8]);
+        assert_eq!(find_positions(&b, &rec), Some(20));
+        assert_eq!(find_positions(&b[..40], &rec), None);
     }
 }
