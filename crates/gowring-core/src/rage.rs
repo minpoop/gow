@@ -146,8 +146,9 @@ mod tests {
         let hits: Vec<_> = out.iter().filter(|c| matches!(c, Command::Damage { .. })).collect();
         assert_eq!(hits.len(), 1);
         assert!(matches!(ev[0], Event::RageOn));
-        // Kratos roars as it starts (the sheet's Elden Ring animation)
-        assert!(d.rage.er_anim > 0 && out.iter().any(|c| matches!(c, Command::PlayAnim(id) if *id == d.rage.er_anim)));
+        // no forced animation: the override one sent in 0.1.35 left Kratos stuck in it
+        assert_eq!(d.rage.er_anim, 0);
+        assert!(!out.iter().any(|c| matches!(c, Command::PlayAnim(_))));
         assert_eq!(r.damage_mult(), d.rage.damage_mult);
         // gains are ignored while burning
         let before = r.meter;

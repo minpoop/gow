@@ -1,4 +1,8 @@
-Thirty-sixth alpha, from your note before the next test: "can we make a debug key to give max rage", and D-pad up/down "still swapping my potions/spells around so i cant heal", where "in gow normally heals would come from enemies drops".
+Thirty-seventh alpha, from your 0.1.35 test: "Upon using rage my character got stuck in an animation which I then couldn't do anything so I closed the game."
+
+- **Spartan Rage no longer locks Kratos in place.** As Rage started, the mod forced Elden Ring's Rallying Cry roar through a scripted-event shortcut that skips the game's own way of ending an animation, so Kratos stayed in it. The forced roar is gone: Rage now starts straight away, with its burst, heal and speed-up. A roar may come back later through the game's normal skill system, the way runic animations already play and end cleanly.
+
+Not yet tried in play, because Rage stopped the last test. These are the same as in 0.1.35:
 
 - **F10 fills Spartan Rage.** Press F10 on the keyboard at any time to fill the meter, then L3 + R3 to set it off. A message confirms it. The key can be changed in `settings.json` (`debug_rage_key`).
 - **D-pad up and down no longer change your spell or quick item.** They cast your runics, but Elden Ring was also cycling your spells and items on the same press, which moved the flask out of the use-item slot. The mod now puts your selection back after each runic press. Changes you make in the menu still stick, and the flask stays on Square / X (use item).
@@ -10,4 +14,4 @@ Also in this build, from your 0.1.33 test and not yet tried in play:
 - **The Blades of Chaos are a whip on your existing character.** The old Caestus is turned into the whip, so you don't need a new character, and the "kit equipped" check passes again.
 - **Hoarfrost Stomp's animation is recognised**, and the probe folder saves Kratos's own skeleton.
 
-Still an alpha: finishers, throws and recalls have no animation yet; Spartan Rage's roar is untested.
+Still an alpha: finishers, throws and recalls have no animation yet, and Rage has no roar for now.

@@ -726,6 +726,8 @@ impl Bridge {
                         None => crate::log::once("cast-visual", "enemy_damage", &format!("runic `{runic}`: effects applied; no animation set for it")),
                     }
                 }
+                // An override animation skips the behaviour that ends it: the Rallying Cry sent this way at Rage in
+                // 0.1.35 held the player in it until the game was closed. Nothing sends one now (rage.er_anim 0).
                 Command::PlayAnim(id) => {
                     if let Some(p) = wcm.main_player.as_mut() {
                         p.chr_ins.modules.event.request_animation_id = *id;
