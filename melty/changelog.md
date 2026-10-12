@@ -1,8 +1,8 @@
-Thirty-fourth alpha: Kratos starts to move. From your note "how about we try to add in animations".
+Thirty-fifth alpha, from your 0.1.33 test ("the hud looks almost perfect", "sometimes when i cast the runic attacks they come out twice", "the weapon for the chaos blades is still a fist weapon").
 
-- **Runic attacks now animate.** Each runic plays an Elden Ring skill's animation as it is cast: Hoarfrost Stomp and Chilling Mist for the Leviathan Axe's frost runics, Flame of the Redmanes for the Blades of Chaos, Thunderbolt, Lightning Slash and Lightning Ram for the Draupnir Spear. The runics still do their own damage and effects; the skill costs no FP. This is the first try at it, so it may not work for every runic or weapon: the log records each attempt, and a runic whose animation does not start three times in a row is cast without one for the rest of the session.
-- **Spartan Rage starts with a roar.** Kratos plays the Rallying Cry gesture as Rage takes hold.
-- **The Blades of Chaos swing like whips.** Since the first build they had the Caestus's punches by mistake (the mod asked Elden Ring for the wrong weapon type); they now carry the whip's long lashing moveset.
-- **Groundwork for Ragnarök's own animations.** About three minutes into play, the background check now also writes Kratos's skeleton and samples of his animation files to `%LOCALAPPDATA%\GowRing\kratos_probe` on your PC, so the format can be studied. Nothing from it is used in game, and nothing leaves your PC unless you send it.
+- **Runics come out once.** The mod pressed the skill button in a way the game kept queued, so skills with a follow-up (Thunderbolt on the spear) struck a second time about two seconds later. It now presses once, and while the skill plays no further skill-button press reaches it.
+- **The Blades of Chaos are a whip on your existing character too.** Elden Ring only hands out the kit when a character is made, so your character kept the old Caestus. That weapon is now turned into the whip (moveset, look and skill), so you don't need a new character. This also fixes the "kit equipped" check that failed in the test.
+- **Every runic's animation is recognised.** Hoarfrost Stomp played on the axe but was counted as a miss (its animations are numbered differently from the others); each skill's own animation number is now read from the game.
+- **Kratos's skeleton for the animation research.** The probe folder now saves Kratos's own skeleton (last time it saved a few props'). Your 0.1.33 probe already gave his main animation pack and 308 named animation sets to study.
 
-Still an alpha: finishers, throws and recalls have no animation yet, and every other move is Elden Ring's own.
+Still an alpha: finishers, throws and recalls have no animation yet; Spartan Rage's roar is untested.

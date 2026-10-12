@@ -12,20 +12,35 @@ use std::sync::OnceLock;
 /// Elden Ring's "No Skill": the shield gets it, so the skill button reaches the weapon in Kratos' right hand.
 const NO_SKILL: i32 = 10;
 
-/// Sheet weapon id → carrier row, once the patch has run (read by the bridge when a runic needs its animation).
-static CARRIER_ROWS: OnceLock<HashMap<&'static str, u32>> = OnceLock::new();
+/// Rows earlier versions used as carriers. A character made then still holds that weapon, so the row is turned
+/// into a copy of today's carrier: 0.1.0-0.1.32 gave the Blades the Caestus (fists, by a wrong weapon type).
+const LEGACY_CARRIERS: [(&str, u32); 1] = [("blades_of_chaos", 21000000)];
 
-pub fn carrier_row(weapon: &str) -> Option<u32> {
-    CARRIER_ROWS.get()?.get(weapon).copied()
+/// Sheet weapon id → every row that carries it (today's first, then legacy copies), once the patch has run.
+static CARRIER_ROWS: OnceLock<HashMap<&'static str, Vec<u32>>> = OnceLock::new();
+/// Skill (SwordArtsParam id) → the animation category its animations are in (600 + its animation type).
+static SKILL_CATEGORY: OnceLock<HashMap<i32, i32>> = OnceLock::new();
+
+pub fn carrier_rows(weapon: &str) -> Vec<u32> {
+    CARRIER_ROWS.get().and_then(|m| m.get(weapon).cloned()).unwrap_or_default()
 }
 
-/// Give a carrier weapon row another skill (Ash of War); returns the one it had.
-pub fn set_weapon_skill(row: u32, skill: i32) -> Option<i32> {
-    let repo = unsafe { SoloParamRepository::instance_mut() }.ok()?;
-    let r = repo.get_mut::<EquipParamWeapon>(row)?;
-    let was = r.sword_arts_param_id();
-    r.set_sword_arts_param_id(skill);
-    Some(was)
+pub fn skill_category(skill: i32) -> Option<i32> {
+    SKILL_CATEGORY.get()?.get(&skill).copied()
+}
+
+/// Give every row carrying `weapon` another skill (Ash of War); returns (row, the skill it had).
+pub fn set_weapon_skill(weapon: &str, skill: i32) -> Vec<(u32, i32)> {
+    let Ok(repo) = (unsafe { SoloParamRepository::instance_mut() }) else { return Vec::new() };
+    carrier_rows(weapon)
+        .into_iter()
+        .filter_map(|row| {
+            let r = repo.get_mut::<EquipParamWeapon>(row)?;
+            let was = r.sword_arts_param_id();
+            r.set_sword_arts_param_id(skill);
+            Some((row, was))
+        })
+        .collect()
 }
 
 pub struct Carriers {
@@ -106,9 +121,11 @@ pub fn apply() -> Result<Carriers, String> {
     let mut skills: Vec<i32> = RUNICS.iter().map(|r| r.er_skill).filter(|s| *s > 0).collect();
     skills.sort();
     skills.dedup();
+    let mut category = HashMap::new();
     for id in skills {
         match repo.get_mut::<SwordArtsParam>(id as u32) {
             Some(a) => {
+                category.insert(id, 600 + a.sword_arts_type_new() as i32);
                 notes.push(format!("skill {id}: animation type {} (a{:03}), FP {} -> 0", a.sword_arts_type_new(), 600 + a.sword_arts_type_new() as u32, a.use_magic_point_l2()));
                 a.set_use_magic_point_l1(0);
                 a.set_use_magic_point_l2(0);
@@ -116,6 +133,26 @@ pub fn apply() -> Result<Carriers, String> {
                 a.set_use_magic_point_r2(0);
             }
             None => notes.push(format!("skill {id}: no SwordArtsParam row (its runics play no animation)")),
+        }
+    }
+    let _ = SKILL_CATEGORY.set(category);
+
+    // ---- legacy carriers become copies of today's, so characters made with an earlier version get the same weapon ------
+    let mut carriers: HashMap<&'static str, Vec<u32>> = rows.iter().map(|(w, r)| (*w, vec![*r])).collect();
+    for (weapon, old) in LEGACY_CARRIERS {
+        let Some(&now) = rows.get(weapon) else { continue };
+        if old == now {
+            continue;
+        }
+        match (repo.get::<EquipParamWeapon>(now).cloned(), repo.get_mut::<EquipParamWeapon>(old)) {
+            (Some(copy), Some(slot)) => {
+                *slot = copy;
+                if let Some(v) = carriers.get_mut(weapon) {
+                    v.push(old);
+                }
+                notes.push(format!("{weapon}: row {old} (an earlier version's carrier) is now a copy of {now}"));
+            }
+            _ => notes.push(format!("{weapon}: could not copy row {now} over {old}")),
         }
     }
 
@@ -145,6 +182,6 @@ pub fn apply() -> Result<Carriers, String> {
     if classes == 0 {
         return Err("no CharaInitParam rows 3000..3009 found".into());
     }
-    let _ = CARRIER_ROWS.set(rows.clone());
+    let _ = CARRIER_ROWS.set(carriers);
     Ok(Carriers { rows, notes })
 }

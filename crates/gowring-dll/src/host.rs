@@ -70,6 +70,8 @@ struct Frozen {
 struct SkillCast {
     runic: &'static str,
     skill: i32,
+    /// The animation category the skill's animations are in (600 + its type), when the patch read it.
+    category: Option<i32>,
     at: f64,
     frames: u32,
 }
@@ -79,9 +81,13 @@ struct SkillCast {
 const SKILL_WAIT_S: f64 = 0.6;
 const SKILL_GIVE_UP: u32 = 3;
 
-/// Elden Ring's animation categories for skills (aXXX_YYYYYY ids are XXX * 1 000 000 + YYYYYY).
-fn is_skill_anim(id: i32) -> bool {
-    (600..700).contains(&(id / 1_000_000))
+/// Whether `id` is one of the skill's animations (aXXX_YYYYYY ids are XXX * 1 000 000 + YYYYYY; a skill's are in
+/// category 600 + its animation type, e.g. a664 Thunderbolt, a710 Hoarfrost Stomp).
+fn is_skill_anim(id: i32, category: Option<i32>) -> bool {
+    match category {
+        Some(c) => id / 1_000_000 == c,
+        None => (600..1000).contains(&(id / 1_000_000)),
+    }
 }
 
 struct Burn {
@@ -106,6 +112,9 @@ pub struct Bridge {
     /// The runic animation being started, the misses in a row per runic, and the last animation asked for by id
     /// (with when, so the log can say whether it played).
     skill_cast: Option<SkillCast>,
+    /// Until when the skill button is kept out of the game's queue after a runic's skill started (a skill such as
+    /// Thunderbolt strikes again if the button is pressed during it, which made runics come out twice).
+    skill_quiet_until: f64,
     skill_misses: HashMap<&'static str, u32>,
     anim_asked: Option<(i32, f64)>,
     prev_player_hp: Option<i32>,
@@ -166,6 +175,7 @@ impl Bridge {
             anim_tally: HashMap::new(),
             anim_tally_at: 0.0,
             skill_cast: None,
+            skill_quiet_until: 0.0,
             skill_misses: HashMap::new(),
             anim_asked: None,
             prev_player_hp: None,
@@ -692,14 +702,16 @@ impl Bridge {
                     let misses = self.skill_misses.get(runic).copied().unwrap_or(0);
                     match def.filter(|r| r.er_skill > 0) {
                         Some(r) if misses >= SKILL_GIVE_UP => crate::log::once("skill-gave-up", r.id, &format!("runic `{}`: skill {} showed no animation {SKILL_GIVE_UP} times in a row; cast without one for the rest of the session", r.id, r.er_skill)),
-                        Some(r) => match crate::params::carrier_row(r.weapon) {
-                            Some(row) => {
-                                let was = crate::params::set_weapon_skill(row, r.er_skill);
-                                crate::glog!("skill_anim", "{now:.2}s runic `{}`: skill {} on carrier {row} (was {was:?}); pressing the skill button", r.id, r.er_skill);
-                                self.skill_cast = Some(SkillCast { runic: r.id, skill: r.er_skill, at: now, frames: 0 });
+                        Some(r) => {
+                            let rows = crate::params::set_weapon_skill(r.weapon, r.er_skill);
+                            if rows.is_empty() {
+                                crate::log::once("skill-no-carrier", r.weapon, &format!("runic `{}`: no carrier row for {} yet; no animation", r.id, r.weapon));
+                            } else {
+                                let category = crate::params::skill_category(r.er_skill);
+                                crate::glog!("skill_anim", "{now:.2}s runic `{}`: skill {} (animations a{}) on carrier rows (row, skill it had) {rows:?}; pressing the skill button", r.id, r.er_skill, category.map(|c| format!("{c:03}")).unwrap_or_else(|| "?".into()));
+                                self.skill_cast = Some(SkillCast { runic: r.id, skill: r.er_skill, category, at: now, frames: 0 });
                             }
-                            None => crate::log::once("skill-no-carrier", r.weapon, &format!("runic `{}`: no carrier row for {} yet; no animation", r.id, r.weapon)),
-                        },
+                        }
                         None => crate::log::once("cast-visual", "enemy_damage", &format!("runic `{runic}`: effects applied; no animation set for it")),
                     }
                 }
@@ -738,14 +750,17 @@ impl Bridge {
             self.my_mask = new_mask;
             // a runic's skill: hold the skill button (after the masks, so it gets through) until the skill's
             // animation starts or the wait runs out
+            let l2 = ActionBits(ActionBits::bit(ErAction::L2));
             if let Some(sc) = self.skill_cast.as_mut() {
                 sc.frames += 1;
                 let ta = &p.chr_ins.modules.time_act;
-                let cur = ta.anim_queue[ta.read_idx as usize % ta.anim_queue.len()].anim_id;
+                let slot = &ta.anim_queue[ta.read_idx as usize % ta.anim_queue.len()];
+                let (cur, len) = (slot.anim_id, slot.anim_length);
                 let age = now - sc.at;
-                if is_skill_anim(cur) {
+                if is_skill_anim(cur, sc.category) {
                     crate::glog!("skill_anim", "runic `{}`: skill {} animation a{:03}_{:06} started after {age:.2}s ({} frames held)", sc.runic, sc.skill, cur / 1_000_000, cur % 1_000_000, sc.frames);
                     self.skill_misses.insert(sc.runic, 0);
+                    self.skill_quiet_until = now + (len as f64).clamp(0.5, 4.0);
                     self.skill_cast = None;
                 } else if age > SKILL_WAIT_S {
                     let n = self.skill_misses.entry(sc.runic).or_default();
@@ -753,16 +768,23 @@ impl Bridge {
                     crate::glog!("skill_anim", "runic `{}`: no skill animation after {age:.2}s (playing a{:03}_{:06}); miss {n} of {SKILL_GIVE_UP}", sc.runic, cur / 1_000_000, cur % 1_000_000);
                     self.skill_cast = None;
                 } else {
+                    // one press, then held: nothing left queued for the game to read as a second press
                     let ar = &mut p.chr_ins.modules.action_request;
-                    let l2 = ActionBits(ActionBits::bit(ErAction::L2));
                     set_er_bits(&mut ar.action_requests, l2, true);
-                    set_er_bits(&mut ar.queued_action_inputs, l2, true);
-                    set_er_bits(&mut ar.readback_queued_inputs, l2, true);
                     if sc.frames == 1 {
                         set_er_bits(&mut ar.new_action_presses, l2, true);
                         set_er_bits(&mut ar.readback_new_presses, l2, true);
                     }
                 }
+            } else if now < self.skill_quiet_until {
+                // while the skill plays, no skill-button press reaches it (no second strike)
+                let ar = &mut p.chr_ins.modules.action_request;
+                set_er_bits(&mut ar.new_action_presses, l2, false);
+                set_er_bits(&mut ar.queued_action_inputs, l2, false);
+                set_er_bits(&mut ar.cancel_ready_actions, l2, false);
+                set_er_bits(&mut ar.readback_new_presses, l2, false);
+                set_er_bits(&mut ar.readback_queued_inputs, l2, false);
+                set_er_bits(&mut ar.readback_cancel_ready, l2, false);
             }
             if let Some(s) = anim_speed {
                 p.chr_ins.modules.behavior.animation_speed = s;

@@ -129,7 +129,8 @@ impl Runtime {
         let ids = self.bridge.last_equip;
         // weapon param ids carry the upgrade level in the last two digits
         let have = |row: u32| ids.iter().any(|id| *id > 0 && (*id as u32) / 100 == row / 100);
-        let missing: Vec<&str> = c.rows.iter().filter(|(_, row)| !have(**row)).map(|(n, _)| *n).collect();
+        // a character made with an earlier version holds that version's carrier, which the patch turned into a copy
+        let missing: Vec<&str> = c.rows.iter().filter(|(n, row)| !have(**row) && !crate::params::carrier_rows(n).iter().any(|r| have(*r))).map(|(n, _)| *n).collect();
         if missing.is_empty() {
             crate::glog!("kit", "all {} carrier weapons are equipped: {ids:?}", c.rows.len());
             crate::testmode::KIT_OK.store(true, Ordering::SeqCst);

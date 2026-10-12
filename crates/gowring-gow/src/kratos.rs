@@ -112,10 +112,11 @@ fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// Study Kratos's WAD bytes `wad` (decompressed) and his `.as` files `sets` ((name, bytes) each), writing into `out`:
+/// Study Kratos's WAD bytes `wad` (decompressed) and his `.as` files `sets` ((name, bytes) each), writing into `out`
+/// (`focus`: the character's name in chunk names, e.g. `heroa00`, whose skeleton is saved first):
 /// `entries.tsv` (the whole chunk table), `goProto*.bin` and `skeleton.json`, the animation chunks under `chunks/`
 /// (at most 48 MB) and the smallest streamed sets under `as_sets/`. Returns the report's text.
-pub fn export_from(wad: &[u8], sets: &[(String, Vec<u8>)], out: &Path, mut more: impl FnMut() -> bool) -> String {
+pub fn export_from(wad: &[u8], sets: &[(String, Vec<u8>)], focus: &str, out: &Path, mut more: impl FnMut() -> bool) -> String {
     let mut o = String::new();
     let _ = std::fs::create_dir_all(out);
     let Some(es) = crate::wtoc::read(wad) else {
@@ -130,8 +131,10 @@ pub fn export_from(wad: &[u8], sets: &[(String, Vec<u8>)], out: &Path, mut more:
     let bytes_of = |e: &crate::wtoc::Entry| wad.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
     let _ = writeln!(o, "chunk table: {} entries -> entries.tsv ({} decompressed bytes read)", es.len(), wad.len());
 
-    // the skeleton
-    for e in es.iter().filter(|e| e.name.starts_with("goProto") && e.id == 1).take(4) {
+    // the skeleton: the character's own first (a WAD also holds props with one-joint skeletons), then a few others
+    let mut protos: Vec<&crate::wtoc::Entry> = es.iter().filter(|e| e.name.starts_with("goProto") && e.id == 1).collect();
+    protos.sort_by_key(|e| (!e.name.to_ascii_lowercase().contains(&focus.to_ascii_lowercase()), std::cmp::Reverse(e.length)));
+    for (k, e) in protos.iter().take(4).enumerate() {
         let Some(b) = bytes_of(e) else {
             let _ = writeln!(o, "{}: beyond the bytes read (at {:#x})", e.name, e.file_off);
             continue;
@@ -147,7 +150,7 @@ pub fn export_from(wad: &[u8], sets: &[(String, Vec<u8>)], out: &Path, mut more:
                 let _ = write!(j, "    {{\"index\": {i}, \"parent\": {}, \"fields\": {:?}}}{}\n", jt.parent, jt.fields, if i + 1 < js.len() { "," } else { "" });
             }
             j.push_str("  ]\n}\n");
-            let _ = std::fs::write(out.join("skeleton.json"), j);
+            let _ = std::fs::write(out.join(if k == 0 { "skeleton.json".to_string() } else { format!("skeleton_{}.json", safe(&e.name)) }), j);
             let roots = js.iter().filter(|j| j.parent < 0).count();
             let _ = writeln!(o, "  skeleton.json written with {stride}-byte records: {} joints, {roots} root(s); first joints: {:?}", js.len(), js.iter().take(8).map(|j| j.parent).collect::<Vec<_>>());
         }
@@ -329,7 +332,7 @@ mod tests {
         let mut set_file = set_header("heroa00_locomotion", 3, 0, 0x400, 1, &[0x100]);
         set_file.resize(0x400, 0xAB);
         let dir = std::env::temp_dir().join(format!("gowring-kratos-{}", std::process::id()));
-        let report = export_from(&wad, &[("r_heroa00.as".into(), set_file)], &dir, || true);
+        let report = export_from(&wad, &[("r_heroa00.as".into(), set_file)], "heroa00", &dir, || true);
         assert!(report.contains("2 joints; parent-before-child holds for 2/2 with 8-byte records"), "{report}");
         assert!(report.contains("set `heroa00_locomotion` flags 5"), "{report}");
         assert!(report.contains("`heroa00_locomotion` id 1 flags 3 files 1"), "{report}");

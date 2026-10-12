@@ -372,7 +372,7 @@ fn export_kratos(gow: &std::path::Path, out: &std::path::Path) -> String {
         .collect();
     o.push_str(&format!("{} ({} decompressed bytes read); .as files beside it: {:?}\n", wad.display(), buf.len(), sets.iter().map(|(n, b)| (n.as_str(), b.len())).collect::<Vec<_>>()));
     let until = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    o.push_str(&gowring_gow::kratos::export_from(&buf, &sets, out, || std::time::Instant::now() < until));
+    o.push_str(&gowring_gow::kratos::export_from(&buf, &sets, "heroa00", out, || std::time::Instant::now() < until));
     o.push_str(&format!("written to {}\n", out.display()));
     o
 }
