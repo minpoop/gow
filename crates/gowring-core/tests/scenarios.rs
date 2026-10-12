@@ -324,9 +324,17 @@ fn l1_and_dpad_change_the_equipped_runic_and_the_cast_follows() {
     assert!(w.enemy(30).hp < 900.0 && w.enemy(31).hp < 900.0, "a ring hits all around");
     // the picker goes away after a few seconds; the heavy slot is separate and wraps round
     assert!(w.idle(3.5).hud.runic_picker.is_none());
-    for _ in 0..3 {
+    // a held D-pad flickers while it is masked (the 0.1.28 log: one press changed the slot three times in 0.1 s);
+    // a press only counts again after a real release
+    w.step(&[ChangeItem], &[L1]);
+    w.step(&[], &[L1]);
+    w.step(&[ChangeItem], &[L1]);
+    w.step(&[], &[L1]);
+    w.step(&[ChangeItem], &[L1]);
+    assert_eq!(w.idle(0.3).hud.runic_heavy.as_ref().unwrap().name, "Winter's Maw", "one press, one change");
+    for _ in 0..2 {
         w.step(&[ChangeItem], &[L1]);
-        w.idle(0.1);
+        w.idle(0.3);
     }
     let hud = w.idle(0.1).hud;
     assert_eq!(hud.runic_heavy.unwrap().name, "Glacial Cleave", "three presses go all the way round");

@@ -295,6 +295,14 @@ fn main() {
         state.runic_light = slot(w.light_runic, cd);
         state.runic_heavy = slot(w.heavy_runic, 0.0);
     }
+    // `--bars HP,TRAIL,RAGE`: set the bars (for frame-by-frame motion previews)
+    if let Some(v) = args.iter().position(|a| a == "--bars").and_then(|i| args.get(i + 1)) {
+        let n: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+        if n.len() == 3 {
+            (state.hp_frac, state.hp_trail_frac, state.rage_frac) = (n[0], n[1], n[2]);
+            state.rage_ready = n[2] >= 0.999;
+        }
+    }
     if args.iter().any(|a| a == "--picker") {
         let opts: Vec<_> = d.all_runics().filter(|r| r.weapon == "leviathan_axe" && r.tier == gowring_core::sheets::RunicTier::Light).collect();
         state.runic_light = Some(RunicHud { id: opts[1].id, name: opts[1].name, remaining_frac: 0.0, ready: true, ..Default::default() });

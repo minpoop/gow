@@ -2,7 +2,7 @@
 
 use crate::data::Data;
 use crate::engine::Event;
-use crate::sheets::{RunicDef, RunicShape, RunicStatus, RunicTier};
+use crate::sheets::{RunicDef, RunicShape, RunicStatus};
 use crate::types::*;
 use std::collections::HashMap;
 
@@ -163,6 +163,7 @@ impl Runics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sheets::RunicTier;
 
     fn enemy(id: EnemyId, x: f32, z: f32) -> EnemyView {
         EnemyView { id, pos: Vec3::new(x, 0.0, z), hp: 900.0, max_hp: 900.0, alive: true, boss: false, engaged: true, radius: 0.6, staggered: false }

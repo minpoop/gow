@@ -123,6 +123,26 @@ pub struct Engine {
     equipped: HashMap<(&'static str, RunicTier), &'static str>,
     /// The slot the runic picker shows, and until when.
     picker: Option<(RunicTier, f64)>,
+    /// Per D-pad slot (light, heavy): when its button was last seen down, and whether a change may happen (one per
+    /// press: a held D-pad flickers while it is masked, so a press only counts again after a real release).
+    dpad_seen: [f64; 2],
+    cycle_armed: [bool; 2],
+    /// What the health and Rage bars show: they ease toward the real values instead of jumping.
+    hp_shown: f32,
+    rage_shown: f32,
+    /// When health was last lost (the damage trail waits a moment before it drains).
+    hp_hit_at: f64,
+}
+
+/// How long a D-pad button must be up before L1 + D-pad changes a runic again.
+const DPAD_RELEASE_S: f64 = 0.15;
+
+/// Move `shown` toward `target`, taking about `tau` seconds (0 = at once).
+fn ease(shown: f32, target: f32, dt: f32, tau: f32) -> f32 {
+    if tau <= 0.0 || (target - shown).abs() < 0.0015 {
+        return target;
+    }
+    shown + (target - shown) * (1.0 - (-dt / tau).exp())
 }
 
 impl Engine {
@@ -164,6 +184,11 @@ impl Engine {
             status_gc_at: 0.0,
             equipped: HashMap::new(),
             picker: None,
+            dpad_seen: [f64::NEG_INFINITY; 2],
+            cycle_armed: [true; 2],
+            hp_shown: 1.0,
+            rage_shown: 0.0,
+            hp_hit_at: f64::NEG_INFINITY,
         }
     }
 
@@ -411,11 +436,22 @@ impl Engine {
                     self.melee.heavy_pressed(d, weapon, now);
                 }
             }
-            // Runics: D-pad up / down casts; with L1 held it changes the runic in that slot instead
+            // Runics: D-pad up / down casts; with L1 held it changes the runic in that slot instead (once per press)
+            for (i, id) in ["b_runic_light", "b_runic_heavy"].iter().enumerate() {
+                if input::chord_down(d, d.binding(id), f) {
+                    self.dpad_seen[i] = now;
+                } else if now - self.dpad_seen[i] > DPAD_RELEASE_S {
+                    self.cycle_armed[i] = true;
+                }
+            }
             if melee_weapon && (inp.runic_light || inp.runic_heavy) {
                 let tier = if inp.runic_light { RunicTier::Light } else { RunicTier::Heavy };
+                let slot = if inp.runic_light { 0 } else { 1 };
                 if inp.guard_held {
-                    self.cycle_runic(tier, now, &mut out, &mut ev);
+                    if self.cycle_armed[slot] {
+                        self.cycle_armed[slot] = false;
+                        self.cycle_runic(tier, now, &mut out, &mut ev);
+                    }
                 } else if let Some(r) = self.equipped(weapon, tier) {
                     self.runics.press(r, now, &mut out);
                 }
@@ -657,9 +693,23 @@ impl Engine {
     fn build_hud(&mut self, f: &Frame, now: f64, hp_frac: f32, in_combat: bool, finisher_target: Option<EnemyId>, inp: &Inputs) -> HudState {
         let d = self.d;
         let weapon = self.weapon;
-        // delayed damage trail
-        let fall = if d.tuning.hp_trail_s > 0.0 { f.dt / d.tuning.hp_trail_s } else { 1.0 };
-        self.hp_trail = if hp_frac >= self.hp_trail { hp_frac } else { (self.hp_trail - fall).max(hp_frac) };
+        // The bars ease to their real values, like Ragnarök's: a loss drops quickly and leaves a pale trail that waits
+        // a moment and then drains; a gain (healing, Rage) fills smoothly.
+        let t = &d.tuning;
+        if hp_frac < self.hp_shown - 0.001 {
+            self.hp_hit_at = now;
+        }
+        let tau = if hp_frac < self.hp_shown { t.bar_ease_down_s } else { t.bar_ease_up_s };
+        self.hp_shown = ease(self.hp_shown, hp_frac, f.dt, tau);
+        if self.hp_shown >= self.hp_trail {
+            self.hp_trail = self.hp_shown;
+        } else if now - self.hp_hit_at >= t.hp_trail_hold_s as f64 {
+            let fall = if t.hp_trail_s > 0.0 { f.dt / t.hp_trail_s } else { 1.0 };
+            self.hp_trail = (self.hp_trail - fall).max(self.hp_shown);
+        }
+        let rage = self.rage.frac();
+        let tau = if rage < self.rage_shown { t.bar_ease_down_s } else { t.bar_ease_up_s };
+        self.rage_shown = ease(self.rage_shown, rage, f.dt, tau);
 
         let runic = |r: Option<&'static RunicDef>| {
             r.map(|r| {
@@ -715,9 +765,9 @@ impl Engine {
         let voice = f.voice.as_ref();
 
         HudState {
-            hp_frac,
+            hp_frac: self.hp_shown,
             hp_trail_frac: self.hp_trail,
-            rage_frac: self.rage.frac(),
+            rage_frac: self.rage_shown,
             rage_ready: self.rage.ready(),
             rage_active: self.rage.active,
             runic_light: runic(self.equipped(weapon, RunicTier::Light)),

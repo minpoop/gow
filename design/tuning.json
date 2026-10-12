@@ -76,6 +76,21 @@
    "min": 0,
    "max": 5
   },
+  "hp_trail_hold_s": {
+   "type": "float",
+   "min": 0,
+   "max": 5
+  },
+  "bar_ease_down_s": {
+   "type": "float",
+   "min": 0,
+   "max": 2
+  },
+  "bar_ease_up_s": {
+   "type": "float",
+   "min": 0,
+   "max": 3
+  },
   "runic_min_targets_voice": {
    "type": "int",
    "min": 1,
@@ -134,6 +149,9 @@
    "greeting_delay_s": 4,
    "stun_hold_s": 1.0,
    "hp_trail_s": 0.6,
+   "hp_trail_hold_s": 0.5,
+   "bar_ease_down_s": 0.08,
+   "bar_ease_up_s": 0.35,
    "runic_min_targets_voice": 3,
    "boss_sight_range_m": 80,
    "rng_seed": 7031,
