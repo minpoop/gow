@@ -214,6 +214,10 @@ fn main() {
         }
     }
     let d = Data::get();
+    if let Some(dir) = args.iter().position(|a| a == "--demo").and_then(|i| args.get(i + 1)) {
+        demo(&cv, dir);
+        return;
+    }
     if args.iter().any(|a| a == "--runics") {
         // every runic on its plate, one row per weapon: light ones, then heavy ones
         for (row, w) in ["leviathan_axe", "blades_of_chaos", "draupnir_spear"].iter().enumerate() {
@@ -352,43 +356,7 @@ fn main() {
         Some(((p.x / (p.z * t * (w as f32 / h as f32)) * 0.5 + 0.5) * w as f32, (0.5 + 0.18 - 0.5 * (1.0 / (p.z * t)) * 0.9) * h as f32 * 0.0 + h as f32 * (0.5 + 0.35 / (p.z * t) * 0.9)))
     };
     for c in hud::draw_list(d, &state, Screen { w: w as f32, h: h as f32 }, &project) {
-        match c {
-            DrawCmd::Overlay { color, alpha } => cv.rect(0.0, 0.0, w as f32, h as f32, color, alpha),
-            DrawCmd::Shapes { prims } => cv.prims(&prims),
-            DrawCmd::Label { x, y, px, text, color, alpha, align } => {
-                let x = if align == Align::Center { x - cv.text_w(&text, px) / 2.0 } else { x };
-                cv.text(x, y, px, &text, color, alpha);
-            }
-            DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha, .. } => cv.prims(&vector::rbar_fx(&rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha)),
-            DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, aura, flash, alpha, .. } => {
-                cv.prims(&vector::runic_plate_fx(cx, cy, rx, ry, color, light, 1.0 - remaining, aura, flash, alpha));
-                let s = ry * 0.62;
-                if let Some(v) = icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: cx - s, y: cy - s, w: s * 2.0, h: s * 2.0 }, 0xFFFFFF, alpha)) {
-                    cv.prims(&v);
-                }
-            }
-            DrawCmd::Icon { rect, asset, color, alpha, mono } => match asset.and_then(|id| if mono { vector::mono_icon(id, &rect, color, alpha) } else { vector::icon_prims(id, &rect, color, alpha) }) {
-                Some(v) => cv.prims(&v),
-                None => {
-                    cv.outline(rect.x, rect.y, rect.w, rect.h, color, 0.6 * alpha);
-                    if let Some(id) = asset {
-                        cv.text(rect.x + 4.0, rect.y + 4.0, 16.0, &id.rsplit('_').next().unwrap_or(id).to_ascii_uppercase(), color, 0.8 * alpha);
-                    }
-                }
-            },
-            DrawCmd::Prompt { rect, text, color, alpha, .. } => {
-                cv.rect(rect.x, rect.y, rect.w, rect.h, 0x000000, 0.45 * alpha);
-                if let Some(t) = text {
-                    cv.text(rect.x + 12.0, rect.y + rect.h * 0.18, rect.h * 0.55, &t, color, alpha);
-                }
-            }
-            DrawCmd::Text { rect, px, text, color, alpha, align, .. } => {
-                cv.rect(rect.x, rect.y, rect.w, rect.h, 0x000000, 0.55 * alpha);
-                let tw = cv.text_w(&text, px);
-                let x = if align == Align::Center { rect.x + (rect.w - tw) / 2.0 } else { rect.x + 16.0 };
-                cv.text(x, rect.y + (rect.h - px) / 2.0, px, &text, color, alpha);
-            }
-        }
+        paint(&mut cv, c);
     }
     if backdrop.is_some() {
         save(&cv, &out);
@@ -420,4 +388,173 @@ fn save(cv: &Canvas, out: &str) {
     enc.set_depth(png::BitDepth::Eight);
     enc.write_header().unwrap().write_image_data(&buf).unwrap();
     println!("wrote {out} ({w}x{h})");
+}
+
+/// Draw one HUD command with the preview's rasteriser.
+fn paint(cv: &mut Canvas, c: DrawCmd) {
+    let (w, h) = (cv.w, cv.h);
+    match c {
+        DrawCmd::Overlay { color, alpha } => cv.rect(0.0, 0.0, w as f32, h as f32, color, alpha),
+        DrawCmd::Shapes { prims } => cv.prims(&prims),
+        DrawCmd::Label { x, y, px, text, color, alpha, align } => {
+            let x = if align == Align::Center { x - cv.text_w(&text, px) / 2.0 } else { x };
+            cv.text(x, y, px, &text, color, alpha);
+        }
+        DrawCmd::Bar { rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha, .. } => cv.prims(&vector::rbar_fx(&rect, frac, trail, trail_color, trail_alpha, color, lead, segments, flash, alpha)),
+        DrawCmd::Ring { cx, cy, rx, ry, remaining, icon, color, light, aura, flash, alpha, .. } => {
+            cv.prims(&vector::runic_plate_fx(cx, cy, rx, ry, color, light, 1.0 - remaining, aura, flash, alpha));
+            let s = ry * 0.62;
+            if let Some(v) = icon.and_then(|id| vector::mono_icon(id, &hud::Rect { x: cx - s, y: cy - s, w: s * 2.0, h: s * 2.0 }, 0xFFFFFF, alpha)) {
+                cv.prims(&v);
+            }
+        }
+        DrawCmd::Icon { rect, asset, color, alpha, mono } => match asset.and_then(|id| if mono { vector::mono_icon(id, &rect, color, alpha) } else { vector::icon_prims(id, &rect, color, alpha) }) {
+            Some(v) => cv.prims(&v),
+            None => {
+                cv.outline(rect.x, rect.y, rect.w, rect.h, color, 0.6 * alpha);
+                if let Some(id) = asset {
+                    cv.text(rect.x + 4.0, rect.y + 4.0, 16.0, &id.rsplit('_').next().unwrap_or(id).to_ascii_uppercase(), color, 0.8 * alpha);
+                }
+            }
+        },
+        DrawCmd::Prompt { rect, text, color, alpha, .. } => {
+            cv.rect(rect.x, rect.y, rect.w, rect.h, 0x000000, 0.45 * alpha);
+            if let Some(t) = text {
+                cv.text(rect.x + 12.0, rect.y + rect.h * 0.18, rect.h * 0.55, &t, color, alpha);
+            }
+        }
+        DrawCmd::Text { rect, px, text, color, alpha, align, .. } => {
+            cv.rect(rect.x, rect.y, rect.w, rect.h, 0x000000, 0.55 * alpha);
+            let tw = cv.text_w(&text, px);
+            let x = if align == Align::Center { rect.x + (rect.w - tw) / 2.0 } else { rect.x + 16.0 };
+            cv.text(x, rect.y + (rect.h - px) / 2.0, px, &text, color, alpha);
+        }
+    }
+}
+
+/// `--demo DIR`: play a scripted fight through the real rules engine (`SimWorld`) and save every third frame (20 per
+/// second) of the HUD's corner, with a caption, as DIR/00000.png ... — the frames of an animated preview.
+fn demo(base: &Canvas, dir: &str) {
+    use gowring_core::sheets::ErAction::*;
+    use gowring_core::sim::{SimEnemy, SimWorld};
+    let d = Data::get();
+    std::fs::create_dir_all(dir).expect("demo dir");
+    let mut w = SimWorld::new();
+    // fast Rage for the demo, no Mimir lines over the HUD
+    w.engine.set_tuning(gowring_core::Tuning { rage_gain: 14.0, mimir_chance: 0.0, ..Default::default() });
+    let max = w.player.max_hp;
+    w.add_enemy(SimEnemy::new(7, 0.0, 1.8, 90000.0));
+    let (sw, sh) = (base.w as f32, base.h as f32);
+    let project = |_p: Vec3| -> Option<(f32, f32)> { None };
+    // (from, to, caption)
+    let captions = [
+        (0.0, 1.0, "Leviathan Axe"),
+        (1.0, 2.6, "Taking a hit: the lost chunk flashes, turns red, fades"),
+        (2.6, 4.4, "Light runic used: white flash, grey, refills from the bottom"),
+        (4.4, 5.3, "Healing fills smoothly"),
+        (5.3, 7.0, "Hold L1 + D-pad up: change the light runic"),
+        (7.0, 9.0, "Axe thrown: the Triangle sits in the disc (recall)"),
+        (9.0, 10.8, "Swap to the Blades of Chaos"),
+        (10.8, 12.9, "Draupnir Spear: spears out, Triangle on the disc's edge"),
+        (12.9, 14.9, "Hits fill Spartan Rage; L3 + R3 burn when it is full"),
+        (14.9, 18.5, "Spartan Rage: white-hot flash, runics fade, Rage's mark"),
+    ];
+    let mut t = 0.0f64;
+    let mut frame = 0usize;
+    let mut tick = 0usize;
+    let (mut hit_done, mut heal_done) = (false, false);
+    let mut rage_pressed = false;
+    while t < 18.5 {
+        let at = |a: f64| t >= a && t < a + 0.016;
+        let within = |a: f64, b: f64| t >= a && t < b;
+        let mut pressed = Vec::new();
+        let mut hold = Vec::new();
+        if t >= 1.0 && !hit_done {
+            w.player.hp = max * 0.62;
+            hit_done = true;
+        }
+        if t >= 4.4 && !heal_done {
+            w.player.hp = max * 0.9;
+            heal_done = true;
+        }
+        if at(2.6) {
+            pressed.push(SwitchForm);
+        }
+        if within(5.3, 5.9) {
+            hold.push(L1);
+        }
+        if at(5.45) {
+            pressed.push(SwitchForm);
+        }
+        if within(7.0, 7.6) {
+            hold.push(L2);
+        }
+        if at(7.45) {
+            pressed.push(R1);
+        }
+        if at(8.6) {
+            pressed.push(Action);
+        }
+        if at(9.0) {
+            w.right_slot = 1;
+        }
+        if at(9.8) {
+            pressed.push(ChangeItem);
+        }
+        if at(10.8) {
+            w.right_slot = 2;
+        }
+        if within(11.2, 11.8) {
+            hold.push(L2);
+        }
+        if at(11.65) {
+            pressed.push(R1);
+        }
+        if at(12.9) {
+            w.right_slot = 0;
+        }
+        if within(13.0, 14.7) && ((t - 13.0) / 0.32).fract() < 0.05 {
+            pressed.push(R1);
+        }
+        if t >= 14.9 && !rage_pressed && w.engine.rage().ready() {
+            pressed.push(L3);
+            pressed.push(R3);
+            rage_pressed = true;
+        }
+        let out = w.step(&pressed, &hold);
+        t += w.dt as f64;
+        tick += 1;
+        if tick % 3 != 0 {
+            continue;
+        }
+        let mut cv = Canvas { w: base.w, h: base.h, px: base.px.clone(), font: base.font.clone() };
+        let mut hud = out.hud.clone();
+        hud.ui_scale = 1.0;
+        for c in hud::draw_list(d, &hud, Screen { w: sw, h: sh }, &project) {
+            paint(&mut cv, c);
+        }
+        let cap = captions.iter().find(|(a, b, _)| t >= *a && t < *b).map(|c| c.2).unwrap_or("");
+        let (x0, y0, cw, ch) = (0usize, 500usize, 760usize, 580usize);
+        cv.rect(x0 as f32, y0 as f32, cw as f32, 40.0, 0x000000, 0.65);
+        cv.text(x0 as f32 + 14.0, y0 as f32 + 8.0, 22.0, cap, 0xFFD27A, 1.0);
+        save_region(&cv, &format!("{dir}/{frame:05}.png"), x0, y0, cw, ch);
+        frame += 1;
+    }
+    println!("wrote {frame} frames to {dir}");
+}
+
+fn save_region(cv: &Canvas, out: &str, x0: usize, y0: usize, w: usize, h: usize) {
+    let mut buf = Vec::with_capacity(w * h * 3);
+    for y in y0..y0 + h {
+        for x in x0..x0 + w {
+            for c in cv.px[y * cv.w + x] {
+                buf.push((c.clamp(0.0, 1.0) * 255.0) as u8);
+            }
+        }
+    }
+    let file = std::fs::File::create(out).expect("create png");
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w as u32, h as u32);
+    enc.set_color(png::ColorType::Rgb);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().unwrap().write_image_data(&buf).unwrap();
 }
