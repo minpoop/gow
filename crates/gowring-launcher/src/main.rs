@@ -289,6 +289,11 @@ fn background_diagnose(ctx: &Ctx) {
                     Ok(t) => t,
                     Err(_) => "\n== Kratos's skeleton and animations\n(the export panicked)\n".into(),
                 });
+                // Elden Ring's install, names and sizes only, for planning Kratos's body part
+                if let Some(er) = c.er.as_deref() {
+                    let li = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| list_er_install(er, &c.local.join("kratos_tex").join("er_install.tsv"))));
+                    text.push_str(&li.unwrap_or_else(|_| "\n-- Elden Ring install listing panicked\n".into()));
+                }
                 match std::fs::write(c.local.join("diagnose.txt"), text) {
                     Ok(()) => c.log("diagnose: wrote diagnose.txt"),
                     Err(e) => c.log(&format!("diagnose: could not write the report: {e}")),
@@ -380,6 +385,8 @@ fn export_kratos(gow: &std::path::Path, out: &std::path::Path) -> String {
         let _ = std::fs::create_dir_all(&model);
         export_kratos_model(gow, &buf, &model) + &format!("written to {}\n", model.display())
     }));
+    let local = out.parent().unwrap_or(out);
+    o.push_str(&step("textures and default outfit", &|| export_kratos_look(gow, &buf, &local.join("kratos_tex"), &local.join("kratos_default"))));
     o.push_str(&step(".as walk", &|| walk_kratos_sets(&wad, out)));
     o.push_str(&format!("written to {}\n", out.display()));
     o
@@ -503,6 +510,212 @@ fn write_kratos_model(pack: &std::path::Path, mesh: &[u8], mg: &[u8], gpu: &[u8]
         let _ = std::fs::write(out.join("samples").join(format!("{h:016x}_records_{}.bin", recs.join("_"))), b);
     }
     o.push_str(&format!("{saved} bytes of whole resources under samples/; took {:.1}s\n", t0.elapsed().as_secs_f32()));
+    o
+}
+
+/// Kratos's default look, for working out his textures and the Elden Ring part: each of his materials' texture list
+/// (the id-60 chunk after its `MAT_` chunk) in `kratos_tex/materials.tsv`; the default outfit's textures decoded from
+/// the texture packs as previews (`kratos_tex/textures/*.png`, at most 512 pixels a side) with a few whole blocks kept
+/// for checking the untiling (`kratos_tex/raw/`); and the default outfit's mesh resources from `root.lodpack`
+/// (`kratos_default/`). Once per pack size and version (`done.txt` in each folder).
+fn export_kratos_look(gow: &std::path::Path, buf: &[u8], tex_out: &std::path::Path, mesh_out: &std::path::Path) -> String {
+    use gowring_gow::kratos::{material_names, mesh_records, mg_parts, DEFAULT_OUTFIT};
+    let mut o = String::from("\n-- Kratos's default look: materials, textures and mesh resources (kratos_tex, kratos_default)\n");
+    let Some(es) = gowring_gow::wtoc::read(buf) else { return o + "no chunk table\n" };
+    let bytes = |e: &gowring_gow::wtoc::Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
+    let chunk = |name: &str, id: u16| es.iter().find(|e| e.name == name && e.id == id).and_then(bytes);
+    let (Some(mesh), Some(mg)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0", 1)) else { return o + "MESH_heroa00_0 or MG_heroa00_0 not in the bytes read\n" };
+    // the mesh's material table is the id-60 chunk right after MESH_heroa00_0
+    let Some(mesh_at) = es.iter().position(|e| e.name == "MESH_heroa00_0" && e.id == 1) else { return o };
+    let Some(table) = es.get(mesh_at + 1).filter(|e| e.id == 60).and_then(bytes) else { return o + "no material table after MESH_heroa00_0\n" };
+    let mats = material_names(table);
+    let rs = mesh_records(mesh);
+    let parts = mg_parts(mg);
+    let default_records: Vec<usize> = DEFAULT_OUTFIT.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect();
+    let default_mats: std::collections::BTreeSet<u16> = default_records.iter().filter_map(|k| rs.get(*k)).map(|r| r.material).collect();
+    let Some(pack) = find_file(gow, "root.lodpack", 5) else { return o + "root.lodpack not found\n" };
+    let stamp = format!("v1 {}\n", std::fs::metadata(&pack).map(|m| m.len()).unwrap_or(0));
+    let done = |dir: &std::path::Path| std::fs::read_to_string(dir.join("done.txt")).is_ok_and(|d| d == stamp);
+    let mut tsv = String::from("material\tname\tdefault\treferences\n");
+    // (material, texture name, key from its id)
+    let mut wanted: Vec<(u16, String, u64)> = Vec::new();
+    let _ = std::fs::create_dir_all(tex_out.join("materials"));
+    for (i, m) in mats.iter().enumerate() {
+        let at = es.iter().position(|e| &e.name == m && e.id == 1);
+        let refs = at.and_then(|a| es.get(a + 1)).filter(|e| e.id == 60).and_then(|e| bytes(e)).map(|b| {
+            let _ = std::fs::write(tex_out.join("materials").join(format!("{i:02}_{m}_refs.bin")), b);
+            gowring_gow::kratos::references(b)
+        });
+        let refs = refs.unwrap_or_default();
+        let is_default = default_mats.contains(&(i as u16));
+        if is_default {
+            wanted.extend(refs.iter().filter(|r| r.1.starts_with("TX_")).map(|(id, n)| (i as u16, n.clone(), u64::from_le_bytes(id[8..16].try_into().unwrap()))));
+        }
+        tsv.push_str(&format!("{i}\t{m}\t{}\t{}\n", is_default as u8, refs.iter().map(|r| r.1.as_str()).collect::<Vec<_>>().join(" ")));
+    }
+    let _ = std::fs::write(tex_out.join("materials.tsv"), tsv);
+    o.push_str(&format!("{} materials ({} used by the default outfit), {} texture references in those\n", mats.len(), default_mats.len(), wanted.len()));
+    // textures: every texture pack's table, then each wanted texture's blocks
+    let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
+    if !done(tex_out) {
+        let t0 = std::time::Instant::now();
+        let mut tocs: Vec<(std::path::PathBuf, gowring_gow::texpack::Toc)> = Vec::new();
+        if let Ok(rd) = std::fs::read_dir(&wad_dir) {
+            let mut names: Vec<std::path::PathBuf> = rd.flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().to_ascii_lowercase().ends_with(".texpack.toc")).collect();
+            // the shared pack first
+            names.sort_by_key(|p| (!p.to_string_lossy().to_ascii_lowercase().ends_with("root.texpack.toc"), p.clone()));
+            for p in names {
+                if let Ok(t) = gowring_gow::texpack::Toc::read(&p) {
+                    tocs.push((p.with_extension(""), t));
+                }
+            }
+        }
+        o.push_str(&format!("{} texture pack tables read in {:.1}s\n", tocs.len(), t0.elapsed().as_secs_f32()));
+        let _ = std::fs::create_dir_all(tex_out.join("textures"));
+        let _ = std::fs::create_dir_all(tex_out.join("raw"));
+        let mut list = String::from("material\ttexture\tpack\twidth\theight\tblocks\tresult\n");
+        let (mut ok, mut failed, mut raw_saved, mut png_bytes) = (0, 0, 0usize, 0usize);
+        let mut seen = std::collections::BTreeSet::new();
+        for (mat, name, id_key) in &wanted {
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            // the name's hex suffix (unless the 60-character name cut it short), else the key in the reference's id
+            let key = name.rsplit('_').next().filter(|h| h.len() == 16).and_then(|h| u64::from_str_radix(h, 16).ok());
+            let found = [key, Some(*id_key), Some(id_key.swap_bytes())].into_iter().flatten().find_map(|k| tocs.iter().find_map(|(p, t)| t.find(k).map(|x| (p, x))));
+            let line = match found {
+                // small textures can live in the WAD alone (linear mips)
+                None => match (chunk(name, 1).and_then(gowring_gow::wadtex::parse_parm), chunk(name, 29)) {
+                    (Some(parm), Some(gpu)) => match gowring_gow::wadtex::decode(&parm, gpu) {
+                        Ok((img, _)) => {
+                            ok += 1;
+                            if let Ok(png) = gowring_gow::dds::to_png(&gowring_gow::dds::downscale(&img, 512)) {
+                                png_bytes += png.len();
+                                let _ = std::fs::write(tex_out.join("textures").join(format!("{name}.png")), png);
+                            }
+                            format!("{}\t{}\t0\tdecoded from the WAD ({:?})", img.w, img.h, img.format)
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            format!("\t\t0\tWAD only: {e:#}")
+                        }
+                    },
+                    _ => {
+                        failed += 1;
+                        "\t\t0\tnot in any texture pack or the WAD's first 256 MB".to_string()
+                    }
+                },
+                Some((p, t)) => {
+                    let read = std::fs::File::open(p).and_then(|mut f| t.records.iter().map(|r| gowring_gow::texpack::read_record(&mut f, r).map_err(std::io::Error::other)).collect::<std::io::Result<Vec<_>>>());
+                    match read {
+                        Err(e) => format!("read failed: {e}"),
+                        Ok(blocks) => {
+                            let total: usize = blocks.iter().map(|b| b.len()).sum();
+                            if raw_saved + total <= 3 << 20 && raw_saved < 3 << 20 && total <= 1 << 20 {
+                                for (k, b) in blocks.iter().enumerate() {
+                                    let _ = std::fs::write(tex_out.join("raw").join(format!("{name}_{k}.bin")), b);
+                                }
+                                raw_saved += total;
+                            }
+                            match gowring_gow::texpack::decode(&blocks) {
+                                Ok(img) => {
+                                    ok += 1;
+                                    let small = gowring_gow::dds::downscale(&img, 512);
+                                    if let Ok(png) = gowring_gow::dds::to_png(&small) {
+                                        if png_bytes + png.len() <= 20 << 20 {
+                                            png_bytes += png.len();
+                                            let _ = std::fs::write(tex_out.join("textures").join(format!("{name}.png")), png);
+                                        }
+                                    }
+                                    format!("{}\t{}\t{}\tdecoded ({:?})", img.w, img.h, t.records.len(), img.format)
+                                }
+                                Err(e) => {
+                                    failed += 1;
+                                    format!("\t\t{}\t{e:#}", t.records.len())
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            let pack_name = found.map(|(p, _)| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()).unwrap_or_default();
+            list.push_str(&format!("{mat}\t{name}\t{pack_name}\t{line}\n"));
+        }
+        let _ = std::fs::write(tex_out.join("textures.tsv"), list);
+        o.push_str(&format!("textures: {ok} decoded, {failed} failed, {} previews ({png_bytes} bytes), {raw_saved} bytes of raw blocks; {:.1}s\n", seen.len(), t0.elapsed().as_secs_f32()));
+        if ok > 0 {
+            let _ = std::fs::write(tex_out.join("done.txt"), &stamp);
+        }
+    } else {
+        o.push_str("textures already written for this install\n");
+    }
+    // the default outfit's mesh resources
+    if !done(mesh_out) {
+        let _ = std::fs::create_dir_all(mesh_out);
+        match gowring_gow::lodpack::Toc::read_from_pack(&pack).and_then(|toc| Ok((toc, std::fs::File::open(&pack)?))) {
+            Err(e) => o.push_str(&format!("{e:#}\n")),
+            Ok((toc, mut f)) => {
+                let (mut n, mut total) = (0, 0usize);
+                let mut seen = std::collections::BTreeSet::new();
+                for k in &default_records {
+                    let Some(r) = rs.get(*k) else { continue };
+                    if r.hash == 0 || !seen.insert(r.hash) {
+                        continue;
+                    }
+                    if let Ok(Some(b)) = toc.read(&mut f, r.hash) {
+                        let recs: Vec<String> = rs.iter().enumerate().filter(|(_, x)| x.hash == r.hash).map(|(i, _)| i.to_string()).collect();
+                        total += b.len();
+                        n += 1;
+                        let _ = std::fs::write(mesh_out.join(format!("{:016x}_records_{}.bin", r.hash, recs.join("_"))), b);
+                    }
+                }
+                o.push_str(&format!("default outfit: {} draws, {n} resources ({total} bytes) written to {}\n", default_records.len(), mesh_out.display()));
+                if n > 0 {
+                    let _ = std::fs::write(mesh_out.join("done.txt"), &stamp);
+                }
+            }
+        }
+    } else {
+        o.push_str("default outfit resources already written for this install\n");
+    }
+    o + &format!("written to {} and {}\n", tex_out.display(), mesh_out.display())
+}
+
+/// Elden Ring's install, names and sizes only (`er_install.tsv`, a few levels deep), and a summary of what a body
+/// part could be built from: packed archives (`.bhd`/`.bdt`), loose parts or characters (an unpacked install), the
+/// Oodle library, and ModEngine2's mod folders.
+fn list_er_install(er: &std::path::Path, out: &std::path::Path) -> String {
+    let mut o = String::from("\n-- Elden Ring install (for Kratos's body part)\n");
+    let root = if er.is_file() { er.parent().unwrap_or(er) } else { er };
+    let mut files: Vec<(String, u64)> = Vec::new();
+    fn walk(base: &std::path::Path, dir: &std::path::Path, depth: usize, files: &mut Vec<(String, u64)>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            match e.metadata() {
+                Ok(m) if m.is_dir() && depth > 0 && files.len() < 20000 => walk(base, &p, depth - 1, files),
+                Ok(m) if m.is_file() => files.push((p.strip_prefix(base).unwrap_or(&p).to_string_lossy().replace('\\', "/"), m.len())),
+                _ => {}
+            }
+        }
+    }
+    walk(root, root, 3, &mut files);
+    files.sort();
+    let _ = std::fs::create_dir_all(out.parent().unwrap_or(root));
+    let _ = std::fs::write(out, files.iter().map(|(p, n)| format!("{p}\t{n}\n")).collect::<String>());
+    let has = |f: &dyn Fn(&str) -> bool| files.iter().filter(|(p, _)| f(&p.to_ascii_lowercase())).count();
+    o.push_str(&format!(
+        "{} files under {}; archives (.bhd {}, .bdt {}); loose parts/ {} and chr/ {} files; oo2core dlls {}; regulation.bin {}\n",
+        files.len(),
+        root.display(),
+        has(&|p| p.ends_with(".bhd")),
+        has(&|p| p.ends_with(".bdt")),
+        has(&|p| p.starts_with("parts/")),
+        has(&|p| p.starts_with("chr/")),
+        has(&|p| p.contains("oo2core")),
+        has(&|p| p.ends_with("regulation.bin")),
+    ));
+    o.push_str(&format!("written to {}\n", out.display()));
     o
 }
 

@@ -505,6 +505,20 @@ pub fn material_names(b: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// The entries of an id-60 reference list (a mesh's material table, or a material's list of textures, parent
+/// materials and shaders): (16-byte id, name). For textures the id is 8 bytes of tag and then the texture's key.
+pub fn references(b: &[u8]) -> Vec<([u8; 16], String)> {
+    let n = u32_at(b, 0).unwrap_or(0) as usize;
+    (0..n.min(4096))
+        .map_while(|i| {
+            let at = 8 + 76 * i;
+            let id: [u8; 16] = b.get(at..at + 16)?.try_into().ok()?;
+            let raw = b.get(at + 16..at + 76)?;
+            Some((id, String::from_utf8_lossy(&raw[..raw.iter().position(|c| *c == 0).unwrap_or(60)]).into_owned()))
+        })
+        .collect()
+}
+
 /// One level of detail of a part: `draws` records of the `MESH_` chunk from `first`, shown up to `distance`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Level {
@@ -573,8 +587,8 @@ fn unorm10(x: u32, k: u32) -> f32 {
 
 /// Every vertex of a draw from the resource holding it (see [`draw_geometry`] for the checks). Normals are packed
 /// 10:10:10:2 (unorm to [-1, 1]); UVs are f32, unorm16 or snorm16 pairs; joints are four u16 or u8 global joint numbers,
-/// or (Kratos's skin) ten 11-bit numbers packed from the top of the 128-bit value its four u32 words make when read
-/// first-word-highest; weights are 10:10:10:2 words holding three weights each (one, two or three words, so 3, 6 or
+/// or four u32 words holding seven u16 joints (low half first) or ten 11-bit joints packed from the top of the 128-bit
+/// value the words make when read first-word-highest (Kratos's skin; record +0x87 & 3 says 4, 7 or 10); weights are 10:10:10:2 words holding three weights each (one, two or three words, so 3, 6 or
 /// 9 stored), largest first, with one more weight making the sum 1.
 pub fn draw_vertices(res: &[u8], rec: &MeshRecord) -> Option<Vertices> {
     let (position, triangles) = draw_geometry(res, rec)?;
@@ -615,6 +629,8 @@ pub fn draw_vertices(res: &[u8], rec: &MeshRecord) -> Option<Vertices> {
             let joints: Vec<u16> = match (jfmt, jn) {
                 (4, 4) => at(jstart, jstride.max(8), v, 8)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
                 (8, 4) => at(jstart, jstride.max(4), v, 4)?.iter().map(|x| *x as u16).collect(),
+                // seven influences (two weight words): u16 pairs, low half first
+                (2, 4) if (wfmt, wn) == (2, 2) => at(jstart, jstride.max(16), v, 16)?.chunks_exact(2).take(7).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
                 (2, 4) => {
                     let b = at(jstart, jstride.max(16), v, 16)?;
                     let x = (0..4).fold(0u128, |acc, k| (acc << 32) | word(b, k) as u128);

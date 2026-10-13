@@ -120,6 +120,26 @@ pub fn decode_raw(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> 
     }
 }
 
+/// The image shrunk by whole factors of two until its longer side is at most `max_side` (each pixel the average of
+/// the ones it covers).
+pub fn downscale(img: &Image, max_side: u32) -> Image {
+    let (mut w, mut h, mut px) = (img.w, img.h, img.rgba.clone());
+    while w.max(h) > max_side && w > 1 && h > 1 {
+        let (nw, nh) = (w / 2, h / 2);
+        let mut out = vec![0u8; (nw * nh * 4) as usize];
+        for y in 0..nh {
+            for x in 0..nw {
+                for c in 0..4 {
+                    let at = |xx: u32, yy: u32| px[((yy * w + xx) * 4 + c) as usize] as u32;
+                    out[((y * nw + x) * 4 + c) as usize] = ((at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1) + 2) / 4) as u8;
+                }
+            }
+        }
+        (w, h, px) = (nw, nh, out);
+    }
+    Image { w, h, rgba: px, format: img.format }
+}
+
 pub fn to_png(img: &Image) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     {

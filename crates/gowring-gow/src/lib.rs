@@ -19,6 +19,7 @@ pub mod kratos;
 pub mod oodle;
 pub mod prepare;
 pub mod scan;
+pub mod texpack;
 pub mod wad;
 pub mod wadtex;
 pub mod wtoc;
