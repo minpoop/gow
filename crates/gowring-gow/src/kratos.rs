@@ -347,8 +347,10 @@ impl Skeleton {
 /// distance (+0x00), a bounding radius (+0x0C), half extents (+0x10) and centre (+0x1C), then from +0x30: vertex
 /// bytes, index offset (+0x38), vertex offset (+0x40), vertex count, triangle count, a format code, the record's
 /// index, index count (+0x5C); at +0x80 the stream count (+0x84); at the offset in +0x60 one 8-byte entry per stream
-/// (semantic, format, components) and at the offset in +0x64 each stream's start; +0x68 the hash of the resource
-/// holding the draw (0 when it is in the WAD). Streams are stored one after another, not interleaved. A draw's bytes
+/// (semantic, format, components, byte offset within a vertex, u32 buffer slot) and at the offset in +0x64 each
+/// slot's start; +0x68 the hash of the resource holding the draw (0 when it is in the WAD). Most draws give each
+/// stream its own slot (offset 0, stored one after another); a few (Kratos's skin: torso, head, arms) put every stream
+/// in slot 0 at its own offset, interleaved, with a stride where the last of them ends (76 or 80 bytes). A draw's bytes
 /// sit in a resource: the WAD's `MG_<name>_gpu` for the coarsest level of a part, a level-of-detail pack's resource
 /// (see [`crate::lodpack`]) for the others; one resource can hold several draws back to back. In its resource, the
 /// stream starts are offsets from the resource's start, and the u16 indices start at the vertex-bytes field (+0x30),
@@ -368,10 +370,23 @@ pub struct MeshRecord {
     pub triangles: u32,
     pub format: u32,
     pub indices: u32,
-    /// (semantic, format, components, start within the vertex bytes) for each stream.
+    /// (semantic, format, components, where its first vertex's value starts in the resource) for each stream.
     pub streams: Vec<(u8, u8, u8, u32)>,
+    /// Bytes from one vertex's value to the next's, for each stream.
+    pub strides: Vec<u32>,
     /// The resource holding the draw in a level-of-detail pack; 0 when it is in the WAD's GPU chunk.
     pub hash: u64,
+}
+
+/// Bytes of one vertex's value in a stream of `format` with `components`.
+fn element_bytes(format: u8, components: u8) -> u32 {
+    let c = components as u32;
+    match format {
+        0 | 2 => 4 * c,
+        3 => 4,
+        8 => c,
+        _ => 2 * c,
+    }
 }
 
 /// The draws in a `MESH_<name>` chunk.
@@ -386,9 +401,13 @@ pub fn mesh_records(b: &[u8]) -> Vec<MeshRecord> {
         let rec = (|| {
             let streams_n = *b.get(o + 0x84)? as usize;
             let (lay, starts) = (o + u32_at(b, o + 0x60)? as usize, o + u32_at(b, o + 0x64)? as usize);
-            let streams = (0..streams_n)
-                .map(|s| Some((*b.get(lay + 8 * s)?, *b.get(lay + 8 * s + 1)?, *b.get(lay + 8 * s + 2)?, u32_at(b, starts + 4 * s)?)))
+            // (semantic, format, components, offset in the vertex, slot)
+            let layout = (0..streams_n)
+                .map(|s| Some((*b.get(lay + 8 * s)?, *b.get(lay + 8 * s + 1)?, *b.get(lay + 8 * s + 2)?, *b.get(lay + 8 * s + 3)? as u32, u32_at(b, lay + 8 * s + 4)?)))
                 .collect::<Option<Vec<_>>>()?;
+            let stride = |slot: u32| layout.iter().filter(|e| e.4 == slot).map(|e| e.3 + element_bytes(e.1, e.2)).max().unwrap_or(0);
+            let streams = layout.iter().map(|e| Some((e.0, e.1, e.2, u32_at(b, starts + 4 * e.4 as usize)? + e.3))).collect::<Option<Vec<_>>>()?;
+            let strides = layout.iter().map(|e| stride(e.4)).collect();
             Some(MeshRecord {
                 lod_distance: f32_at(o)?,
                 centre: [f32_at(o + 0x1C)?, f32_at(o + 0x20)?, f32_at(o + 0x24)?],
@@ -401,6 +420,7 @@ pub fn mesh_records(b: &[u8]) -> Vec<MeshRecord> {
                 format: u32_at(b, o + 0x4C)?,
                 indices: u32_at(b, o + 0x5C)?,
                 streams,
+                strides,
                 hash: u64_at(b, o + 0x68)?,
             })
         })();
@@ -484,14 +504,16 @@ pub fn mg_parts(b: &[u8]) -> Vec<Vec<Level>> {
 /// A draw's positions and triangles, from the resource holding it; `None` unless every position is inside the
 /// record's bounds and every index names a vertex.
 pub fn draw_geometry(res: &[u8], rec: &MeshRecord) -> Option<(Vec<[f32; 3]>, Vec<[u16; 3]>)> {
-    let (_, fmt, comps, start) = *rec.streams.iter().find(|s| s.0 == 0)?;
+    let k = rec.streams.iter().position(|s| s.0 == 0)?;
+    let (_, fmt, comps, start) = rec.streams[k];
+    let stride = rec.strides.get(k).copied().unwrap_or(12).max(12) as usize;
     if fmt != 0 || comps != 3 || rec.indices % 3 != 0 {
         return None;
     }
     let nv = rec.vertices as usize;
     let at = start as usize;
-    let pos = res.get(at..at + nv * 12)?;
-    if rec.positions_inside(pos) != nv {
+    let pos: Vec<u8> = (0..nv).map(|v| res.get(at + v * stride..at + v * stride + 12)).collect::<Option<Vec<_>>>()?.concat();
+    if rec.positions_inside(&pos) != nv {
         return None;
     }
     let p = pos.chunks_exact(12).map(|c| [0, 4, 8].map(|k| f32::from_le_bytes(c[k..k + 4].try_into().unwrap()))).collect();
@@ -1001,6 +1023,7 @@ mod tests {
         assert_eq!(rs[1].vertices, 6);
         assert_eq!(rs[0].centre, [-0.2, 1.1, 0.05]);
         assert_eq!(rs[0].streams, vec![(0, 0, 3, 0)]);
+        assert_eq!(rs[0].strides, vec![12]);
         // positions inside the bounds are counted, others not
         let pos: Vec<u8> = [[-0.25f32, 1.0, 0.1], [-0.2, 1.1, 0.05], [5.0, 0.0, 0.0]].iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
         assert_eq!(rs[0].positions_inside(&pos), 2);
@@ -1042,6 +1065,37 @@ mod tests {
         let found = find_bytes_in_file(&dir.join("stream.bin"), sig, || true).unwrap();
         assert_eq!(found, Some(base));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn interleaved_draws_read_each_stream_at_its_offset_in_the_vertex() {
+        // one record whose position (f32 x3 at 0) and normal (packed at 12) share slot 0: a 16-byte stride
+        let mut r = vec![0u8; 0xB0];
+        for (k, v) in [0.5f32, 0.5, 0.5, 0.0, 1.0, 0.0].iter().enumerate() {
+            r[0x10 + 4 * k..0x14 + 4 * k].copy_from_slice(&v.to_le_bytes());
+        }
+        for (o, v) in [(0x30, 48u32), (0x44, 3), (0x48, 1), (0x5C, 3), (0x60, 0x90), (0x64, 0xA0)] {
+            r[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        r[0x84] = 2;
+        r[0x90..0x98].copy_from_slice(&[0, 0, 3, 0, 0, 0, 0, 0]);
+        r[0x98..0xA0].copy_from_slice(&[1, 3, 1, 12, 0, 0, 0, 0]);
+        r[0xA0..0xA4].copy_from_slice(&0u32.to_le_bytes());
+        let mut b = vec![0u8; 0x44];
+        b[0x10..0x14].copy_from_slice(&1u32.to_le_bytes());
+        b[0x40..0x44].copy_from_slice(&4u32.to_le_bytes());
+        b.extend(&r);
+        let rs = mesh_records(&b);
+        assert_eq!(rs[0].streams, vec![(0, 0, 3, 0), (1, 3, 1, 12)]);
+        assert_eq!(rs[0].strides, vec![16, 16]);
+        let mut res = Vec::new();
+        for p in [[0.1f32, 1.0, 0.0], [0.2, 1.1, 0.1], [0.0, 0.9, -0.1]] {
+            res.extend(p.iter().flat_map(|x| x.to_le_bytes()));
+            res.extend(0xC0DEu32.to_le_bytes());
+        }
+        res.extend([0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()));
+        let (p, t) = draw_geometry(&res, &rs[0]).unwrap();
+        assert_eq!((p[2], t[0]), ([0.0, 0.9, -0.1], [0, 1, 2]));
     }
 
     #[test]
@@ -1092,6 +1146,7 @@ mod tests {
             format: 0,
             indices: 3,
             streams: vec![(0, 0, 3, at), (1, 3, 1, at + nv * 12)],
+            strides: vec![12, 4],
             hash: 0x1234,
         };
         let mut res = Vec::new();
@@ -1153,11 +1208,19 @@ mod tests {
         println!("{} parts, {} records ({streamed} streamed, {found} in the pack), {} most detailed ({resident_ok} decoded from the WAD)", ps.len(), rs.len(), detail.len());
         assert_eq!(found, streamed);
         assert!(resident_ok > 0);
+        // the skin's interleaved draws, from the resource a player's probe saved (GOWRING_SKIN_SAMPLE)
+        if let Ok(skin) = std::env::var("GOWRING_SKIN_SAMPLE") {
+            let b = std::fs::read(skin).unwrap();
+            for k in 1135..=1140 {
+                let (p, t) = draw_geometry(&b, &rs[k]).unwrap_or_else(|| panic!("record {k}"));
+                println!("record {k}: stride {}, {} vertices, {} triangles", rs[k].strides[0], p.len(), t.len());
+            }
+        }
     }
 
     #[test]
     fn a_records_positions_are_found_after_unrelated_bytes() {
-        let rec = MeshRecord { lod_distance: 1.0, centre: [0.0, 1.0, 0.0], half_extent: [0.1, 0.1, 0.1], vertex_bytes: 36, index_offset: 0, vertex_offset: 0, vertices: 3, triangles: 1, format: 0, indices: 3, streams: vec![], hash: 0 };
+        let rec = MeshRecord { lod_distance: 1.0, centre: [0.0, 1.0, 0.0], half_extent: [0.1, 0.1, 0.1], vertex_bytes: 36, index_offset: 0, vertex_offset: 0, vertices: 3, triangles: 1, format: 0, indices: 3, streams: vec![], strides: vec![], hash: 0 };
         let mut b = vec![0xFFu8; 20]; // not floats in range
         for p in [[0.05f32, 1.02, -0.03], [0.0, 0.95, 0.01], [-0.08, 1.07, 0.09]] {
             b.extend(p.iter().flat_map(|x| x.to_le_bytes()));

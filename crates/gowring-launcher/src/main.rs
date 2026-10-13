@@ -398,7 +398,7 @@ fn export_kratos_model(gow: &std::path::Path, buf: &[u8], out: &std::path::Path)
     };
     let Some(pack) = find_file(gow, "root.lodpack", 5) else { return o + "root.lodpack not found\n" };
     let size = std::fs::metadata(&pack).map(|m| m.len()).unwrap_or(0);
-    let stamp = format!("v1 {size}\n");
+    let stamp = format!("v2 {size}\n");
     if std::fs::read_to_string(out.join("done.txt")).is_ok_and(|d| d == stamp) {
         return o + "already written for this install\n";
     }
@@ -631,14 +631,15 @@ mod tests {
         let mut res: std::collections::BTreeMap<u64, Vec<u8>> = Default::default();
         for r in rs.iter().filter(|r| r.hash != 0) {
             let b = res.entry(r.hash).or_default();
-            let pos = r.streams.iter().find(|s| s.0 == 0).unwrap().3 as usize;
-            let end = (r.vertex_bytes as usize + 2 * r.indices as usize).max(pos + 12 * r.vertices as usize);
+            let k = r.streams.iter().position(|s| s.0 == 0).unwrap();
+            let (pos, stride) = (r.streams[k].3 as usize, r.strides[k] as usize);
+            let end = (r.vertex_bytes as usize + 2 * r.indices as usize).max(pos + stride * r.vertices as usize);
             if b.len() < end {
                 b.resize(end, 0);
             }
             for v in 0..r.vertices as usize {
                 for c in 0..3 {
-                    b[pos + 12 * v + 4 * c..pos + 12 * v + 4 * c + 4].copy_from_slice(&r.centre[c].to_le_bytes());
+                    b[pos + stride * v + 4 * c..pos + stride * v + 4 * c + 4].copy_from_slice(&r.centre[c].to_le_bytes());
                 }
             }
             for i in 0..r.indices as usize {
