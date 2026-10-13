@@ -16,6 +16,7 @@ mod paths;
 mod runtime;
 mod savehook;
 mod settings;
+mod skeleton;
 mod synth;
 mod testmode;
 

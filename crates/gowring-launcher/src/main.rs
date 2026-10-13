@@ -207,6 +207,9 @@ fn play(ctx: &Ctx) -> Result<()> {
     for note in saves::backup(ctx) {
         ctx.log(&note);
     }
+    // Kratos's body part, built from the player's Ragnarök install, must be in the mod folder before the game looks
+    let note = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| install_kratos_part(ctx))).unwrap_or_else(|_| "Kratos's body part: the build panicked".into());
+    ctx.log(&format!("play: {note}"));
     let cfg = me2::write_config(ctx, &dll)?;
     ctx.log(&format!("play: ModEngine2 config {}", cfg.display()));
     let mut cmd = std::process::Command::new(&launcher);
@@ -249,6 +252,55 @@ fn play(ctx: &Ctx) -> Result<()> {
         bail!("Elden Ring did not start. See {}", ctx.local.join("logs").display());
     }
     Ok(())
+}
+
+/// Build Kratos's body part (`bd_m_9701` / `bd_f_9701`) from the player's Ragnarök install once per install and
+/// builder version, keep it in the cache, and copy it into the mod folder ModEngine2 serves (`mod/parts`).
+fn install_kratos_part(ctx: &Ctx) -> String {
+    use gowring_gow::kratos_part::{build_flver_and_tpf, part_files};
+    const BUILD: u32 = 1;
+    let parts = ctx.managed.join("mod").join("parts");
+    let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
+    let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
+        return "Kratos's body part: r_heroa00.wad or root.lodpack not found".into();
+    };
+    let size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let stamp = format!("build {BUILD} wad {} pack {}\n", size(&wad), size(&pack));
+    let cache = ctx.cache.join("kratos_part");
+    let names = ["bd_m_9701.partsbnd.dcx", "bd_f_9701.partsbnd.dcx"];
+    let cached = std::fs::read_to_string(cache.join("stamp.txt")).is_ok_and(|s| s == stamp) && names.iter().all(|n| cache.join(n).exists());
+    let t0 = std::time::Instant::now();
+    let mut note = String::new();
+    if !cached {
+        let built = (|| -> anyhow::Result<String> {
+            let (buf, _) = gowring_gow::lz4::read_file_prefix(&wad, 200 << 20)?;
+            let es = gowring_gow::wtoc::read(&buf).context("no chunk table in r_heroa00.wad")?;
+            let chunk = |name: &str, id: u16| es.iter().find(|e| e.name == name && e.id == id).and_then(|e| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize));
+            let (Some(mesh), Some(mg), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
+                bail!("Kratos's mesh chunks are not in the first 200 MB of r_heroa00.wad");
+            };
+            let (flver, tpf, note) = build_flver_and_tpf(mesh, mg, gpu, &pack)?;
+            std::fs::create_dir_all(&cache)?;
+            for (name, bytes) in part_files(&flver, &tpf) {
+                std::fs::write(cache.join(name), bytes)?;
+            }
+            std::fs::write(cache.join("stamp.txt"), &stamp)?;
+            Ok(note)
+        })();
+        match built {
+            Ok(n) => note = format!("built in {:.1}s: {n}; ", t0.elapsed().as_secs_f32()),
+            Err(e) => return format!("Kratos's body part: could not build it: {e:#}"),
+        }
+    }
+    if let Err(e) = std::fs::create_dir_all(&parts) {
+        return format!("Kratos's body part: {}: {e}", parts.display());
+    }
+    for n in names {
+        if let Err(e) = std::fs::copy(cache.join(n), parts.join(n)) {
+            return format!("Kratos's body part: copying {n}: {e}");
+        }
+    }
+    format!("Kratos's body part: {note}installed in {}", parts.display())
 }
 
 /// While the game loads, write the same report `--diagnose` writes (once per version) so a tester only has to

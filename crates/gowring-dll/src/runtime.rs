@@ -164,6 +164,12 @@ impl Runtime {
             return;
         };
         frame.rays = std::mem::take(&mut self.ray_results);
+        // once per session, a few seconds into the world: the player's skeleton for Kratos's body part
+        if self.entered_at.is_some_and(|t| t.elapsed().as_secs() >= 5) {
+            if let Some(b) = self.bridge.player_behavior_module() {
+                crate::skeleton::dump_once(b);
+            }
+        }
         self.observe_for_tests();
         self.upkeep(&frame);
 

@@ -329,6 +329,15 @@ impl Bridge {
         }
     }
 
+    /// Where the player character's behaviour module is in memory (for reading its skeleton).
+    pub fn player_behavior_module(&self) -> Option<usize> {
+        let wcm = unsafe { WorldChrMan::instance() }.ok()?;
+        let player = wcm.main_player.as_ref()?;
+        let chr: &ChrIns = &player.chr_ins;
+        let b = &chr.modules.behavior;
+        Some(&**b as *const _ as usize)
+    }
+
     /// Read the world. `None` when there is no player yet (title screen, loading).
     pub fn build_frame(&mut self, time: f64, dt: f32, voice: Option<VoiceInfo>) -> Option<Frame> {
         let wcm = unsafe { WorldChrMan::instance() }.ok()?;

@@ -1,9 +1,7 @@
-Forty-third alpha: Kratos's textures and default outfit, read from your Ragnarök install.
+Forty-fourth alpha: the first try at Kratos's body in Elden Ring.
 
-- **Default outfit picked.** Kratos's model carries every armour set on top of each other; the mod now knows which pieces make his default look (the starting leather straps, bracers, belt, cape and fur, plus his head, beard and skin).
-- **His textures.** About three minutes into play, the background check reads the textures of that outfit from your texture packs, decodes them, and writes small previews (at most 512 pixels a side) to `%LOCALAPPDATA%\GowRing\kratos_tex`, with each material's texture list and a few raw pieces for checking the decoding.
-- **His default outfit's 3D data.** The same check copies the default outfit's pieces from `root.lodpack` (about 12 MB) to `%LOCALAPPDATA%\GowRing\kratos_default`, for building his Elden Ring version.
-- **Elden Ring's install.** It also lists Elden Ring's files (names and sizes only) into `kratos_tex\er_install.tsv`, to plan how his body part gets loaded.
-- Kratos's torso, head and arms now decode too (they store their vertices differently).
+- **Kratos's body part.** Before the game starts, the mod builds an Elden Ring armour model of Kratos's default look from your Ragnarök install (about 270,000 triangles: head, beard, skin, straps, bracers, belt, cape, boots) and puts it in the mod's own folder. It is built once and cached; nothing from either game is in the download.
+- **New characters wear it.** A new character on the mod's save starts with a body armour that shows Kratos. In this first version he is a statue that moves and turns with you but does not bend his arms or legs yet, in plain skin colour, with your own character still visible inside him. This version only checks that Elden Ring accepts the model.
+- **Your character's skeleton.** A few seconds into play, the mod reads your character's skeleton (bone names and rest pose) from the game and saves it to `%LOCALAPPDATA%\GowRing\er_skeleton.json`, so Kratos can be bound to it next and move with your animations.
 
-Everything stays on your PC unless you send it. Nothing changes in game in this build.
+Characters made before this version keep their current look.

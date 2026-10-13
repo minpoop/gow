@@ -3,7 +3,7 @@
 //! ten starting classes are rewritten to start with them: a new character on the mashup's own save is
 //! born as Kratos, with the engine itself granting and equipping the kit.
 
-use eldenring::cs::{CharaInitParam, EquipParamWeapon, SoloParam, SoloParamRepository, SwordArtsParam};
+use eldenring::cs::{CharaInitParam, EquipParamProtector, EquipParamWeapon, SoloParam, SoloParamRepository, SwordArtsParam};
 use fromsoftware_shared::FromStatic;
 use gowring_core::sheets::{WeaponKind, ER_TEMPLATES, RAGE, RUNICS, WEAPONS};
 use std::collections::HashMap;
@@ -166,6 +166,25 @@ pub fn apply() -> Result<Carriers, String> {
         }
     }
 
+    // ---- Kratos's body: a body armour whose model is the part the launcher built (bd_m_9701 / bd_f_9701) ------------------
+    // Only when the part is in the mod folder: an armour pointing at a missing model would show nothing at best.
+    let part = crate::paths::get().home.join("mod").join("parts").join("bd_m_9701.partsbnd.dcx");
+    let mut body_row: i32 = -1;
+    if part.exists() {
+        let first_body = repo.rows::<EquipParamProtector>().find(|(_, r)| r.protector_category() == 1 && r.body_equip() && r.equip_model_id() > 0).map(|(id, _)| id);
+        match first_body.and_then(|id| repo.get_mut::<EquipParamProtector>(id).map(|r| (id, r))) {
+            Some((id, r)) => {
+                let was = r.equip_model_id();
+                r.set_equip_model_id(9701);
+                body_row = id as i32;
+                notes.push(format!("body armour {id} (model {was}) now shows Kratos (model 9701)"));
+            }
+            None => notes.push("no body armour row found for Kratos's body part".into()),
+        }
+    } else {
+        notes.push(format!("Kratos's body part not installed ({} missing)", part.display()));
+    }
+
     // ---- the ten starting classes become Kratos ----------------------------------------------------------------------------
     let (axe, blades, spear, shield) = (rows["leviathan_axe"] as i32, rows["blades_of_chaos"] as i32, rows["draupnir_spear"] as i32, rows["guardian_shield"] as i32);
     let vigor = gowring_core::Data::get().loadout.vigor.clamp(1, 99) as u8;
@@ -180,9 +199,9 @@ pub fn apply() -> Result<Carriers, String> {
             c.set_equip_wep_left(shield);
             c.set_equip_subwep_left(-1);
             c.set_equip_subwep_left3(-1);
-            // Kratos fights bare-chested: no armour pieces
+            // Kratos fights bare-chested: no armour pieces, but his body when it is installed
             c.set_equip_helm(-1);
-            c.set_equip_armer(-1);
+            c.set_equip_armer(body_row);
             c.set_equip_gaunt(-1);
             c.set_equip_leg(-1);
             classes += 1;
