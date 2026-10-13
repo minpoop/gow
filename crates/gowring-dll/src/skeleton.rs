@@ -18,7 +18,7 @@ use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM
 static DONE: AtomicBool = AtomicBool::new(false);
 
 /// True when `len` bytes from `addr` are committed, readable memory.
-fn readable(addr: usize, len: usize) -> bool {
+pub(crate) fn readable(addr: usize, len: usize) -> bool {
     if addr < 0x10000 || addr.checked_add(len).is_none() {
         return false;
     }
@@ -34,7 +34,7 @@ fn readable(addr: usize, len: usize) -> bool {
     true
 }
 
-fn read<T: Copy>(addr: usize) -> Option<T> {
+pub(crate) fn read<T: Copy>(addr: usize) -> Option<T> {
     readable(addr, std::mem::size_of::<T>()).then(|| unsafe { std::ptr::read_unaligned(addr as *const T) })
 }
 

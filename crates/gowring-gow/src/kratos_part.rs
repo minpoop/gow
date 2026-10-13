@@ -2,13 +2,14 @@
 //! ([`crate::kratos::DEFAULT_OUTFIT`], most detailed level) read from `r_heroa00.wad` and `root.lodpack`, written as
 //! armour parts with [`crate::erpart`] (see [`build_parts`]).
 //!
-//! First version: the whole figure follows the character's root bone ("Master") rigidly, scaled to the player's
-//! height, with placeholder colours. It answers whether Elden Ring loads a part we wrote; binding him to the player's
-//! skeleton and his own textures come next.
+//! For now the whole figure follows the character's root bone ("Master") rigidly, scaled to the player's height,
+//! with placeholder colours. When the game has given us its player skeleton (`er_skeleton.json`, which gowring.dll
+//! reads from memory on the player's PC), the model carries all of its bones at their rest pose, as the game's own
+//! parts do. Skinning him to those bones and his own textures come next.
 
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 
 use crate::erpart::{self, Material, Mesh, Node, Vertex};
 use crate::kratos::{draw_vertices, mesh_records, mg_parts, DEFAULT_OUTFIT};
@@ -18,10 +19,46 @@ pub const MODEL_ID: u16 = 9701;
 /// Kratos is 1.94 m in his rest pose; the player is about 1.78 m.
 pub const SCALE: f32 = 0.92;
 
-/// One part's model as meshes: Kratos's draws from `records`, rigid on the root bone, shifted by `offset` (metres).
-fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8], toc: &crate::lodpack::Toc, file: &mut std::fs::File, offset: [f32; 3]) -> Result<(Vec<Node>, Vec<Mesh>, Vec<usize>)> {
+/// The root bone alone, at the origin: the skeleton a part has when the game's is not known yet.
+fn master_only() -> Vec<Node> {
+    vec![Node { name: "Master".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }]
+}
+
+/// The player skeleton gowring.dll wrote (`{"skeleton": .., "bones": [{"name", "parent", "t", "r", "s"}]}`, Havok's
+/// rest pose: translation, rotation quaternion x y z w, scale, each relative to the parent) as model nodes.
+pub fn skeleton_nodes(json: &str) -> Result<Vec<Node>> {
+    let v: serde_json::Value = serde_json::from_str(json)?;
+    let bones = v["bones"].as_array().context("no bones")?;
+    let floats = |b: &serde_json::Value, k: &str, n: usize| -> Result<Vec<f32>> {
+        let a = b[k].as_array().with_context(|| format!("bone without {k}"))?;
+        let out: Vec<f32> = a.iter().filter_map(|x| x.as_f64()).map(|x| x as f32).collect();
+        if out.len() != n || out.iter().any(|x| !x.is_finite()) {
+            bail!("bone {k} is not {n} numbers");
+        }
+        Ok(out)
+    };
+    let mut nodes = Vec::with_capacity(bones.len());
+    for (i, b) in bones.iter().enumerate() {
+        let name = b["name"].as_str().context("bone without a name")?.to_string();
+        let parent = b["parent"].as_i64().context("bone without a parent")?;
+        if parent < -1 || parent >= i as i64 {
+            bail!("bone {name} has parent {parent}");
+        }
+        let (t, r, sc) = (floats(b, "t", 3)?, floats(b, "r", 4)?, floats(b, "s", 3)?);
+        nodes.push(Node { name, parent: parent as i16, t: [t[0], t[1], t[2]], r: erpart::euler_xzy([r[0], r[1], r[2], r[3]]), s: [sc[0], sc[1], sc[2]], flags: 8 });
+    }
+    if nodes.first().map(|n| n.name.as_str()) != Some("Master") || nodes.len() > 1000 {
+        bail!("not a character skeleton (first bone {:?}, {} bones)", nodes.first().map(|n| &n.name), nodes.len());
+    }
+    Ok(nodes)
+}
+
+/// One part's model as meshes: Kratos's draws from `records`, rigid on the root bone of `skeleton`, shifted by
+/// `offset` (metres).
+fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8], toc: &crate::lodpack::Toc, file: &mut std::fs::File, offset: [f32; 3], skeleton: &[Node]) -> Result<(Vec<Node>, Vec<Mesh>, Vec<usize>)> {
     let mut cache: std::collections::HashMap<u64, Vec<u8>> = Default::default();
-    let mut nodes = vec![Node { name: "Master".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }];
+    let mut nodes = skeleton.to_vec();
+    let master = nodes.iter().position(|n| n.name == "Master").context("no Master bone")? as u8;
     let mut meshes = Vec::new();
     let mut failed = Vec::new();
     for &k in records {
@@ -60,7 +97,7 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
                     position: [p[0] * SCALE + offset[0], p[1] * SCALE + offset[1], p[2] * SCALE + offset[2]],
                     normal: n,
                     tangent: [t[0] / len, t[1] / len, t[2] / len, 1.0],
-                    bones: [0; 4],
+                    bones: [master; 4],
                     weights: [1.0, 0.0, 0.0, 0.0],
                     color: [255; 4],
                     uv: [v.uv[0].get(i).copied().unwrap_or([0.0; 2]), v.uv[1].get(i).copied().unwrap_or([0.0; 2])],
@@ -74,7 +111,8 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
 
 /// A box `size` metres wide centred at `at`, on the root bone: the smallest model there is.
 fn cube(at: [f32; 3], size: f32) -> (Vec<Node>, Vec<Mesh>) {
-    let nodes = vec![Node { name: "Master".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }, Node { name: "marker".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 }];
+    let mut nodes = master_only();
+    nodes.push(Node { name: "marker".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 });
     let h = size / 2.0;
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -112,9 +150,10 @@ fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
 
 /// Every part file this version installs, as (file name, bytes), and a line about them. The parts, one per armour
 /// slot, test what Elden Ring accepts: the body (`bd_*_9701`) is Kratos's whole default outfit; the legs
-/// (`lg_*_9703`) only his skin (head, torso, arms), standing 1.2 m to the right; the arms (`am_*_9702`) a 0.4 m red
-/// cube 1 m to the left at chest height. Each comes as the normal and the low-detail (`_l`) file, male and female.
-pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path) -> Result<(Vec<(String, Vec<u8>)>, String)> {
+/// (`lg_*_9703`) only his skin (head, torso, arms), standing 1.2 m to the right; both carry `skeleton` when it is
+/// known. The arms (`am_*_9702`) are a 0.4 m red cube 1 m to the left at chest height on the root bone alone, the
+/// control. Each comes as the normal and the low-detail (`_l`) file, male and female.
+pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>) -> Result<(Vec<(String, Vec<u8>)>, String)> {
     let rs = mesh_records(mesh);
     let parts = mg_parts(mg);
     let level0 = |list: &[u16]| -> Vec<usize> { list.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect() };
@@ -138,12 +177,15 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path) -> Result<(V
         }
         size
     };
-    let (nodes, meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3])?;
+    let fallback = master_only();
+    let skeleton = skeleton.unwrap_or(&fallback);
+    note.push_str(&format!("{} bones; ", skeleton.len()));
+    let (nodes, meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3], skeleton)?;
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let size = add("bd", MODEL_ID, &nodes, &meshes, [196, 150, 118]);
     note.push_str(&format!("body {} draws ({tris} triangles, {size} bytes; {} failed {failed:?}); ", meshes.len(), failed.len()));
     let skin = level0(&[230]);
-    let (nodes, meshes, _) = kratos_meshes(&rs, &skin, gpu, &toc, &mut file, [1.2, 0.0, 0.0])?;
+    let (nodes, meshes, _) = kratos_meshes(&rs, &skin, gpu, &toc, &mut file, [1.2, 0.0, 0.0], skeleton)?;
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let size = add("lg", MODEL_ID + 2, &nodes, &meshes, [150, 200, 255]);
     note.push_str(&format!("legs: skin only, {} draws ({tris} triangles, {size} bytes); ", meshes.len()));
@@ -156,6 +198,64 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path) -> Result<(V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_skeleton_file_becomes_bones_at_their_rest_pose() {
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        let json = format!(
+            r#"{{"skeleton": "c0000", "bones": [
+                {{"name": "Master", "parent": -1, "t": [0, 0, 0], "r": [0, {h}, 0, {h}], "s": [1, 1, 1]}},
+                {{"name": "RootPos", "parent": 0, "t": [0, 0.97, 0], "r": [0, -{h}, 0, {h}], "s": [1, 1, 1]}},
+                {{"name": "L_Thigh", "parent": 1, "t": [0.103, 0, 0], "r": [0, 0, 0, 1], "s": [1, 1, 1]}}
+            ]}}"#
+        );
+        let nodes = skeleton_nodes(&json).unwrap();
+        assert_eq!(nodes.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["Master", "RootPos", "L_Thigh"]);
+        assert!((nodes[0].r[1] - std::f32::consts::FRAC_PI_2).abs() < 1e-5, "{:?}", nodes[0].r);
+        let w = erpart::world_matrices(&nodes);
+        // the quarter turns cancel: the thigh sits 0.103 m along x at hip height
+        let p = w[2][3];
+        assert!((p[0] - 0.103).abs() < 1e-5 && (p[1] - 0.97).abs() < 1e-5 && p[2].abs() < 1e-5, "{p:?}");
+        assert!(skeleton_nodes(r#"{"bones": [{"name": "Pelvis", "parent": -1, "t": [0,0,0], "r": [0,0,0,1], "s": [1,1,1]}]}"#).is_err());
+        assert!(skeleton_nodes(r#"{"bones": [{"name": "Master", "parent": 0, "t": [0,0,0], "r": [0,0,0,1], "s": [1,1,1]}]}"#).is_err());
+    }
+
+    /// The skeleton a test session wrote (`GOWRING_ER_SKELETON=.../er_skeleton.json cargo test -p gowring-gow
+    /// real_er_skeleton -- --ignored --nocapture`): every bone's model-space position from our Euler angles matches the
+    /// quaternions composed directly.
+    #[test]
+    #[ignore]
+    fn real_er_skeleton() {
+        let Ok(path) = std::env::var("GOWRING_ER_SKELETON") else { return };
+        let json = std::fs::read_to_string(path).unwrap();
+        let nodes = skeleton_nodes(&json).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let mut direct: Vec<([f64; 9], [f64; 3])> = Vec::new();
+        for b in v["bones"].as_array().unwrap() {
+            let f = |k: &str| b[k].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect::<Vec<_>>();
+            let (t, q, sc) = (f("t"), f("r"), f("s"));
+            let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
+            let r = [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w), 2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w), 2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)];
+            let m: [f64; 9] = std::array::from_fn(|i| r[i] * sc[i % 3]);
+            let parent = b["parent"].as_i64().unwrap();
+            if parent < 0 {
+                direct.push((m, [t[0], t[1], t[2]]));
+            } else {
+                let (pm, pt) = direct[parent as usize];
+                let rm: [f64; 9] = std::array::from_fn(|i| (0..3).map(|k| pm[3 * (i / 3) + k] * m[3 * k + i % 3]).sum());
+                let rt: [f64; 3] = std::array::from_fn(|i| (0..3).map(|k| pm[3 * i + k] * t[k]).sum::<f64>() + pt[i]);
+                direct.push((rm, rt));
+            }
+        }
+        let ours = erpart::world_matrices(&nodes);
+        let mut worst = 0.0f64;
+        for (i, (_, t)) in direct.iter().enumerate() {
+            let p = ours[i][3];
+            worst = worst.max((0..3).map(|k| (p[k] as f64 - t[k]).abs()).fold(0.0, f64::max));
+        }
+        println!("{} bones; worst position difference {worst:.2e} m", nodes.len());
+        assert!(worst < 1e-4);
+    }
 
     /// Kratos's real tables with a pack of the resources saved in `GOWRING_SAMPLES_DIR` (files named
     /// `<hash>_records_...bin`); missing resources are stand-ins with every position at the draw's centre. Writes the
@@ -224,7 +324,8 @@ mod tests {
         let dir = std::path::Path::new(&out);
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("root.lodpack"), &pack).unwrap();
-        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack")).unwrap();
+        let skeleton = std::env::var("GOWRING_ER_SKELETON").ok().map(|p| skeleton_nodes(&std::fs::read_to_string(p).unwrap()).unwrap());
+        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref()).unwrap();
         println!("{real} real resources; {note}");
         for (name, bytes) in files {
             std::fs::write(dir.join(name), bytes).unwrap();

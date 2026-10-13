@@ -254,18 +254,28 @@ fn play(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// Build Kratos's armour parts (see `kratos_part::build_parts`) from the player's Ragnarök install once per install and
-/// builder version, keep them in the cache, and copy them into the mod folder ModEngine2 serves (`mod/parts`).
+/// Build Kratos's armour parts (see `kratos_part::build_parts`) from the player's Ragnarök install once per install,
+/// builder version and player skeleton, keep them in the cache, and copy them into the mod folder ModEngine2 serves
+/// (`mod/parts`). The skeleton is the one gowring.dll read from the game in an earlier session (`er_skeleton.json`);
+/// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx) -> String {
-    use gowring_gow::kratos_part::build_parts;
-    const BUILD: u32 = 2;
+    use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
+    const BUILD: u32 = 3;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
         return "Kratos's body part: r_heroa00.wad or root.lodpack not found".into();
     };
     let size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-    let stamp = format!("build {BUILD} wad {} pack {}\n", size(&wad), size(&pack));
+    let skeleton_json = std::fs::read_to_string(ctx.local.join("er_skeleton.json")).ok();
+    let (skeleton, skeleton_note) = match skeleton_json.as_deref().map(skeleton_nodes) {
+        Some(Ok(nodes)) => (Some(nodes), "the player skeleton"),
+        Some(Err(_)) => (None, "the root bone only (er_skeleton.json did not read)"),
+        None => (None, "the root bone only (no er_skeleton.json yet)"),
+    };
+    // a cheap fingerprint of the skeleton, so a new one rebuilds the parts
+    let fingerprint = skeleton_json.as_deref().map_or(0u64, |j| j.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3)));
+    let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x}\n", size(&wad), size(&pack));
     let cache = ctx.cache.join("kratos_part");
     let names: Vec<String> = ["bd", "am", "lg"]
         .iter()
@@ -283,7 +293,7 @@ fn install_kratos_part(ctx: &Ctx) -> String {
             let (Some(mesh), Some(mg), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
                 bail!("Kratos's mesh chunks are not in the first 200 MB of r_heroa00.wad");
             };
-            let (files, note) = build_parts(mesh, mg, gpu, &pack)?;
+            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref())?;
             std::fs::create_dir_all(&cache)?;
             for (name, bytes) in files {
                 std::fs::write(cache.join(name), bytes)?;
@@ -304,7 +314,7 @@ fn install_kratos_part(ctx: &Ctx) -> String {
             return format!("Kratos's body part: copying {n}: {e}");
         }
     }
-    format!("Kratos's body part: {note}installed in {}", parts.display())
+    format!("Kratos's body part on {skeleton_note}: {note}installed in {}", parts.display())
 }
 
 /// While the game loads, write the same report `--diagnose` writes (once per version) so a tester only has to

@@ -8,7 +8,7 @@ use retour::GenericDetour;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::OnceLock;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{BOOL, HANDLE};
+use windows::Win32::Foundation::{GetLastError, SetLastError, BOOL, HANDLE};
 use windows::Win32::Security::SECURITY_ATTRIBUTES;
 use windows::Win32::Storage::FileSystem::{FILE_CREATION_DISPOSITION, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_MODE};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -35,6 +35,20 @@ static REDIRECTED: AtomicBool = AtomicBool::new(false);
 static OPEN_COUNT: AtomicU32 = AtomicU32::new(0);
 static SIDE_COUNT: AtomicU32 = AtomicU32::new(0);
 static TARGET: OnceLock<String> = OnceLock::new();
+static PART_NOTES: AtomicU32 = AtomicU32::new(0);
+
+/// Kratos's body part: log the first opens and existence checks of armour part files (`*.partsbnd*`) and what they
+/// returned, so a session shows whether the game (or ModEngine2) reached the files the launcher installed. The
+/// thread's last-error value is put back afterwards, so the game sees exactly what it would have.
+fn note_part(call: &str, p: PCWSTR, ok: bool) {
+    let err = unsafe { GetLastError() };
+    let path = wide_to_string(p);
+    if path.to_ascii_lowercase().contains("partsbnd") && PART_NOTES.fetch_add(1, Ordering::SeqCst) < 60 {
+        let result = if ok { "ok".to_string() } else { format!("failed, error {}", err.0) };
+        crate::glog!("parts", "{call} {path}: {result}");
+    }
+    unsafe { SetLastError(err) };
+}
 
 /// True once Elden Ring has opened a (redirected) save file.
 pub fn redirected() -> bool {
@@ -89,15 +103,21 @@ unsafe extern "system" fn h_create(name: PCWSTR, access: u32, share: FILE_SHARE_
         }
         REDIRECTED.store(true, Ordering::SeqCst);
     }
-    D_CREATE.get().unwrap().call(pick(&r, name), access, share, sa, disp, flags, template)
+    let h = D_CREATE.get().unwrap().call(pick(&r, name), access, share, sa, disp, flags, template);
+    note_part("CreateFileW", name, !h.is_invalid());
+    h
 }
 unsafe extern "system" fn h_attr(p: PCWSTR) -> u32 {
     let r = redirect(p, "GetFileAttributesW");
-    D_ATTR.get().unwrap().call(pick(&r, p))
+    let a = D_ATTR.get().unwrap().call(pick(&r, p));
+    note_part("GetFileAttributesW", p, a != u32::MAX);
+    a
 }
 unsafe extern "system" fn h_attr_ex(p: PCWSTR, level: i32, info: *mut core::ffi::c_void) -> BOOL {
     let r = redirect(p, "GetFileAttributesExW");
-    D_ATTR_EX.get().unwrap().call(pick(&r, p), level, info)
+    let ok = D_ATTR_EX.get().unwrap().call(pick(&r, p), level, info);
+    note_part("GetFileAttributesExW", p, ok.as_bool());
+    ok
 }
 unsafe extern "system" fn h_move_ex(a: PCWSTR, b: PCWSTR, flags: u32) -> BOOL {
     let (ra, rb) = (redirect(a, "MoveFileExW(from)"), redirect(b, "MoveFileExW(to)"));

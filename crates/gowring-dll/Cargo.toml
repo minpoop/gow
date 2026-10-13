@@ -1,6 +1,6 @@
 [package]
 name = "gowring-dll"
-version = "0.1.44"
+version = "0.1.45"
 edition = "2021"
 description = "gowring.dll — the in-game half of Kratos in the Lands Between. Loaded by ModEngine2 into eldenring.exe."
 
@@ -17,6 +17,8 @@ gowring-core = { path = "../gowring-core" }
 # commit that carries its RVA table (fromsoftware-rs, MIT OR Apache-2.0).
 eldenring = { git = "https://github.com/vswarte/eldenring-rs", rev = "59fbd3b3b7daaf14aca47c9f73530493dba6bc79" }
 fromsoftware-shared = { git = "https://github.com/vswarte/eldenring-rs", rev = "59fbd3b3b7daaf14aca47c9f73530493dba6bc79" }
+# the game's singleton table (the same crate fromsoftware-shared looks singletons up with)
+from-singleton = "3"
 hudhook = { version = "0.9.3", default-features = false, features = ["dx12"] }
 retour = "0.4.0-alpha.4"
 png = "0.17"

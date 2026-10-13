@@ -170,6 +170,10 @@ impl Runtime {
                 crate::skeleton::dump_once(b);
             }
         }
+        // and what the game made of the part files (loaded or not)
+        if let Some(t) = self.entered_at {
+            crate::filecaps::report_due(t.elapsed().as_secs());
+        }
         self.observe_for_tests();
         self.upkeep(&frame);
 

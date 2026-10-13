@@ -453,7 +453,7 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "gowring-core"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "gowring-sheets",
  "serde",
@@ -462,9 +462,10 @@ dependencies = [
 
 [[package]]
 name = "gowring-dll"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "eldenring",
+ "from-singleton",
  "fromsoftware-shared",
  "gowring-core",
  "hudhook",
@@ -477,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "gowring-sheets"
-version = "0.1.44"
+version = "0.1.45"
 dependencies = [
  "anyhow",
  "indexmap",

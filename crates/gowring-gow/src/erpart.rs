@@ -1,7 +1,12 @@
 //! Elden Ring armour parts, written from scratch for Kratos's body: the model (FLVER2, version 0x2001A), its textures
-//! (a TPF of DDS files), the two in a BND4 container, compressed as DCX with ZSTD. Nothing here comes from either
-//! game; the layouts follow the community's documentation of these formats (SoulsFormatsNEXT, soulstruct and the
-//! FLVER editors' material banks), written as our own code.
+//! (a TPF of DDS files), the two in a BND4 container, compressed as DCX with DFLT (zlib). Nothing here comes from
+//! either game; the layouts follow the community's documentation of these formats (SoulsFormatsNEXT, soulstruct and
+//! the FLVER editors' material banks), written as our own code, and were checked field by field against the game's
+//! own files where a sample was at hand (a map piece model, a parts animation binder, `systex.tpf.dcx`).
+//!
+//! One field the documentation gets wrong for Elden Ring: a mesh's "bounding box" is an oriented box (half extents,
+//! Euler rotation, centre), not a minimum and maximum. A min/max there reads as a box of negative size at the
+//! model's origin, which the game culls: 0.1.43 and 0.1.44 drew nothing, not even a cube.
 //!
 //! The model uses the armour material `C[AMSN]_e` with its 40-byte vertex: position (3 floats), normal, tangent and
 //! four bone indices (4 bytes each, normals as b = v*127 + 127), four bone weights and a colour (4 bytes each, /255),
@@ -9,8 +14,9 @@
 
 use std::collections::BTreeMap;
 
-/// The bare file name, as the community's working armour imports write it (the game finds the material by name).
-pub const MATERIAL_MTD: &str = "C[AMSN]_e.matxml";
+/// Written the way the game's own models name their material (`N:\GR\data\Material\mtd\<group>\matxml\<name>.matxml`);
+/// the game looks the material up by its file name.
+pub const MATERIAL_MTD: &str = "N:\\GR\\data\\Material\\mtd\\Parts\\matxml\\C[AMSN]_e.matxml";
 pub const ALBEDO: &str = "C_AMSN__snp_Texture2D_2_AlbedoMap_0";
 pub const METALLIC: &str = "C_AMSN__snp_Texture2D_0_MetallicMap_0";
 pub const NORMAL: &str = "C_AMSN__snp_Texture2D_7_NormalMap_4";
@@ -230,8 +236,37 @@ fn apply(m: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|r| m[0][r] * p[0] + m[1][r] * p[1] + m[2][r] * p[2] + m[3][r])
 }
 
+/// The Euler angles (radians; applied X, then Z, then Y, as [`Node::r`]) of the rotation quaternion `q` (x, y, z, w).
+pub fn euler_xzy(q: [f32; 4]) -> [f32; 3] {
+    let [x, y, z, w] = q.map(|v| v as f64);
+    let n = (x * x + y * y + z * z + w * w).sqrt().max(1e-12);
+    let (x, y, z, w) = (x / n, y / n, z / n, w / n);
+    // R = Ry * Rz * Rx: R10 = sin z, R11 = cos z cos x, R12 = -cos z sin x, R00 = cos y cos z, R20 = -sin y cos z
+    let r00 = 1.0 - 2.0 * (y * y + z * z);
+    let r10 = 2.0 * (x * y + z * w);
+    let r11 = 1.0 - 2.0 * (x * x + z * z);
+    let r12 = 2.0 * (y * z - x * w);
+    let r20 = 2.0 * (x * z - y * w);
+    let ez = r10.clamp(-1.0, 1.0).asin();
+    if ez.cos() > 1e-6 {
+        [(-r12).atan2(r11) as f32, (-r20).atan2(r00) as f32, ez as f32]
+    } else {
+        // turned straight up or down (sin z = +-1): X and Y turn about the same axis, so all of it goes to X
+        let sz = r10.signum();
+        let r01 = 2.0 * (x * y - z * w);
+        let r02 = 2.0 * (x * z + y * w);
+        [(sz * r02).atan2(-sz * r01) as f32, 0.0, ez as f32]
+    }
+}
+
 fn byte_norm(v: f32) -> u8 {
     (v.clamp(-1.0, 1.0) * 127.0 + 127.0).round() as u8
+}
+
+/// A mesh's box as Elden Ring stores it: half extents, rotation (Euler radians) and centre. Ours are axis-aligned.
+pub fn mesh_box(m: &Mesh) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let (lo, hi) = bbox(m.vertices.iter().map(|v| v.position));
+    (std::array::from_fn(|k| (hi[k] - lo[k]) / 2.0), [0.0; 3], std::array::from_fn(|k| (hi[k] + lo[k]) / 2.0))
 }
 
 /// The FLVER2 model.
@@ -265,9 +300,12 @@ pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8
     w.i32((meshes.len() * LOD_FLAGS.len()) as i32);
     w.i32(1); // buffer layouts
     w.i32(materials.iter().map(|m| m.textures.len() as i32).sum());
-    w.zeros(4);
+    // as the game's own models have them
+    w.u8(0);
+    w.u8(2); // unk5D
+    w.zeros(2);
     w.zeros(8);
-    w.i32(0); // unk68
+    w.i32(4); // unk68
     w.zeros(8);
     w.i32(0); // unk74
     w.zeros(8);
@@ -281,7 +319,7 @@ pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8
         let chars = m.name.encode_utf16().count() + 1 + m.mtd.encode_utf16().count() + 1 + m.textures.iter().map(|(a, b)| a.encode_utf16().count() + 1 + b.encode_utf16().count() + 1).sum::<usize>();
         w.i32((chars * 2) as i32);
         w.reserve(format!("mat_gx{i}"));
-        w.i32(1); // index
+        w.i32(i as i32); // the material's own index
         w.i32(0);
     }
     let parents: Vec<i16> = nodes.iter().map(|n| n.parent).collect();
@@ -408,10 +446,10 @@ pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8
     for (i, m) in meshes.iter().enumerate() {
         let at = w.pos() as u32;
         w.fill(&format!("mesh_box{i}"), at);
-        let (lo, hi) = bbox(m.vertices.iter().map(|v| v.position));
-        w.v3(lo);
-        w.v3(hi);
-        w.v3([0.0; 3]);
+        let (half, rotation, centre) = mesh_box(m);
+        w.v3(half);
+        w.v3(rotation);
+        w.v3(centre);
     }
     w.pad(16);
     let bones_start = w.pos() as u32;
@@ -494,7 +532,7 @@ pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8
             for k in 0..3 {
                 w.u8(byte_norm(v.normal[k]));
             }
-            w.u8(127);
+            w.u8(0); // the bone a static mesh follows; skinned meshes use their weights
             for k in 0..4 {
                 w.u8(byte_norm(v.tangent[k]));
             }
@@ -754,7 +792,9 @@ pub fn dcx_dflt(data: &[u8]) -> Vec<u8> {
     o.extend(b"DCP\0DFLT");
     o.extend(0x20u32.to_be_bytes());
     o.extend(0x0900_0000u32.to_be_bytes());
-    o.extend([0u8; 12]);
+    o.extend([0u8; 4]);
+    o.extend(0x0F00_0000u32.to_be_bytes()); // zlib's window bits, as the game's own files record them
+    o.extend([0u8; 4]);
     o.extend(0x10100u32.to_be_bytes());
     o.extend(b"DCA\0");
     o.extend(8u32.to_be_bytes());
@@ -822,6 +862,38 @@ mod tests {
         }
         assert_eq!(out, data);
         assert_eq!(z.len(), at + 4);
+        // the header the game's own systex.tpf.dcx has, sizes aside
+        assert_eq!(&d[..0x18], &[b'D', b'C', b'X', 0, 0, 1, 0x10, 0, 0, 0, 0, 0x18, 0, 0, 0, 0x24, 0, 0, 0, 0x44, 0, 0, 0, 0x4C][..]);
+        assert_eq!(&d[0x2C..0x4C], &[0, 0, 0, 0x20, 9, 0, 0, 0, 0, 0, 0, 0, 0x0F, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, b'D', b'C', b'A', 0, 0, 0, 0, 8][..]);
+    }
+
+    #[test]
+    fn euler_angles_rebuild_the_quaternions_rotation() {
+        let quats = [[0.0, 0.0, 0.0, 1.0], [0.0, 0.70710677, 0.0, 0.70710677], [-0.49987617, 0.49987692, -0.5001238, 0.5001231], [0.1, -0.7, 0.3, 0.64], [0.0, 0.0, 0.70710677, 0.70710677], [0.5, 0.5, 0.5, 0.5]];
+        for q in quats {
+            let n = (q.iter().map(|v: &f32| v * v).sum::<f32>()).sqrt();
+            let [x, y, z, w] = q.map(|v| v / n);
+            let want = [[1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w)], [2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w)], [2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y)]];
+            let node = Node { name: "b".into(), parent: -1, t: [0.0; 3], r: euler_xzy(q), s: [1.0; 3], flags: 8 };
+            let m = world_matrices(&[node])[0];
+            for c in 0..3 {
+                for r in 0..3 {
+                    assert!((m[c][r] - want[c][r]).abs() < 1e-5, "{q:?}: column {c} row {r}: {} vs {}", m[c][r], want[c][r]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_meshs_box_is_half_extents_rotation_and_centre() {
+        let (_, _, meshes) = one_triangle();
+        let (half, rotation, centre) = mesh_box(&meshes[0]);
+        let (lo, hi) = bbox(meshes[0].vertices.iter().map(|v| v.position));
+        for k in 0..3 {
+            assert!(half[k] >= 0.0);
+            assert!((centre[k] - half[k] - lo[k]).abs() < 1e-6 && (centre[k] + half[k] - hi[k]).abs() < 1e-6);
+        }
+        assert_eq!(rotation, [0.0; 3]);
     }
 
     #[test]
@@ -876,6 +948,16 @@ mod tests {
         let idx = data + u32::from_le_bytes(f[fs + 12..fs + 16].try_into().unwrap()) as usize;
         assert_eq!(&f[idx..idx + 6], &[0, 0, 1, 0, 2, 0]);
         assert_eq!(i32::from_le_bytes(f[fs + 24..fs + 28].try_into().unwrap()), 16);
+        // the header values and material index the game's own models have
+        assert_eq!((f[0x5C], f[0x5D], i32::from_le_bytes(f[0x68..0x6C].try_into().unwrap())), (0, 2, 4));
+        assert_eq!(i32::from_le_bytes(f[0x80 + 0x18..0x80 + 0x1C].try_into().unwrap()), 0);
+        // the mesh's box: half extents, no rotation, centre
+        let mesh = 0x80 + 0x20 + 2 * 0x80;
+        let at = u32::from_le_bytes(f[mesh + 24..mesh + 28].try_into().unwrap()) as usize;
+        let b: Vec<f32> = f[at..at + 36].chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        assert_eq!(b, [0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0]);
+        // normal w is 0
+        assert_eq!(f[data + u32::from_le_bytes(f[vb + 28..vb + 32].try_into().unwrap()) as usize + 15], 0);
     }
 
     #[test]

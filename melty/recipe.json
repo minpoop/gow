@@ -17,7 +17,7 @@
    "id": "main",
    "kind": "main",
    "label": "Kratos in the Lands Between",
-   "fileName": "GowRing-0.1.44.zip",
+   "fileName": "GowRing-0.1.45.zip",
    "required": true
   }
  ],
@@ -55,7 +55,7 @@
   },
   "done": {
    "file": "{managed}/GowRing/.melty-ready",
-   "contains": "gowring-0.1.44-prep-1"
+   "contains": "gowring-0.1.45-prep-1"
   },
   "failure": {
    "file": "{managed}/GowRing/.melty-failure.txt"
