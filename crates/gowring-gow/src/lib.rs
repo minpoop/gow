@@ -13,6 +13,7 @@ pub mod convert;
 pub mod dds;
 pub mod erpart;
 pub mod lodpack;
+pub mod retarget;
 pub mod lz4;
 pub mod diagnose;
 pub mod hudmap;

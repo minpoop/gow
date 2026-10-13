@@ -1,8 +1,8 @@
-Forty-seventh alpha: Kratos is drawn, and the freeze is fixed.
+Forty-eighth alpha: Kratos moves with you.
 
-0.1.45 worked: Kratos's whole default outfit now draws on your character, at your height and facing forward. He is still a rigid statue in a plain colour, and the two test pieces (his bare upper body beside you and a small red cube) are still there.
+- **Kratos is now attached to Elden Ring's skeleton.** His arms and legs are re-posed into Elden Ring's rest pose, and every part of his outfit follows the bones it belongs to. He walks, runs and swings with your character instead of standing stiff.
+- **No more test pieces.** The bare upper body and the red cube are gone, and the arms and legs slots now hide your character's own limbs under him.
+- **Your own head is hidden.** Elden Ring removes a character's head only under a helmet, so new characters now start wearing an invisible one. Make a new character to see it; older characters keep their own head showing through.
+- **Better crash reports.** If the game crashes, the log now records what it was doing at that moment, to track down the crash some testers see when closing the game.
 
-- **No more freeze on entering the world.** The mod reads Elden Ring's player skeleton a few seconds after you arrive. That read used a slow safety check thousands of times on the game's own thread: in 0.1.45 it froze the game, and in 0.1.44 it caused a 10-second hitch. It now uses fast, safe reads on a thread of its own, so it can no longer hold the game up.
-- **Your own face no longer shows through Kratos's head.** The armour that shows Kratos now hides your character's head the way a full helm does.
-
-Making him move with you, and his own colours, come next.
+He is still in a plain placeholder colour; his own textures come next.

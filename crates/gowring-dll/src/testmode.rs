@@ -82,6 +82,60 @@ pub fn locate(addr: usize) -> String {
     format!("{name}+{:#x}", addr - h.0 as usize)
 }
 
+/// Up to 48 bytes at `addr` as hex, with any ASCII or UTF-16 text in them; empty when unreadable.
+fn peek(addr: usize) -> String {
+    let Some(b) = crate::skeleton::read::<[u8; 48]>(addr) else { return String::new() };
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let ascii: String = b.iter().map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' }).collect();
+    let utf16: String = b.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).map(|u| if (0x20..0x7f).contains(&u) { u as u8 as char } else { '.' }).collect();
+    format!("{hex} |{ascii}| u16 |{utf16}|")
+}
+
+/// The faulting access, the registers (and the memory each points at) and the modules found on the stack, so a crash
+/// in the game's or Windows' code says what it was doing: freeing one of our strings, a texture, a model buffer.
+fn describe(rec: &windows::Win32::System::Diagnostics::Debug::EXCEPTION_RECORD, c: &windows::Win32::System::Diagnostics::Debug::CONTEXT) -> String {
+    use std::fmt::Write as _;
+    let mut o = String::with_capacity(8192);
+    if rec.ExceptionCode.0 as u32 == 0xC000_0005 && rec.NumberParameters >= 2 {
+        let kind = match rec.ExceptionInformation[0] {
+            0 => "reading",
+            1 => "writing",
+            8 => "executing",
+            _ => "accessing",
+        };
+        let _ = write!(o, "{kind} {:#x}; ", rec.ExceptionInformation[1]);
+    }
+    let regs = [("rax", c.Rax), ("rbx", c.Rbx), ("rcx", c.Rcx), ("rdx", c.Rdx), ("rsi", c.Rsi), ("rdi", c.Rdi), ("rbp", c.Rbp), ("rsp", c.Rsp), ("r8", c.R8), ("r9", c.R9), ("r10", c.R10), ("r11", c.R11), ("r12", c.R12), ("r13", c.R13), ("r14", c.R14), ("r15", c.R15)];
+    let _ = write!(o, "rip {}", locate(c.Rip as usize));
+    for (name, v) in regs {
+        let _ = write!(o, "\n    {name} {v:#018x}");
+        let seen = peek(v as usize);
+        if !seen.is_empty() && name != "rsp" {
+            let _ = write!(o, " -> {seen}");
+        }
+    }
+    // return addresses: stack words that land inside a loaded module
+    let _ = write!(o, "\n    stack:");
+    let mut found = 0;
+    // (a shorter read when the stack ends sooner)
+    if let Some(words) = [1024usize, 256, 64].iter().find_map(|n| crate::skeleton::read_vec::<u64>(c.Rsp as usize, *n)) {
+        for w in words {
+            if w < 0x10000 || w >= 0x7FFF_FFFF_FFFF {
+                continue;
+            }
+            let here = locate(w as usize);
+            if !here.ends_with("(no module)") {
+                let _ = write!(o, " {here}");
+                found += 1;
+                if found >= 32 {
+                    break;
+                }
+            }
+        }
+    }
+    o
+}
+
 unsafe extern "system" fn veh(info: *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS) -> i32 {
     if info.is_null() || (*info).ExceptionRecord.is_null() {
         return 0;
@@ -96,6 +150,11 @@ unsafe extern "system" fn veh(info: *mut windows::Win32::System::Diagnostics::De
         if code != 0xC000_00FD && n < 12 {
             let at = locate(rec.ExceptionAddress as usize);
             crate::glog!("fault", "exception {code:#010x} at {at} (#{})", n + 1);
+            // the first two after start-up: what the faulting code was working on
+            if n < 2 && !(*info).ContextRecord.is_null() {
+                let detail = describe(rec, &*(*info).ContextRecord);
+                crate::glog!("fault", "{detail}");
+            }
             // The first one after start-up settles is a failed check: Arxan's own start-up tricks are over by then.
             if BORN.get().map(|b| b.elapsed().as_secs() > 30).unwrap_or(false) {
                 report("no-fault", false, &format!("fatal exception {code:#010x} at {at}; {}", state()));

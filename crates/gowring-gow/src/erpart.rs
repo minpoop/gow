@@ -263,10 +263,14 @@ fn byte_norm(v: f32) -> u8 {
     (v.clamp(-1.0, 1.0) * 127.0 + 127.0).round() as u8
 }
 
-/// A mesh's box as Elden Ring stores it: half extents, rotation (Euler radians) and centre. Ours are axis-aligned.
+/// Room around each mesh's box, so a limb a little out of its rest place is not culled while still on screen.
+pub const BOX_MARGIN: f32 = 0.1;
+
+/// A mesh's box as Elden Ring stores it: half extents, rotation (Euler radians) and centre. Ours are axis-aligned, with
+/// [`BOX_MARGIN`] around the rest-pose vertices.
 pub fn mesh_box(m: &Mesh) -> ([f32; 3], [f32; 3], [f32; 3]) {
     let (lo, hi) = bbox(m.vertices.iter().map(|v| v.position));
-    (std::array::from_fn(|k| (hi[k] - lo[k]) / 2.0), [0.0; 3], std::array::from_fn(|k| (hi[k] + lo[k]) / 2.0))
+    (std::array::from_fn(|k| (hi[k] - lo[k]) / 2.0 + BOX_MARGIN), [0.0; 3], std::array::from_fn(|k| (hi[k] + lo[k]) / 2.0))
 }
 
 /// The FLVER2 model.
@@ -890,8 +894,8 @@ mod tests {
         let (half, rotation, centre) = mesh_box(&meshes[0]);
         let (lo, hi) = bbox(meshes[0].vertices.iter().map(|v| v.position));
         for k in 0..3 {
-            assert!(half[k] >= 0.0);
-            assert!((centre[k] - half[k] - lo[k]).abs() < 1e-6 && (centre[k] + half[k] - hi[k]).abs() < 1e-6);
+            assert!(half[k] >= BOX_MARGIN);
+            assert!((centre[k] - (half[k] - BOX_MARGIN) - lo[k]).abs() < 1e-6 && (centre[k] + (half[k] - BOX_MARGIN) - hi[k]).abs() < 1e-6);
         }
         assert_eq!(rotation, [0.0; 3]);
     }
@@ -955,7 +959,7 @@ mod tests {
         let mesh = 0x80 + 0x20 + 2 * 0x80;
         let at = u32::from_le_bytes(f[mesh + 24..mesh + 28].try_into().unwrap()) as usize;
         let b: Vec<f32> = f[at..at + 36].chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-        assert_eq!(b, [0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0]);
+        assert_eq!(b, [0.6, 0.6, 0.1, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0]);
         // normal w is 0
         assert_eq!(f[data + u32::from_le_bytes(f[vb + 28..vb + 32].try_into().unwrap()) as usize + 15], 0);
     }

@@ -260,7 +260,7 @@ fn play(ctx: &Ctx) -> Result<()> {
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 3;
+    const BUILD: u32 = 4;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -277,9 +277,9 @@ fn install_kratos_part(ctx: &Ctx) -> String {
     let fingerprint = skeleton_json.as_deref().map_or(0u64, |j| j.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3)));
     let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x}\n", size(&wad), size(&pack));
     let cache = ctx.cache.join("kratos_part");
-    let names: Vec<String> = ["bd", "am", "lg"]
+    let names: Vec<String> = ["bd", "am", "lg", "hd"]
         .iter()
-        .zip([9701, 9702, 9703])
+        .zip([9701, 9702, 9703, 9700])
         .flat_map(|(slot, id)| ["m", "f"].iter().flat_map(move |sex| ["", "_l"].iter().map(move |low| format!("{slot}_{sex}_{id}{low}.partsbnd.dcx"))))
         .collect();
     let cached = std::fs::read_to_string(cache.join("stamp.txt")).is_ok_and(|s| s == stamp) && names.iter().all(|n| cache.join(n).exists());
@@ -293,7 +293,9 @@ fn install_kratos_part(ctx: &Ctx) -> String {
             let (Some(mesh), Some(mg), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
                 bail!("Kratos's mesh chunks are not in the first 200 MB of r_heroa00.wad");
             };
-            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref())?;
+            // his own skeleton, to re-pose him onto the player's
+            let kratos = chunk("goProtoheroa00", 1).and_then(gowring_gow::kratos::Skeleton::parse);
+            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref())?;
             std::fs::create_dir_all(&cache)?;
             for (name, bytes) in files {
                 std::fs::write(cache.join(name), bytes)?;
