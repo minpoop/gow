@@ -356,7 +356,7 @@ impl Skeleton {
 /// stream starts are offsets from the resource's start, and the u16 indices start at the vertex-bytes field (+0x30),
 /// so for a draw alone in its resource that field is its vertex bytes. The index and vertex offsets (+0x38, +0x40)
 /// address a whole-character buffer that is never stored as such. Stream formats (bytes per component): 0 f32, 1 16-bit, 2 32-bit,
-/// 3 packed 10:10:10:2 (one per vertex), 4 u16, 6 f16, 7 unorm16, 8 u8. Semantics: 0 position, 1 normal, 2 tangent,
+/// 3 packed 10:10:10:2 (one per vertex), 4 u16, 6 unorm16, 7 snorm16 (UVs read best that way), 8 u8. Semantics: 0 position, 1 normal, 2 tangent,
 /// 3/4/5 UV sets, 9 bone indices (global joint numbers), 10 bone weights.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshRecord {
@@ -376,6 +376,8 @@ pub struct MeshRecord {
     pub strides: Vec<u32>,
     /// The resource holding the draw in a level-of-detail pack; 0 when it is in the WAD's GPU chunk.
     pub hash: u64,
+    /// Index into the mesh's material table (+0x28).
+    pub material: u16,
 }
 
 /// Bytes of one vertex's value in a stream of `format` with `components`.
@@ -422,6 +424,7 @@ pub fn mesh_records(b: &[u8]) -> Vec<MeshRecord> {
                 streams,
                 strides,
                 hash: u64_at(b, o + 0x68)?,
+                material: u16_at(b, o + 0x28)?,
             })
         })();
         match rec {
@@ -473,6 +476,35 @@ pub fn find_positions(bytes: &[u8], rec: &MeshRecord) -> Option<usize> {
     None
 }
 
+/// Kratos's default look, as parts of `MG_heroa00_0` (worked out from the player's install, 0.1.41): head, eyes and
+/// beard (0-8, 238-241, 243, 263-265, 269), skin (230: torso, head, arms), trousers, skirt, boots and knee guard (200,
+/// 201, 267, 268), the unnamed "tier1" chest strap and pauldron with its fur, strap and cape (213-223, 231, 234, 236),
+/// wrapped bracers (203, 204), leather waist and buckled belt (194-198), and belt items (251, 270-274, 277, 279, 280).
+/// The other parts are the armour sets the game swaps in (chest, wrist and waist for riverdelta, crystal,
+/// Svartalfheim, Muspelheim, defense, runic, Tyr, strength, cooldown, Alfheim and New Game+ variants), alternatives
+/// of the unnamed set, and the stand-ins in [`STAND_INS`].
+pub const DEFAULT_OUTFIT: &[u16] = &[
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 194, 195, 196, 197, 198, 200, 201, 203, 204, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 230, 231, 234, 236, 238, 239,
+    240, 241, 243, 251, 263, 264, 265, 267, 268, 269, 270, 271, 272, 273, 274, 277, 279, 280,
+];
+
+/// Parts that are not drawn as Kratos: a capsule and three ellipsoids per body region (244-258, likely shadow or
+/// collision shapes), four ground rings (259-262), coarse shells (67, 237, 266) and two objects at the origin (242, 252).
+pub const STAND_INS: &[u16] = &[67, 237, 242, 244, 245, 246, 247, 248, 249, 250, 252, 253, 254, 255, 256, 257, 258, 259, 260, 261, 262, 266];
+
+/// The names in a mesh's material table (the id-60 `MAT_` chunk beside its `MESH_` chunk): u32 count, then 76-byte
+/// entries of a 16-byte id and a 60-byte name. A draw's material is the u16 at record +0x28.
+pub fn material_names(b: &[u8]) -> Vec<String> {
+    let n = u32_at(b, 0).unwrap_or(0) as usize;
+    (0..n.min(4096))
+        .map_while(|i| {
+            let at = 8 + 76 * i + 16;
+            let raw = b.get(at..at + 60)?;
+            Some(String::from_utf8_lossy(&raw[..raw.iter().position(|c| *c == 0).unwrap_or(60)]).into_owned())
+        })
+        .collect()
+}
+
 /// One level of detail of a part: `draws` records of the `MESH_` chunk from `first`, shown up to `distance`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Level {
@@ -521,6 +553,94 @@ pub fn draw_geometry(res: &[u8], rec: &MeshRecord) -> Option<(Vec<[f32; 3]>, Vec
     let idx = res.get(ia..ia + rec.indices as usize * 2)?;
     let t: Vec<[u16; 3]> = idx.chunks_exact(6).map(|c| [0, 2, 4].map(|k| u16::from_le_bytes([c[k], c[k + 1]]))).collect();
     t.iter().flatten().all(|i| (*i as usize) < nv).then_some((p, t))
+}
+
+/// A draw's vertices with everything a skinned model needs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Vertices {
+    pub position: Vec<[f32; 3]>,
+    pub normal: Vec<[f32; 3]>,
+    /// UV sets 0 and 1 (empty when the draw has none).
+    pub uv: [Vec<[f32; 2]>; 2],
+    /// Up to ten (joint, weight) influences per vertex, largest first, weights summing to 1; empty for a rigid draw.
+    pub influences: Vec<Vec<(u16, f32)>>,
+    pub triangles: Vec<[u16; 3]>,
+}
+
+fn unorm10(x: u32, k: u32) -> f32 {
+    ((x >> (10 * k)) & 1023) as f32 / 1023.0
+}
+
+/// Every vertex of a draw from the resource holding it (see [`draw_geometry`] for the checks). Normals are packed
+/// 10:10:10:2 (unorm to [-1, 1]); UVs are f32, unorm16 or snorm16 pairs; joints are four u16 or u8 global joint numbers,
+/// or (Kratos's skin) ten 11-bit numbers packed from the top of the 128-bit value its four u32 words make when read
+/// first-word-highest; weights are 10:10:10:2 words holding three weights each (one, two or three words, so 3, 6 or
+/// 9 stored), largest first, with one more weight making the sum 1.
+pub fn draw_vertices(res: &[u8], rec: &MeshRecord) -> Option<Vertices> {
+    let (position, triangles) = draw_geometry(res, rec)?;
+    let nv = rec.vertices as usize;
+    let stream = |sem: u8| rec.streams.iter().position(|s| s.0 == sem).map(|k| (rec.streams[k], rec.strides.get(k).copied().unwrap_or(0) as usize));
+    let at = |start: u32, stride: usize, v: usize, len: usize| res.get(start as usize + v * stride..start as usize + v * stride + len);
+    let word = |b: &[u8], k: usize| u32::from_le_bytes(b[4 * k..4 * k + 4].try_into().unwrap());
+    let normal = match stream(1) {
+        Some(((_, 3, _, start), stride)) => (0..nv)
+            .map(|v| {
+                let x = word(at(start, stride.max(4), v, 4)?, 0);
+                Some([0, 1, 2].map(|k| unorm10(x, k) * 2.0 - 1.0))
+            })
+            .collect::<Option<Vec<_>>>()?,
+        _ => vec![],
+    };
+    let uv_set = |sem: u8| -> Option<Vec<[f32; 2]>> {
+        let Some(((_, fmt, 2, start), stride)) = stream(sem) else { return Some(vec![]) };
+        (0..nv)
+            .map(|v| {
+                let b = at(start, stride.max(element_bytes(fmt, 2) as usize), v, element_bytes(fmt, 2) as usize)?;
+                Some(match fmt {
+                    0 => [f32::from_le_bytes(b[0..4].try_into().unwrap()), f32::from_le_bytes(b[4..8].try_into().unwrap())],
+                    6 => [0, 2].map(|k| u16::from_le_bytes([b[k], b[k + 1]]) as f32 / 65535.0),
+                    7 => [0, 2].map(|k| (i16::from_le_bytes([b[k], b[k + 1]]) as f32 / 32767.0).max(-1.0)),
+                    _ => return None,
+                })
+            })
+            .collect()
+    };
+    let uv = [uv_set(3)?, uv_set(4)?];
+    // rigid draws (eyes, stand-ins) carry no joints: they follow whatever they are attached to
+    let (Some(((_, jfmt, jn, jstart), jstride)), Some(((_, wfmt, wn, wstart), wstride))) = (stream(9), stream(10)) else {
+        return Some(Vertices { position, normal, uv, influences: vec![], triangles });
+    };
+    let influences = (0..nv)
+        .map(|v| {
+            let joints: Vec<u16> = match (jfmt, jn) {
+                (4, 4) => at(jstart, jstride.max(8), v, 8)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect(),
+                (8, 4) => at(jstart, jstride.max(4), v, 4)?.iter().map(|x| *x as u16).collect(),
+                (2, 4) => {
+                    let b = at(jstart, jstride.max(16), v, 16)?;
+                    let x = (0..4).fold(0u128, |acc, k| (acc << 32) | word(b, k) as u128);
+                    (0..10).map(|i| ((x >> (128 - 11 * (i + 1))) & 2047) as u16).collect()
+                }
+                _ => return None,
+            };
+            let mut weights: Vec<f32> = match (wfmt, wn) {
+                (3, 1) | (2, 1..=3) => {
+                    let words = if wfmt == 3 { 1 } else { wn as usize };
+                    let b = at(wstart, wstride.max(4 * words), v, 4 * words)?;
+                    (0..words).flat_map(|k| [0, 1, 2].map(|j| unorm10(word(b, k), j))).collect()
+                }
+                _ => return None,
+            };
+            weights.push((1.0 - weights.iter().sum::<f32>()).max(0.0));
+            let mut inf: Vec<(u16, f32)> = joints.into_iter().zip(weights).filter(|(_, w)| *w > 0.0).collect();
+            let sum: f32 = inf.iter().map(|x| x.1).sum();
+            if sum <= 0.0 {
+                return None;
+            }
+            inf.iter_mut().for_each(|x| x.1 /= sum);
+            Some(inf)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(Vertices { position, normal, uv, influences, triangles })
 }
 
 /// A compact copy of some draws' geometry, for a look at a model away from the player's PC: "GRKM", u32 version 1,
@@ -1099,6 +1219,45 @@ mod tests {
     }
 
     #[test]
+    fn skin_joints_unpack_from_the_top_of_the_reversed_words() {
+        // ten 11-bit joints 1..=10 from the top of a 128-bit value, stored as its four u32 words highest first
+        let x = (0..10u128).fold(0u128, |acc, i| acc | ((i + 1) << (128 - 11 * (i + 1))));
+        let words: Vec<u8> = (0..4).flat_map(|k| ((x >> (96 - 32 * k)) as u32).to_le_bytes()).collect();
+        // weights: three 10:10:10:2 words with 0.4, 0.2, 0.1 then zeros; the rest goes to the fourth joint
+        let w = |a: u32, b: u32, c: u32| (a | b << 10 | c << 20).to_le_bytes();
+        let mut res: Vec<u8> = Vec::new();
+        for p in [[0.0f32, 1.0, 0.0], [0.1, 1.0, 0.0], [0.0, 1.1, 0.0]] {
+            res.extend(p.iter().flat_map(|x| x.to_le_bytes()));
+            res.extend(&words);
+            res.extend(w(409, 205, 102));
+            res.extend(w(0, 0, 0));
+            res.extend(w(0, 0, 0));
+        }
+        let idx_at = res.len() as u32;
+        res.extend([0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()));
+        let rec = MeshRecord {
+            lod_distance: 1.0,
+            centre: [0.0, 1.0, 0.0],
+            half_extent: [0.5, 0.5, 0.5],
+            vertex_bytes: idx_at,
+            index_offset: 0,
+            vertex_offset: 0,
+            vertices: 3,
+            triangles: 1,
+            format: 0,
+            indices: 3,
+            streams: vec![(0, 0, 3, 0), (9, 2, 4, 12), (10, 2, 3, 28)],
+            strides: vec![40, 40, 40],
+            hash: 1,
+            material: 0,
+        };
+        let v = draw_vertices(&res, &rec).unwrap();
+        let inf = &v.influences[2];
+        assert_eq!(inf.iter().map(|x| x.0).collect::<Vec<_>>(), vec![1, 2, 3, 10]);
+        assert!((inf[0].1 - 0.4).abs() < 0.01 && (inf[3].1 - 0.3).abs() < 0.01);
+    }
+
+    #[test]
     fn parts_list_their_levels_most_detailed_first() {
         // two parts: one with levels (1 draw from 0, then 1 from 1, then the empty last), one with 2 draws from 2
         let mut b = vec![0u8; 0x44 + 8];
@@ -1148,6 +1307,7 @@ mod tests {
             streams: vec![(0, 0, 3, at), (1, 3, 1, at + nv * 12)],
             strides: vec![12, 4],
             hash: 0x1234,
+            material: 0,
         };
         let mut res = Vec::new();
         let mut put = |pts: &[[f32; 3]], tri: [u16; 3]| {
@@ -1214,13 +1374,26 @@ mod tests {
             for k in 1135..=1140 {
                 let (p, t) = draw_geometry(&b, &rs[k]).unwrap_or_else(|| panic!("record {k}"));
                 println!("record {k}: stride {}, {} vertices, {} triangles", rs[k].strides[0], p.len(), t.len());
+                let v = draw_vertices(&b, &rs[k]).unwrap_or_else(|| panic!("vertices of record {k}"));
+                let most = v.influences.iter().map(|i| i.len()).max().unwrap();
+                assert!(v.influences.iter().flatten().all(|(j, w)| (*j as usize) < 1458 && *w > 0.0));
+                assert!(v.normal.iter().all(|n| (n.iter().map(|x| x * x).sum::<f32>().sqrt() - 1.0).abs() < 0.05));
+                assert!(v.uv[0].iter().flatten().all(|x| x.is_finite()));
+                println!("  up to {most} influences; first vertex {:?}", v.influences[0]);
             }
         }
+        // every resident draw's vertices
+        let resident = rs.iter().filter(|r| r.hash == 0 && draw_vertices(&gpu, r).is_some()).count();
+        println!("{resident} of {} draws in the WAD decode with all their vertex data", rs.iter().filter(|r| r.hash == 0).count());
+        for (k, r) in rs.iter().enumerate().filter(|(_, r)| r.hash == 0 && draw_vertices(&gpu, r).is_none()).take(12) {
+            println!("  record {k}: geometry {}, streams {:?}", draw_geometry(&gpu, r).is_some(), r.streams.iter().map(|s| (s.0, s.1, s.2)).collect::<Vec<_>>());
+        }
+        assert_eq!(resident, rs.iter().filter(|r| r.hash == 0).count(), "every draw in the WAD decodes");
     }
 
     #[test]
     fn a_records_positions_are_found_after_unrelated_bytes() {
-        let rec = MeshRecord { lod_distance: 1.0, centre: [0.0, 1.0, 0.0], half_extent: [0.1, 0.1, 0.1], vertex_bytes: 36, index_offset: 0, vertex_offset: 0, vertices: 3, triangles: 1, format: 0, indices: 3, streams: vec![], strides: vec![], hash: 0 };
+        let rec = MeshRecord { lod_distance: 1.0, centre: [0.0, 1.0, 0.0], half_extent: [0.1, 0.1, 0.1], vertex_bytes: 36, index_offset: 0, vertex_offset: 0, vertices: 3, triangles: 1, format: 0, indices: 3, streams: vec![], strides: vec![], hash: 0, material: 0 };
         let mut b = vec![0xFFu8; 20]; // not floats in range
         for p in [[0.05f32, 1.02, -0.03], [0.0, 0.95, 0.01], [-0.08, 1.07, 0.09]] {
             b.extend(p.iter().flat_map(|x| x.to_le_bytes()));
