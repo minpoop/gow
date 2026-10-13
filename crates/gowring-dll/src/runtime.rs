@@ -164,15 +164,12 @@ impl Runtime {
             return;
         };
         frame.rays = std::mem::take(&mut self.ray_results);
-        // once per session, a few seconds into the world: the player's skeleton for Kratos's body part
+        // once per session, a few seconds into the world, on a thread of our own: the player's skeleton for Kratos's
+        // body part, then what the game made of the part files
         if self.entered_at.is_some_and(|t| t.elapsed().as_secs() >= 5) {
             if let Some(b) = self.bridge.player_behavior_module() {
-                crate::skeleton::dump_once(b);
+                crate::filecaps::start_once(b);
             }
-        }
-        // and what the game made of the part files (loaded or not)
-        if let Some(t) = self.entered_at {
-            crate::filecaps::report_due(t.elapsed().as_secs());
         }
         self.observe_for_tests();
         self.upkeep(&frame);

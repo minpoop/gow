@@ -1,7 +1,8 @@
 //! What the game made of our part files. Every file Elden Ring asks for gets an FD4FileCap in CSFile's repository: a
 //! hash table of caps, each with the file's name, reference count and load state (initial, queued, processing, ready).
 //! A few times after the player is in the world this logs the caps for our part ids (9701-9703) and a sample of the
-//! game's own part files for comparison. Read-only, and every pointer is checked readable before it is followed.
+//! game's own part files for comparison. Read-only and off the game's thread: every read is a `ReadProcessMemory`
+//! copy (one per cap and one per name), and the walk stops at a time budget and on overlong chains.
 
 use std::fmt::Write as _;
 use std::mem::{offset_of, size_of};
@@ -9,7 +10,7 @@ use std::mem::{offset_of, size_of};
 use eldenring::cs::{CSFileImp, CSFileRepository};
 use eldenring::fd4::{FD4FileCap, FD4ResCap, FD4ResCapHolder};
 
-use crate::skeleton::{read, readable};
+use crate::skeleton::{read, read_vec, reads};
 
 /// The file ids of the parts the launcher installs.
 const OURS: [&str; 3] = ["9701", "9702", "9703"];
@@ -21,20 +22,23 @@ fn file_repository() -> Option<usize> {
     read::<usize>(imp + offset_of!(CSFileImp, file_repository_1))
 }
 
+/// The bytes of one cap.
+type Cap = [u8; size_of::<FD4FileCap>()];
+
+fn field<T: Copy>(c: &Cap, at: usize) -> T {
+    unsafe { std::ptr::read_unaligned(c[at..at + size_of::<T>()].as_ptr() as *const T) }
+}
+
 /// A cap's name. FD4BasicHashString is a vtable and then the game's UTF-16 std::basic_string (allocator, 16 bytes of
 /// inline text or a pointer to it, length, capacity: the text is inline while the capacity is under 8 units).
-fn cap_name(cap: usize) -> Option<String> {
-    let s = cap + offset_of!(FD4FileCap, res_cap) + offset_of!(FD4ResCap, name) + 8;
-    let (len, capacity) = (read::<usize>(s + 24)?, read::<usize>(s + 32)?);
+fn cap_name(c: &Cap) -> Option<String> {
+    let s = offset_of!(FD4FileCap, res_cap) + offset_of!(FD4ResCap, name) + 8;
+    let (len, capacity): (usize, usize) = (field(c, s + 24), field(c, s + 32));
     if len > capacity || len > 1024 {
         return None;
     }
-    let text = if capacity < 8 { s + 8 } else { read::<usize>(s + 8)? };
-    if !readable(text, 2 * len) {
-        return None;
-    }
-    let units = unsafe { std::slice::from_raw_parts(text as *const u16, len) };
-    Some(String::from_utf16_lossy(units))
+    let units: Vec<u16> = if capacity < 8 { (0..len).map(|k| field::<u16>(c, s + 8 + 2 * k)).collect() } else { read_vec(field::<usize>(c, s + 8), len)? };
+    Some(String::from_utf16_lossy(&units))
 }
 
 fn state(s: u8) -> &'static str {
@@ -55,27 +59,39 @@ pub fn report(when: &str) {
         crate::glog!("parts", "{when}: the game's file table was not found (singletons named *File*: {names:?})");
         return;
     };
-    let (mut total, mut parts) = (0usize, 0usize);
+    let (t0, r0) = (std::time::Instant::now(), reads());
+    let budget = std::time::Duration::from_secs(3);
+    let (mut total, mut parts, mut cut) = (0usize, 0usize, None);
     let mut ours = Vec::new();
     let mut samples = Vec::new();
-    for holder in [offset_of!(CSFileRepository, res_cap_holder), offset_of!(CSFileRepository, holder2)] {
+    'walk: for holder in [offset_of!(CSFileRepository, res_cap_holder), offset_of!(CSFileRepository, holder2)] {
         let h = repo + holder;
         let (Some(count), Some(buckets)) = (read::<u32>(h + offset_of!(FD4ResCapHolder<FD4FileCap>, bucket_count)), read::<usize>(h + offset_of!(FD4ResCapHolder<FD4FileCap>, buckets))) else {
             continue;
         };
-        if count == 0 || count > 1 << 20 || !readable(buckets, 8 * count as usize) {
+        if count == 0 || count > 1 << 20 {
             continue;
         }
-        for b in 0..count as usize {
-            let mut cap = read::<usize>(buckets + 8 * b).unwrap_or(0);
+        let Some(heads) = read_vec::<usize>(buckets, count as usize) else { continue };
+        for head in heads {
+            let mut at = head;
             let mut steps = 0;
-            while cap != 0 && steps < 4096 && readable(cap, size_of::<FD4FileCap>()) {
+            while at != 0 {
                 steps += 1;
+                if steps > 64 {
+                    cut = Some("a bucket chain over 64 long");
+                    break 'walk;
+                }
+                if t0.elapsed() > budget {
+                    cut = Some("the 3 s budget");
+                    break 'walk;
+                }
+                let Some(c) = read::<Cap>(at) else { break };
                 total += 1;
-                if let Some(name) = cap_name(cap) {
+                if let Some(name) = cap_name(&c) {
                     let lower = name.to_ascii_lowercase();
-                    let st = read::<u8>(cap + offset_of!(FD4FileCap, load_state)).unwrap_or(0xFF);
-                    let refs = read::<u32>(cap + offset_of!(FD4FileCap, res_cap) + offset_of!(FD4ResCap, reference_count)).unwrap_or(0);
+                    let st: u8 = field(&c, offset_of!(FD4FileCap, load_state));
+                    let refs: u32 = field(&c, offset_of!(FD4FileCap, res_cap) + offset_of!(FD4ResCap, reference_count));
                     if OURS.iter().any(|id| lower.contains(id)) {
                         ours.push(format!("{name} ({}, {refs} refs)", state(st)));
                     } else if lower.contains("parts") {
@@ -85,11 +101,11 @@ pub fn report(when: &str) {
                         }
                     }
                 }
-                cap = read::<usize>(cap + offset_of!(FD4FileCap, res_cap) + offset_of!(FD4ResCap, next_item)).unwrap_or(0);
+                at = field(&c, offset_of!(FD4FileCap, res_cap) + offset_of!(FD4ResCap, next_item));
             }
         }
     }
-    let mut line = format!("{when}: {total} files in the game's table; ours: ");
+    let mut line = format!("{when}: {total} files in the game's table ({} reads, {} ms{}); ours: ", reads() - r0, t0.elapsed().as_millis(), cut.map(|c| format!(", stopped at {c}")).unwrap_or_default());
     if ours.is_empty() {
         line.push_str("none (the game has not asked for them)");
     } else {
@@ -99,14 +115,29 @@ pub fn report(when: &str) {
     crate::glog!("parts", "{line}");
 }
 
-static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Report at 5 s, 30 s and 2 min into the world (`secs` since the player appeared), once each per session.
-pub fn report_due(secs: u64) {
-    const AT: [u64; 3] = [5, 30, 120];
-    let k = NEXT.load(std::sync::atomic::Ordering::SeqCst);
-    if k < AT.len() && secs >= AT[k] {
-        NEXT.store(k + 1, std::sync::atomic::Ordering::SeqCst);
-        report(&format!("{secs} s into the world"));
+/// Once per session, 5 s into the world: on a thread of our own, read the player skeleton (from the behaviour module
+/// at `behavior_module`) and then report the file table at 5 s, 30 s and 2 min. Nothing here runs on the game's thread.
+pub fn start_once(behavior_module: usize) {
+    if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("gowring-probe".into()).spawn(move || {
+        let t0 = std::time::Instant::now();
+        let r = std::panic::catch_unwind(|| {
+            crate::skeleton::dump_once(behavior_module);
+            for at in [5u64, 30, 120] {
+                let wait = std::time::Duration::from_secs(at - 5).saturating_sub(t0.elapsed());
+                std::thread::sleep(wait);
+                report(&format!("{at} s into the world"));
+            }
+        });
+        if r.is_err() {
+            crate::glog!("parts", "the skeleton and file-table probe panicked");
+        }
+    });
+    if let Err(e) = spawned {
+        crate::glog!("parts", "could not start the probe thread: {e}");
     }
 }

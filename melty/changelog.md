@@ -1,9 +1,8 @@
-Forty-sixth alpha: the likely reason Kratos's body never showed.
+Forty-seventh alpha: Kratos is drawn, and the freeze is fixed.
 
-In 0.1.44 none of the three test pieces appeared, not even the small cube. Comparing our model files field by field with Elden Ring's own turned up the cause: each mesh carries a box the game uses to decide whether it is on screen, and we wrote that box in the format the modding tools document, which is not the one Elden Ring actually reads. To the game, every piece looked like an empty box at your feet, so it never drew them.
+0.1.45 worked: Kratos's whole default outfit now draws on your character, at your height and facing forward. He is still a rigid statue in a plain colour, and the two test pieces (his bare upper body beside you and a small red cube) are still there.
 
-- **The box is fixed**, along with four smaller details that now match the game's own files exactly.
-- **The same three test pieces.** The body shows Kratos's whole default outfit; the legs slot his skin only, about a metre to your right; the arms slot a small red cube near you at chest height. The body and legs pieces now carry Elden Ring's own skeleton (read from your game last session), as the game's armour does.
-- **Better logs.** The log now records whether the game opened our files and whether it finished loading them.
+- **No more freeze on entering the world.** The mod reads Elden Ring's player skeleton a few seconds after you arrive. That read used a slow safety check thousands of times on the game's own thread: in 0.1.45 it froze the game, and in 0.1.44 it caused a 10-second hitch. It now uses fast, safe reads on a thread of its own, so it can no longer hold the game up.
+- **Your own face no longer shows through Kratos's head.** The armour that shows Kratos now hides your character's head the way a full helm does.
 
-Your character from 0.1.44 can be used as is: it already wears the three test pieces. They are still rigid statues in plain colours.
+Making him move with you, and his own colours, come next.
