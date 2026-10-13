@@ -9,7 +9,8 @@
 
 use std::collections::BTreeMap;
 
-pub const MATERIAL_MTD: &str = "N:\\GR\\data\\INTERROOT_win64\\material\\matbin\\Parts\\matxml\\C[AMSN]_e.matxml";
+/// The bare file name, as the community's working armour imports write it (the game finds the material by name).
+pub const MATERIAL_MTD: &str = "C[AMSN]_e.matxml";
 pub const ALBEDO: &str = "C_AMSN__snp_Texture2D_2_AlbedoMap_0";
 pub const METALLIC: &str = "C_AMSN__snp_Texture2D_0_MetallicMap_0";
 pub const NORMAL: &str = "C_AMSN__snp_Texture2D_7_NormalMap_4";
@@ -721,10 +722,50 @@ pub fn dcx_zstd(data: &[u8]) -> Vec<u8> {
     o
 }
 
+/// A zlib stream holding `data` in stored (uncompressed) deflate blocks of at most 65,535 bytes.
+pub fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut o = vec![0x78, 0xDA];
+    let chunks: Vec<&[u8]> = if data.is_empty() { vec![&[][..]] } else { data.chunks(65535).collect() };
+    for (k, c) in chunks.iter().enumerate() {
+        o.push((k + 1 == chunks.len()) as u8);
+        o.extend((c.len() as u16).to_le_bytes());
+        o.extend((!(c.len() as u16)).to_le_bytes());
+        o.extend_from_slice(c);
+    }
+    let (mut a, mut b) = (1u32, 0u32);
+    for x in data {
+        a = (a + *x as u32) % 65521;
+        b = (b + a) % 65521;
+    }
+    o.extend(((b << 16) | a).to_be_bytes());
+    o
+}
+
+/// DCX with DFLT (zlib), the way Elden Ring's own `systex.tpf.dcx` is stored, holding `data` in stored blocks.
+pub fn dcx_dflt(data: &[u8]) -> Vec<u8> {
+    let z = zlib_stored(data);
+    let mut o = b"DCX\0".to_vec();
+    for v in [0x11000u32, 0x18, 0x24, 0x44, 0x4C] {
+        o.extend(v.to_be_bytes());
+    }
+    o.extend(b"DCS\0");
+    o.extend((data.len() as u32).to_be_bytes());
+    o.extend((z.len() as u32).to_be_bytes());
+    o.extend(b"DCP\0DFLT");
+    o.extend(0x20u32.to_be_bytes());
+    o.extend(0x0900_0000u32.to_be_bytes());
+    o.extend([0u8; 12]);
+    o.extend(0x10100u32.to_be_bytes());
+    o.extend(b"DCA\0");
+    o.extend(8u32.to_be_bytes());
+    o.extend(z);
+    o
+}
+
 /// A whole armour part file (`<stem>.partsbnd.dcx`): the model and its textures under the paths the game expects.
 pub fn partsbnd(stem: &str, flver: Vec<u8>, tpf: Vec<u8>) -> Vec<u8> {
     let base = format!("N:\\GR\\data\\INTERROOT_win64\\parts\\{stem}\\{stem}");
-    dcx_zstd(&bnd4(&[(100, format!("{base}.tpf"), tpf), (200, format!("{base}.flver"), flver)]))
+    dcx_dflt(&bnd4(&[(100, format!("{base}.tpf"), tpf), (200, format!("{base}.flver"), flver)]))
 }
 
 #[cfg(test)]
@@ -757,6 +798,30 @@ mod tests {
         assert_eq!(&d[0x44..0x48], b"DCA\0");
         assert_eq!(&d[0x4C..0x50], &[0x28, 0xB5, 0x2F, 0xFD]);
         assert_eq!(d.len() % 16, 0);
+    }
+
+    #[test]
+    fn dflt_dcx_wraps_a_valid_zlib_stream() {
+        let data: Vec<u8> = (0..200_000u32).map(|i| (i * 7 % 256) as u8).collect();
+        let d = dcx_dflt(&data);
+        assert_eq!(&d[0x24..0x2C], b"DCP\0DFLT");
+        assert_eq!(u32::from_be_bytes(d[0x1C..0x20].try_into().unwrap()) as usize, data.len());
+        let z = &d[0x4C..];
+        assert_eq!(u32::from_be_bytes(d[0x20..0x24].try_into().unwrap()) as usize, z.len());
+        // walk the stored blocks back to the data and check the Adler-32
+        let (mut at, mut out) = (2, Vec::new());
+        loop {
+            let last = z[at] & 1;
+            let len = u16::from_le_bytes([z[at + 1], z[at + 2]]) as usize;
+            assert_eq!(!u16::from_le_bytes([z[at + 3], z[at + 4]]) as usize, len);
+            out.extend_from_slice(&z[at + 5..at + 5 + len]);
+            at += 5 + len;
+            if last == 1 {
+                break;
+            }
+        }
+        assert_eq!(out, data);
+        assert_eq!(z.len(), at + 4);
     }
 
     #[test]

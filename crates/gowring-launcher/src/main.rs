@@ -254,11 +254,11 @@ fn play(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// Build Kratos's body part (`bd_m_9701` / `bd_f_9701`) from the player's Ragnarök install once per install and
-/// builder version, keep it in the cache, and copy it into the mod folder ModEngine2 serves (`mod/parts`).
+/// Build Kratos's armour parts (see `kratos_part::build_parts`) from the player's Ragnarök install once per install and
+/// builder version, keep them in the cache, and copy them into the mod folder ModEngine2 serves (`mod/parts`).
 fn install_kratos_part(ctx: &Ctx) -> String {
-    use gowring_gow::kratos_part::{build_flver_and_tpf, part_files};
-    const BUILD: u32 = 1;
+    use gowring_gow::kratos_part::build_parts;
+    const BUILD: u32 = 2;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -267,7 +267,11 @@ fn install_kratos_part(ctx: &Ctx) -> String {
     let size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
     let stamp = format!("build {BUILD} wad {} pack {}\n", size(&wad), size(&pack));
     let cache = ctx.cache.join("kratos_part");
-    let names = ["bd_m_9701.partsbnd.dcx", "bd_f_9701.partsbnd.dcx"];
+    let names: Vec<String> = ["bd", "am", "lg"]
+        .iter()
+        .zip([9701, 9702, 9703])
+        .flat_map(|(slot, id)| ["m", "f"].iter().flat_map(move |sex| ["", "_l"].iter().map(move |low| format!("{slot}_{sex}_{id}{low}.partsbnd.dcx"))))
+        .collect();
     let cached = std::fs::read_to_string(cache.join("stamp.txt")).is_ok_and(|s| s == stamp) && names.iter().all(|n| cache.join(n).exists());
     let t0 = std::time::Instant::now();
     let mut note = String::new();
@@ -279,9 +283,9 @@ fn install_kratos_part(ctx: &Ctx) -> String {
             let (Some(mesh), Some(mg), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
                 bail!("Kratos's mesh chunks are not in the first 200 MB of r_heroa00.wad");
             };
-            let (flver, tpf, note) = build_flver_and_tpf(mesh, mg, gpu, &pack)?;
+            let (files, note) = build_parts(mesh, mg, gpu, &pack)?;
             std::fs::create_dir_all(&cache)?;
-            for (name, bytes) in part_files(&flver, &tpf) {
+            for (name, bytes) in files {
                 std::fs::write(cache.join(name), bytes)?;
             }
             std::fs::write(cache.join("stamp.txt"), &stamp)?;
@@ -295,7 +299,7 @@ fn install_kratos_part(ctx: &Ctx) -> String {
     if let Err(e) = std::fs::create_dir_all(&parts) {
         return format!("Kratos's body part: {}: {e}", parts.display());
     }
-    for n in names {
+    for n in &names {
         if let Err(e) = std::fs::copy(cache.join(n), parts.join(n)) {
             return format!("Kratos's body part: copying {n}: {e}");
         }

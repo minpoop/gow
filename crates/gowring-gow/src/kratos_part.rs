@@ -1,6 +1,6 @@
 //! Kratos as an Elden Ring armour part, built on the player's PC from their Ragnarök install: his default outfit
 //! ([`crate::kratos::DEFAULT_OUTFIT`], most detailed level) read from `r_heroa00.wad` and `root.lodpack`, written as
-//! `bd_m_9701` / `bd_f_9701` with [`crate::erpart`].
+//! armour parts with [`crate::erpart`] (see [`build_parts`]).
 //!
 //! First version: the whole figure follows the character's root bone ("Master") rigidly, scaled to the player's
 //! height, with placeholder colours. It answers whether Elden Ring loads a part we wrote; binding him to the player's
@@ -18,31 +18,19 @@ pub const MODEL_ID: u16 = 9701;
 /// Kratos is 1.94 m in his rest pose; the player is about 1.78 m.
 pub const SCALE: f32 = 0.92;
 
-pub fn stem(female: bool) -> String {
-    format!("bd_{}_{MODEL_ID:04}", if female { "f" } else { "m" })
-}
-
-/// The model and texture pack, and a line about what went in.
-pub fn build_flver_and_tpf(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path) -> Result<(Vec<u8>, Vec<u8>, String)> {
-    let rs = mesh_records(mesh);
-    let parts = mg_parts(mg);
-    let records: Vec<usize> = DEFAULT_OUTFIT.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect();
-    if records.is_empty() {
-        bail!("no default outfit draws in the mesh tables");
-    }
-    let toc = crate::lodpack::Toc::read_from_pack(pack)?;
-    let mut file = std::fs::File::open(pack)?;
+/// One part's model as meshes: Kratos's draws from `records`, rigid on the root bone, shifted by `offset` (metres).
+fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8], toc: &crate::lodpack::Toc, file: &mut std::fs::File, offset: [f32; 3]) -> Result<(Vec<Node>, Vec<Mesh>, Vec<usize>)> {
     let mut cache: std::collections::HashMap<u64, Vec<u8>> = Default::default();
     let mut nodes = vec![Node { name: "Master".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }];
     let mut meshes = Vec::new();
-    let (mut failed, mut verts, mut tris) = (Vec::new(), 0, 0);
-    for k in records {
+    let mut failed = Vec::new();
+    for &k in records {
         let Some(r) = rs.get(k) else { continue };
         let res: &[u8] = if r.hash == 0 {
             gpu
         } else {
             if !cache.contains_key(&r.hash) {
-                match toc.read(&mut file, r.hash)? {
+                match toc.read(file, r.hash)? {
                     Some(b) => {
                         cache.insert(r.hash, b);
                     }
@@ -67,8 +55,9 @@ pub fn build_flver_and_tpf(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path) -> R
                 let up = if n[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
                 let t = [up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2], up[0] * n[1] - up[1] * n[0]];
                 let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-6);
+                let p = v.position[i];
                 Vertex {
-                    position: v.position[i].map(|x| x * SCALE),
+                    position: [p[0] * SCALE + offset[0], p[1] * SCALE + offset[1], p[2] * SCALE + offset[2]],
                     normal: n,
                     tangent: [t[0] / len, t[1] / len, t[2] / len, 1.0],
                     bones: [0; 4],
@@ -78,33 +67,90 @@ pub fn build_flver_and_tpf(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path) -> R
                 }
             })
             .collect();
-        verts += vertices.len();
-        tris += v.triangles.len();
         meshes.push(Mesh { material: 0, node, vertices, indices: v.triangles.iter().flat_map(|t| t.map(|x| x as u32)).collect() });
     }
-    if meshes.is_empty() {
-        bail!("none of the default outfit's draws decoded");
-    }
-    let tex = |suffix: &str| format!("N:\\GR\\data\\INTERROOT_win64\\parts\\kratos\\tex\\kratos_{MODEL_ID}_{suffix}.tif");
-    let material = Material {
-        name: "kratos".into(),
-        mtd: erpart::MATERIAL_MTD.into(),
-        textures: vec![(erpart::ALBEDO.into(), tex("a")), (erpart::METALLIC.into(), tex("m")), (erpart::NORMAL.into(), tex("n"))],
-    };
-    let flver = erpart::flver2(&nodes, &[material], &meshes);
-    let solid = |r, g, b| erpart::dds_bc1(4, 4, &erpart::bc1_solid(r, g, b));
-    let tpf = erpart::tpf(&[
-        (format!("kratos_{MODEL_ID}_a"), solid(196, 150, 118), 0),
-        (format!("kratos_{MODEL_ID}_m"), solid(0, 160, 0), 0),
-        (format!("kratos_{MODEL_ID}_n"), solid(128, 128, 255), 0),
-    ]);
-    let note = format!("{} draws ({verts} vertices, {tris} triangles) on the root bone; {} would not decode {failed:?}; model {} bytes", meshes.len(), failed.len(), flver.len());
-    Ok((flver, tpf, note))
+    Ok((nodes, meshes, failed))
 }
 
-/// Both part files (male and female), as (file name, bytes).
-pub fn part_files(flver: &[u8], tpf: &[u8]) -> Vec<(String, Vec<u8>)> {
-    [false, true].iter().map(|f| (format!("{}.partsbnd.dcx", stem(*f)), erpart::partsbnd(&stem(*f), flver.to_vec(), tpf.to_vec()))).collect()
+/// A box `size` metres wide centred at `at`, on the root bone: the smallest model there is.
+fn cube(at: [f32; 3], size: f32) -> (Vec<Node>, Vec<Mesh>) {
+    let nodes = vec![Node { name: "Master".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }, Node { name: "marker".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 }];
+    let h = size / 2.0;
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+    // six faces, each its own four corners so the normals are flat
+    for (axis, sign) in [(0usize, 1.0f32), (0, -1.0), (1, 1.0), (1, -1.0), (2, 1.0), (2, -1.0)] {
+        let (u, w) = ((axis + 1) % 3, (axis + 2) % 3);
+        let base = vertices.len() as u32;
+        for (a, b) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+            let mut p = [0.0f32; 3];
+            p[axis] = sign * h;
+            p[u] = a * h;
+            p[w] = b * h;
+            let mut n = [0.0f32; 3];
+            n[axis] = sign;
+            let mut t = [0.0f32; 4];
+            t[u] = 1.0;
+            t[3] = 1.0;
+            vertices.push(Vertex { position: [p[0] + at[0], p[1] + at[1], p[2] + at[2]], normal: n, tangent: t, bones: [0; 4], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[(a + 1.0) / 2.0, (b + 1.0) / 2.0], [0.0; 2]] });
+        }
+        let quad = if sign > 0.0 { [0, 1, 2, 0, 2, 3] } else { [0, 2, 1, 0, 3, 2] };
+        indices.extend(quad.iter().map(|q| base + q));
+    }
+    (nodes, vec![Mesh { material: 0, node: 1, vertices, indices }])
+}
+
+fn material(id: u16) -> Material {
+    let tex = |suffix: &str| format!("N:\\GR\\data\\INTERROOT_win64\\parts\\kratos\\tex\\kratos_{id}_{suffix}.tif");
+    Material { name: "kratos".into(), mtd: erpart::MATERIAL_MTD.into(), textures: vec![(erpart::ALBEDO.into(), tex("a")), (erpart::METALLIC.into(), tex("m")), (erpart::NORMAL.into(), tex("n"))] }
+}
+
+fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
+    let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
+    erpart::tpf(&[(format!("kratos_{id}_a"), solid(albedo), 0), (format!("kratos_{id}_m"), solid([0, 160, 0]), 0), (format!("kratos_{id}_n"), solid([128, 128, 255]), 0)])
+}
+
+/// Every part file this version installs, as (file name, bytes), and a line about them. The parts, one per armour
+/// slot, test what Elden Ring accepts: the body (`bd_*_9701`) is Kratos's whole default outfit; the legs
+/// (`lg_*_9703`) only his skin (head, torso, arms), standing 1.2 m to the right; the arms (`am_*_9702`) a 0.4 m red
+/// cube 1 m to the left at chest height. Each comes as the normal and the low-detail (`_l`) file, male and female.
+pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path) -> Result<(Vec<(String, Vec<u8>)>, String)> {
+    let rs = mesh_records(mesh);
+    let parts = mg_parts(mg);
+    let level0 = |list: &[u16]| -> Vec<usize> { list.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect() };
+    let outfit = level0(DEFAULT_OUTFIT);
+    if outfit.is_empty() {
+        bail!("no default outfit draws in the mesh tables");
+    }
+    let toc = crate::lodpack::Toc::read_from_pack(pack)?;
+    let mut file = std::fs::File::open(pack)?;
+    let mut out = Vec::new();
+    let mut note = String::new();
+    let mut add = |slot: &str, id: u16, nodes: &[Node], meshes: &[Mesh], albedo: [u8; 3]| -> usize {
+        let flver = erpart::flver2(nodes, &[material(id)], meshes);
+        let tpf = texture_pack(id, albedo);
+        let size = flver.len();
+        for sex in ["m", "f"] {
+            for low in ["", "_l"] {
+                let stem = format!("{slot}_{sex}_{id:04}{low}");
+                out.push((format!("{stem}.partsbnd.dcx"), erpart::partsbnd(&stem, flver.clone(), tpf.clone())));
+            }
+        }
+        size
+    };
+    let (nodes, meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3])?;
+    let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
+    let size = add("bd", MODEL_ID, &nodes, &meshes, [196, 150, 118]);
+    note.push_str(&format!("body {} draws ({tris} triangles, {size} bytes; {} failed {failed:?}); ", meshes.len(), failed.len()));
+    let skin = level0(&[230]);
+    let (nodes, meshes, _) = kratos_meshes(&rs, &skin, gpu, &toc, &mut file, [1.2, 0.0, 0.0])?;
+    let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
+    let size = add("lg", MODEL_ID + 2, &nodes, &meshes, [150, 200, 255]);
+    note.push_str(&format!("legs: skin only, {} draws ({tris} triangles, {size} bytes); ", meshes.len()));
+    let (nodes, meshes) = cube([-1.0, 1.2, 0.0], 0.4);
+    let size = add("am", MODEL_ID + 1, &nodes, &meshes, [255, 0, 0]);
+    note.push_str(&format!("arms: a cube ({size} bytes)"));
+    Ok((out, note))
 }
 
 #[cfg(test)]
@@ -178,9 +224,9 @@ mod tests {
         let dir = std::path::Path::new(&out);
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("root.lodpack"), &pack).unwrap();
-        let (flver, tpf, note) = build_flver_and_tpf(&mesh, &mg, &gpu, &dir.join("root.lodpack")).unwrap();
+        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack")).unwrap();
         println!("{real} real resources; {note}");
-        for (name, bytes) in part_files(&flver, &tpf) {
+        for (name, bytes) in files {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
         let _ = std::fs::remove_file(dir.join("root.lodpack"));

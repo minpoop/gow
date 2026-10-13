@@ -108,9 +108,9 @@ impl Toc {
     }
 }
 
-/// The bytes of one record, read from its pack.
+/// The bytes of one block (its command stream and texels), read from its pack.
 pub fn read_record(pack: &mut std::fs::File, r: &Record) -> Result<Vec<u8>> {
-    let mut v = vec![0u8; r.bytes as usize];
+    let mut v = vec![0u8; r.bytes_on_disk as usize];
     pack.seek(SeekFrom::Start(r.offset))?;
     pack.read_exact(&mut v)?;
     Ok(v)
@@ -373,6 +373,34 @@ mod tests {
         assert_eq!(texels, 0x124);
         assert_eq!(&g.unwrap()[..4], b"GNF ");
         assert!(block_header(&[9, 0, 0, 0]).is_none());
+    }
+
+    /// A player's saved blocks (the probe of 0.1.42 cut each short by its 0x124-byte header; the gap is zero-filled):
+    /// `GOWRING_TEX_RAW=dir GOWRING_TEX_OUT=dir cargo test -p gowring-gow real_texture_blocks -- --ignored`.
+    #[test]
+    #[ignore]
+    fn real_texture_blocks() {
+        let (Ok(dir), Ok(out)) = (std::env::var("GOWRING_TEX_RAW"), std::env::var("GOWRING_TEX_OUT")) else { return };
+        let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with("_0.bin")).collect();
+        names.sort();
+        for n in names {
+            let stem = n.trim_end_matches("_0.bin");
+            let mut blocks = Vec::new();
+            for k in 0.. {
+                let Ok(b) = std::fs::read(std::path::Path::new(&dir).join(format!("{stem}_{k}.bin"))) else { break };
+                blocks.push(b);
+            }
+            if let Some(last) = blocks.last_mut() {
+                last.extend(vec![0u8; 0x124]);
+            }
+            match decode(&blocks) {
+                Ok(img) => {
+                    println!("{stem}: {}x{} {:?}", img.w, img.h, img.format);
+                    std::fs::write(std::path::Path::new(&out).join(format!("{stem}.png")), crate::dds::to_png(&img).unwrap()).unwrap();
+                }
+                Err(e) => println!("{stem}: {e:#}"),
+            }
+        }
     }
 
     #[test]

@@ -166,24 +166,33 @@ pub fn apply() -> Result<Carriers, String> {
         }
     }
 
-    // ---- Kratos's body: a body armour whose model is the part the launcher built (bd_m_9701 / bd_f_9701) ------------------
-    // Only when the part is in the mod folder: an armour pointing at a missing model would show nothing at best.
-    let part = crate::paths::get().home.join("mod").join("parts").join("bd_m_9701.partsbnd.dcx");
-    let mut body_row: i32 = -1;
-    if part.exists() {
-        let first_body = repo.rows::<EquipParamProtector>().find(|(_, r)| r.protector_category() == 1 && r.body_equip() && r.equip_model_id() > 0).map(|(id, _)| id);
-        match first_body.and_then(|id| repo.get_mut::<EquipParamProtector>(id).map(|r| (id, r))) {
+    // ---- Kratos's armour parts (built by the launcher): body bd_*_9701, arms am_*_9702, legs lg_*_9703 -------------------
+    // Each slot takes the first armour row of its category and points its model at our part, only when the part is in
+    // the mod folder: an armour pointing at a missing model would show nothing at best.
+    let parts = crate::paths::get().home.join("mod").join("parts");
+    let mut slot_rows = [-1i32; 3];
+    for (k, (category, model, file)) in [(1u8, 9701u16, "bd_m_9701"), (2, 9702, "am_m_9702"), (3, 9703, "lg_m_9703")].into_iter().enumerate() {
+        if !parts.join(format!("{file}.partsbnd.dcx")).exists() {
+            notes.push(format!("{file} not installed"));
+            continue;
+        }
+        let in_slot = |r: &eldenring::param::EQUIP_PARAM_PROTECTOR_ST| match category {
+            1 => r.body_equip(),
+            2 => r.arm_equip(),
+            _ => r.leg_equip(),
+        };
+        let first = repo.rows::<EquipParamProtector>().find(|(_, r)| r.protector_category() == category && in_slot(r) && r.equip_model_id() > 0).map(|(id, _)| id);
+        match first.and_then(|id| repo.get_mut::<EquipParamProtector>(id).map(|r| (id, r))) {
             Some((id, r)) => {
                 let was = r.equip_model_id();
-                r.set_equip_model_id(9701);
-                body_row = id as i32;
-                notes.push(format!("body armour {id} (model {was}) now shows Kratos (model 9701)"));
+                r.set_equip_model_id(model);
+                slot_rows[k] = id as i32;
+                notes.push(format!("armour {id} (category {category}, model {was}) now shows {file}"));
             }
-            None => notes.push("no body armour row found for Kratos's body part".into()),
+            None => notes.push(format!("no armour row of category {category} for {file}")),
         }
-    } else {
-        notes.push(format!("Kratos's body part not installed ({} missing)", part.display()));
     }
+    let [body_row, arms_row, legs_row] = slot_rows;
 
     // ---- the ten starting classes become Kratos ----------------------------------------------------------------------------
     let (axe, blades, spear, shield) = (rows["leviathan_axe"] as i32, rows["blades_of_chaos"] as i32, rows["draupnir_spear"] as i32, rows["guardian_shield"] as i32);
@@ -199,11 +208,11 @@ pub fn apply() -> Result<Carriers, String> {
             c.set_equip_wep_left(shield);
             c.set_equip_subwep_left(-1);
             c.set_equip_subwep_left3(-1);
-            // Kratos fights bare-chested: no armour pieces, but his body when it is installed
+            // Kratos fights bare-chested: no armour pieces, but his parts when they are installed
             c.set_equip_helm(-1);
             c.set_equip_armer(body_row);
-            c.set_equip_gaunt(-1);
-            c.set_equip_leg(-1);
+            c.set_equip_gaunt(arms_row);
+            c.set_equip_leg(legs_row);
             classes += 1;
         }
     }

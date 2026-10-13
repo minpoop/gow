@@ -5,9 +5,10 @@
 //! before anything is written.
 //!
 //! Path, as the community's ERSkeletonMan documents it: ChrIns -> module container -> behaviour module (+0x28 in the
-//! container) -> +0x10 -> +0x30 (hkbCharacter) -> +0x90 -> +0x28 -> +0 = hkaSkeleton. hkaSkeleton (Havok 2018, x64):
-//! +0x10 name, +0x18 parent indices (hkArray of i16), +0x28 bones (hkArray of 16-byte hkaBone, name first), +0x38
-//! reference pose (hkArray of 48-byte hkQsTransform: translation, rotation quaternion, scale; each 4 floats).
+//! container) -> +0x10 -> +0x30 (hkbCharacter) -> +0x90 -> +0x28 = hkaSkeleton. hkaSkeleton (Havok 2018, x64, after a
+//! 0x18-byte hkReferencedObject; as soulstruct-havok's type tables give it): +0x18 name, +0x20 parent indices (hkArray
+//! of i16), +0x30 bones (hkArray of 16-byte hkaBone, name first), +0x40 reference pose (hkArray of 48-byte
+//! hkQsTransform: translation, rotation quaternion, scale; each 4 floats). 0.1.43 read it 8 bytes early and missed.
 
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,13 +63,17 @@ pub struct Bone {
     pub s: [f32; 3],
 }
 
-/// The hkaSkeleton at `skel`, if it is one.
+/// The hkaSkeleton at `skel`, if it is one: Havok 2018's layout first, then one with a 0x10-byte base.
 fn skeleton_at(skel: usize) -> Option<(String, Vec<Bone>)> {
-    let name = c_string(read::<usize>(skel + 0x10)?).unwrap_or_default();
+    skeleton_with_base(skel, 0x18).or_else(|| skeleton_with_base(skel, 0x10))
+}
+
+fn skeleton_with_base(skel: usize, base: usize) -> Option<(String, Vec<Bone>)> {
+    let name = read::<usize>(skel + base).and_then(c_string).unwrap_or_default();
     let array = |off: usize| -> Option<(usize, usize)> { Some((read::<usize>(skel + off)?, read::<i32>(skel + off + 8)? as usize)) };
-    let (parents, n) = array(0x18)?;
-    let (bones, n2) = array(0x28)?;
-    let (pose, n3) = array(0x38)?;
+    let (parents, n) = array(base + 0x08)?;
+    let (bones, n2) = array(base + 0x18)?;
+    let (pose, n3) = array(base + 0x28)?;
     if !(20..=1024).contains(&n) || n != n2 || n != n3 || !readable(parents, 2 * n) || !readable(bones, 16 * n) || !readable(pose, 48 * n) {
         return None;
     }
@@ -115,7 +120,16 @@ pub fn dump_once(behavior_module: usize) {
         }
     }
     let Some((name, bones)) = found else {
-        crate::glog!("skeleton", "player skeleton not found from the behaviour module at {behavior_module:#x}{trail}");
+        // the objects along the way, for working out the layout from the log
+        let mut dump = String::new();
+        let mut at = behavior_module;
+        for off in [0x10usize, 0x30, 0x90, 0x28] {
+            let Some(next) = read::<usize>(at + off) else { break };
+            at = next;
+            let words: Vec<String> = (0..16).map(|k| read::<u64>(at + 8 * k).map(|w| format!("{w:016x}")).unwrap_or_else(|| "?".into())).collect();
+            let _ = write!(dump, "\n    {at:#x}: {}", words.join(" "));
+        }
+        crate::glog!("skeleton", "player skeleton not found from the behaviour module at {behavior_module:#x}{trail}{dump}");
         return;
     };
     let mut j = format!("{{\n  \"skeleton\": {:?},\n  \"bones\": [\n", name);
