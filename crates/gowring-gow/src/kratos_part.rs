@@ -6,8 +6,8 @@
 //! (`er_skeleton.json`, which gowring.dll reads from memory on the player's PC), the model carries all of its bones at
 //! their rest pose, as the game's own parts do, and Kratos is re-posed into that rest pose and skinned to its bones
 //! ([`crate::retarget`]), so he moves with the player. Without it he follows the root bone rigidly. Each of his
-//! materials gets its own colour map from the player's install ([`crate::kratos_look`]), re-encoded as BC1 with its
-//! mips; layers drawn through transparency in Ragnarök (face overlays, eyelashes, the long beard's hair cards) are left
+//! materials gets its own colour map and surface (normal and roughness) from the player's install
+//! ([`crate::kratos_look`]), re-encoded as BC1 with their mips, with tangents from his UVs; layers drawn through transparency in Ragnarök (face overlays, eyelashes, the long beard's hair cards) are left
 //! out until a cut-out material carries them.
 
 use std::path::Path;
@@ -29,6 +29,8 @@ pub const SEE_THROUGH: [u16; 9] = [3, 4, 5, 6, 7, 76, 78, 86, 87];
 
 /// The largest side of a colour map in the part (Ragnarök's are up to 2048).
 pub const MAX_TEXTURE: u32 = 1024;
+/// The largest side of a surface (normal and roughness) map.
+pub const MAX_SURFACE: u32 = 512;
 
 /// The Kratos materials the body part draws: every material of the default outfit's most detailed level, less the
 /// see-through ones.
@@ -154,7 +156,9 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
                 }
             })
             .collect();
-        meshes.push(Mesh { material: material as u32, node, vertices, indices: v.triangles.iter().flat_map(|t| t.map(|x| x as u32)).collect() });
+        let mut mesh = Mesh { material: material as u32, node, vertices, indices: v.triangles.iter().flat_map(|t| t.map(|x| x as u32)).collect() };
+        erpart::compute_tangents(&mut mesh);
+        meshes.push(mesh);
     }
     Ok((nodes, meshes, failed))
 }
@@ -202,13 +206,14 @@ fn tex_path(stem: &str) -> String {
     format!("N:\\GR\\data\\INTERROOT_win64\\parts\\kratos\\tex\\{stem}.tif")
 }
 
-/// The part's material for colour map `albedo` (a texture stem in its TPF), with the shared flat metal and normal maps.
-fn material_with(id: u16, name: &str, albedo: &str) -> Material {
-    Material { name: name.into(), mtd: erpart::MATERIAL_MTD.into(), textures: vec![(erpart::ALBEDO.into(), tex_path(albedo)), (erpart::METALLIC.into(), tex_path(&format!("kratos_{id}_m"))), (erpart::NORMAL.into(), tex_path(&format!("kratos_{id}_n")))] }
+/// The part's material for colour map `albedo` and normal map `normal` (texture stems in its TPF), with the shared flat
+/// metal map.
+fn material_with(id: u16, name: &str, albedo: &str, normal: &str) -> Material {
+    Material { name: name.into(), mtd: erpart::MATERIAL_MTD.into(), textures: vec![(erpart::ALBEDO.into(), tex_path(albedo)), (erpart::METALLIC.into(), tex_path(&format!("kratos_{id}_m"))), (erpart::NORMAL.into(), tex_path(normal))] }
 }
 
 fn material(id: u16) -> Material {
-    material_with(id, "kratos", &format!("kratos_{id}_a"))
+    material_with(id, "kratos", &format!("kratos_{id}_a"), &format!("kratos_{id}_n"))
 }
 
 fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
@@ -220,8 +225,9 @@ fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
 /// Kratos's whole default outfit, re-posed and skinned onto the player `skeleton` when both it and his own (`kratos`,
 /// from his `goProto`) are known; the head, arms and legs (`hd_*_9700`, `am_*_9702`, `lg_*_9703`) are empty pieces
 /// that hide the character's own. Each comes as the normal and the low-detail (`_l`) file, male and female.
-/// `colours` holds a colour map per Kratos material (missing ones are a neutral grey).
-pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, colours: &std::collections::BTreeMap<u16, crate::dds::Image>) -> Result<(Vec<(String, Vec<u8>)>, String)> {
+/// `looks` holds a colour map and surface per Kratos material (a missing colour is a neutral grey, a missing surface
+/// flat and rough).
+pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>) -> Result<(Vec<(String, Vec<u8>)>, String)> {
     let rs = mesh_records(mesh);
     let parts = mg_parts(mg);
     let level0 = |list: &[u16]| -> Vec<usize> { list.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect() };
@@ -269,24 +275,34 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let mut textures: Vec<(String, Vec<u8>, u8)> = Vec::new();
     let mut mats = Vec::new();
-    let mut coloured = 0;
+    let (mut coloured, mut surfaced) = (0, 0);
     for m in &used {
+        let look = looks.get(m);
         let stem = format!("kratos_{MODEL_ID}_m{m}_a");
-        let dds = match colours.get(m) {
+        let dds = match look.and_then(|l| l.colour.as_ref()) {
             Some(img) => {
                 coloured += 1;
-                erpart::dds_bc1_mips(img.w, img.h, &img.rgba)
+                erpart::dds_bc1_mips(img.w, img.h, &img.rgba, true)
             }
             None => erpart::dds_bc1(4, 4, &erpart::bc1_solid(150, 140, 130)),
         };
         textures.push((stem.clone(), dds, 0));
-        mats.push(material_with(MODEL_ID, &format!("kratos_m{m}"), &stem));
+        let normal = match look.and_then(|l| l.surface.as_ref()) {
+            Some(img) => {
+                surfaced += 1;
+                let n = format!("kratos_{MODEL_ID}_m{m}_n");
+                textures.push((n.clone(), erpart::dds_bc1_mips(img.w, img.h, &img.rgba, false), 0));
+                n
+            }
+            None => format!("kratos_{MODEL_ID}_n"),
+        };
+        mats.push(material_with(MODEL_ID, &format!("kratos_m{m}"), &stem, &normal));
     }
     let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
     textures.push((format!("kratos_{MODEL_ID}_m"), solid([0, 160, 0]), 0));
     textures.push((format!("kratos_{MODEL_ID}_n"), solid([128, 128, 255]), 0));
     let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures));
-    note.push_str(&format!("body {} draws ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map); ", meshes.len(), failed.len(), used.len()));
+    note.push_str(&format!("body {} draws ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
     let (nodes, meshes) = empty_piece();
     for (slot, id) in [("hd", MODEL_ID - 1), ("am", MODEL_ID + 1), ("lg", MODEL_ID + 2)] {
         add(slot, id, &nodes, &meshes, &[material(id)], texture_pack(id, [128, 128, 128]));
@@ -467,7 +483,7 @@ mod tests {
                     png::ColorType::Rgb => buf[..info.buffer_size()].chunks(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
                     _ => continue,
                 };
-                colours.insert(m, crate::dds::Image { w: info.width, h: info.height, rgba, format: crate::dds::Format::Bc1 });
+                colours.insert(m, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: info.width, h: info.height, rgba, format: crate::dds::Format::Bc1 }), surface: None });
             }
         }
         let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours).unwrap();

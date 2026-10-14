@@ -175,6 +175,26 @@ pub fn build_test_bc1() -> Vec<u8> {
 mod tests {
     use super::*;
 
+    /// The first pixel and the average of each DDS file in `GOWRING_DDS_DIR` (for reading the game's stand-in
+    /// textures): `GOWRING_DDS_DIR=... cargo test -p gowring-gow print_dds_pixels -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn print_dds_pixels() {
+        let Ok(dir) = std::env::var("GOWRING_DDS_DIR") else { return };
+        let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().map(|e| e.path()).collect();
+        names.sort();
+        for p in names {
+            match decode(&std::fs::read(&p).unwrap()) {
+                Ok(img) => {
+                    let n = (img.w * img.h) as usize;
+                    let avg: Vec<u32> = (0..4).map(|c| (0..n).map(|i| img.rgba[i * 4 + c] as u32).sum::<u32>() / n as u32).collect();
+                    println!("{:40} {}x{} {:?} first {:?} average {avg:?}", p.file_name().unwrap().to_string_lossy(), img.w, img.h, img.format, &img.rgba[..4]);
+                }
+                Err(e) => println!("{:40} {e:#}", p.file_name().unwrap().to_string_lossy()),
+            }
+        }
+    }
+
     #[test]
     fn decodes_bc1_and_writes_png() {
         let img = decode(&build_test_bc1()).unwrap();

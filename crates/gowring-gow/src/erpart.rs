@@ -263,6 +263,51 @@ fn byte_norm(v: f32) -> u8 {
     (v.clamp(-1.0, 1.0) * 127.0 + 127.0).round() as u8
 }
 
+/// Set each vertex's tangent from the mesh's first UV set (the direction U grows along the surface, made square to the
+/// normal; w is +1 or -1 by which way V grows), so normal maps read the right way. A vertex whose triangles have no
+/// usable UVs keeps the tangent it had.
+pub fn compute_tangents(m: &mut Mesh) {
+    let n = m.vertices.len();
+    let mut tan = vec![[0.0f32; 3]; n];
+    let mut bit = vec![[0.0f32; 3]; n];
+    for tri in m.indices.chunks_exact(3) {
+        let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+        if a >= n || b >= n || c >= n {
+            continue;
+        }
+        let (p0, p1, p2) = (m.vertices[a].position, m.vertices[b].position, m.vertices[c].position);
+        let (t0, t1, t2) = (m.vertices[a].uv[0], m.vertices[b].uv[0], m.vertices[c].uv[0]);
+        let e1: [f32; 3] = std::array::from_fn(|k| p1[k] - p0[k]);
+        let e2: [f32; 3] = std::array::from_fn(|k| p2[k] - p0[k]);
+        let (du1, dv1, du2, dv2) = (t1[0] - t0[0], t1[1] - t0[1], t2[0] - t0[0], t2[1] - t0[1]);
+        let r = du1 * dv2 - du2 * dv1;
+        if r.abs() < 1e-12 {
+            continue;
+        }
+        let s: [f32; 3] = std::array::from_fn(|k| (e1[k] * dv2 - e2[k] * dv1) / r);
+        let t: [f32; 3] = std::array::from_fn(|k| (e2[k] * du1 - e1[k] * du2) / r);
+        for i in [a, b, c] {
+            for k in 0..3 {
+                tan[i][k] += s[k];
+                bit[i][k] += t[k];
+            }
+        }
+    }
+    for (i, v) in m.vertices.iter_mut().enumerate() {
+        let nn = v.normal;
+        let d = nn[0] * tan[i][0] + nn[1] * tan[i][1] + nn[2] * tan[i][2];
+        let t: [f32; 3] = std::array::from_fn(|k| tan[i][k] - nn[k] * d);
+        let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt();
+        if len < 1e-8 {
+            continue;
+        }
+        let t = t.map(|x| x / len);
+        let c = [nn[1] * t[2] - nn[2] * t[1], nn[2] * t[0] - nn[0] * t[2], nn[0] * t[1] - nn[1] * t[0]];
+        let w = if c[0] * bit[i][0] + c[1] * bit[i][1] + c[2] * bit[i][2] < 0.0 { -1.0 } else { 1.0 };
+        v.tangent = [t[0], t[1], t[2], w];
+    }
+}
+
 /// Room around each mesh's box, so a limb a little out of its rest place is not culled while still on screen.
 pub const BOX_MARGIN: f32 = 0.1;
 
@@ -680,8 +725,10 @@ pub fn half(w: u32, h: u32, rgba: &[u8]) -> (u32, u32, Vec<u8>) {
     (nw, nh, out)
 }
 
-/// A DDS file (DXT1) holding an RGBA image and its whole mip chain down to 1 x 1.
-pub fn dds_bc1_mips(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+/// A DDS file holding an RGBA image as BC1 with its whole mip chain down to 1 x 1, in the DX10 form the game's own
+/// textures use: `srgb` marks a colour map (DXGI 72, BC1_UNORM_SRGB, as Elden Ring's `SYSTEX_Dummy_a`) so the GPU
+/// turns it linear before shading; data maps (normals, roughness) are plain BC1_UNORM (DXGI 71).
+pub fn dds_bc1_mips(w: u32, h: u32, rgba: &[u8], srgb: bool) -> Vec<u8> {
     let mut levels = vec![bc1_encode(w, h, rgba)];
     let (mut lw, mut lh, mut px) = (w, h, rgba.to_vec());
     while lw > 1 || lh > 1 {
@@ -689,13 +736,33 @@ pub fn dds_bc1_mips(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
         levels.push(bc1_encode(nw, nh, &np));
         (lw, lh, px) = (nw, nh, np);
     }
-    let mut d = dds_bc1(w, h, &levels[0]);
-    // mip count, with the flags that say there is one
-    let flags = u32::from_le_bytes(d[8..12].try_into().unwrap()) | 0x20000;
-    d[8..12].copy_from_slice(&flags.to_le_bytes());
-    d[28..32].copy_from_slice(&(levels.len() as u32).to_le_bytes());
-    d[108..112].copy_from_slice(&(0x1000u32 | 0x8 | 0x40_0000).to_le_bytes());
-    for l in &levels[1..] {
+    let mut d = b"DDS ".to_vec();
+    let mut put = |v: u32| d.extend(v.to_le_bytes());
+    put(124);
+    put(0x1 | 0x2 | 0x4 | 0x1000 | 0x20000 | 0x80000); // caps, height, width, pixel format, mip count, linear size
+    put(h);
+    put(w);
+    put(levels[0].len() as u32);
+    put(0);
+    put(levels.len() as u32);
+    for _ in 0..11 {
+        put(0);
+    }
+    put(32);
+    put(0x4); // fourcc
+    d.extend(b"DX10");
+    for _ in 0..5 {
+        d.extend(0u32.to_le_bytes());
+    }
+    d.extend((0x1000u32 | 0x8 | 0x40_0000).to_le_bytes()); // texture, complex, mipmap
+    for _ in 0..4 {
+        d.extend(0u32.to_le_bytes());
+    }
+    // the DX10 header: format, a 2D texture, no flags, one in the array
+    for v in [if srgb { 72u32 } else { 71 }, 3, 0, 1, 0] {
+        d.extend(v.to_le_bytes());
+    }
+    for l in &levels {
         d.extend_from_slice(l);
     }
     d
@@ -1130,13 +1197,34 @@ mod tests {
         let back = crate::dds::decode_raw(crate::dds::Format::Bc1, w, h, &blocks).unwrap();
         let err = img.iter().zip(&back.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
         assert!(err <= 24, "worst channel error {err}");
-        let dds = dds_bc1_mips(w, h, &img);
+        let dds = dds_bc1_mips(w, h, &img, true);
         // 64x32, 32x16, 16x8, 8x4, 4x2, 2x1, 1x1: blocks of 4x4 at least
         let mips = u32::from_le_bytes(dds[28..32].try_into().unwrap());
         assert_eq!(mips, 7);
-        assert_eq!(dds.len(), 128 + (128 + 32 + 8 + 2 + 1 + 1 + 1) * 8);
+        assert_eq!(dds.len(), 148 + (128 + 32 + 8 + 2 + 1 + 1 + 1) * 8);
+        // a DX10 header naming BC1 sRGB, as the game's own colour maps
+        assert_eq!(&dds[84..88], b"DX10");
+        assert_eq!(u32::from_le_bytes(dds[128..132].try_into().unwrap()), 72);
+        assert_eq!(u32::from_le_bytes(dds_bc1_mips(8, 8, &[0; 256], false)[128..132].try_into().unwrap()), 71);
         let decoded = crate::dds::decode(&dds).unwrap();
         assert_eq!((decoded.w, decoded.h), (w, h));
+        assert_eq!(&decoded.rgba[..], &back.rgba[..]);
+    }
+
+    #[test]
+    fn tangents_follow_u_across_the_surface_and_flip_with_v() {
+        let (_, _, mut meshes) = one_triangle();
+        // one_triangle: positions (0,0), (1,0), (0,1) in the xy plane with UV equal to xy, normal +z
+        compute_tangents(&mut meshes[0]);
+        for v in &meshes[0].vertices {
+            assert!((v.tangent[0] - 1.0).abs() < 1e-6 && v.tangent[1].abs() < 1e-6 && v.tangent[3] == 1.0, "{:?}", v.tangent);
+        }
+        // mirror V: the tangent stays along x, the handedness flips
+        for v in meshes[0].vertices.iter_mut() {
+            v.uv[0][1] = -v.uv[0][1];
+        }
+        compute_tangents(&mut meshes[0]);
+        assert!(meshes[0].vertices.iter().all(|v| v.tangent[3] == -1.0 && (v.tangent[0] - 1.0).abs() < 1e-6));
     }
 
     #[test]

@@ -5,7 +5,10 @@
 //! `MAT_*` chunk is followed by its own id-60 chunk listing the textures it references (`TX_<name>_<hex key>`).
 //! Ragnarök's character materials are layered (region maps, tiling detail maps) but each also carries the baked
 //! result: `*_gen_0d` (or `_gen_2d`), and for Kratos's head and arms `*_m_paint_cine_*`. Those are taken first, then
-//! a plain `*_d` map. A texture lives in a texture pack (`*.texpack`, found through the packs' tables, see
+//! a plain `*_d` map. Its surface comes from the normal map (`*_gen_0n`) and the gloss map (`*_gen_0g`; for the head,
+//! whose list has no `_gen_0g`, the second `*_m_paint_cine_*`, which sits where the others list their gloss), joined
+//! the way Elden Ring's normal maps hold them: the normal's X and Y in red and green and the roughness (255 - gloss)
+//! in blue (the game's own stand-in `SYSTEX_Dummy_n` is 128, 128, 128, 255). A texture lives in a texture pack (`*.texpack`, found through the packs' tables, see
 //! [`crate::texpack`]) or, when small, in the WAD itself ([`crate::wadtex`]).
 
 use std::collections::BTreeMap;
@@ -32,6 +35,49 @@ pub fn colour_map(refs: &[String]) -> Option<&String> {
     let plain = |t: &&String| stem(t).ends_with("_d") || stem(t).ends_with("_color");
     let tx: Vec<&String> = refs.iter().filter(|r| r.starts_with("TX_")).collect();
     tx.iter().copied().find(baked).or_else(|| tx.iter().copied().find(painted)).or_else(|| tx.iter().copied().find(plain))
+}
+
+fn stem(t: &str) -> &str {
+    let t = t.strip_prefix("TX_").unwrap_or(t);
+    match t.rsplit_once('_') {
+        Some((head, key)) if key.len() == 16 && u64::from_str_radix(key, 16).is_ok() => head,
+        _ => t,
+    }
+}
+
+/// A baked map of `kind` ('n' normal, 'g' gloss): `*_gen_<digit><kind>`.
+fn baked(t: &str, kind: char) -> bool {
+    stem(t).split("_gen_").nth(1).is_some_and(|g| g.len() == 2 && g.ends_with(kind) && g.as_bytes()[0].is_ascii_digit())
+}
+
+/// The normal map and the gloss map among a material's texture references.
+pub fn surface_maps(refs: &[String]) -> (Option<&String>, Option<&String>) {
+    let tx: Vec<&String> = refs.iter().filter(|r| r.starts_with("TX_")).collect();
+    let normal = tx.iter().copied().find(|t| baked(t, 'n'));
+    let painted: Vec<&String> = tx.iter().copied().filter(|t| stem(t).contains("_m_paint_cine")).collect();
+    let gloss = tx.iter().copied().find(|t| baked(t, 'g')).or_else(|| painted.get(1).copied().filter(|_| painted.len() == 2 && !tx.iter().any(|t| baked(t, 'g'))));
+    (normal, gloss)
+}
+
+/// Elden Ring's normal map from Ragnarök's normal map (X, Y in red, green) and gloss map (red), at the normal map's
+/// size: red and green as they are, blue the roughness (255 - gloss, nearest gloss pixel; 220 when there is none).
+pub fn surface_image(normal: &Image, gloss: Option<&Image>) -> Image {
+    let (w, h) = (normal.w, normal.h);
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let at = ((y * w + x) * 4) as usize;
+            let rough = match gloss {
+                Some(g) => {
+                    let (gx, gy) = ((x as u64 * g.w as u64 / w as u64) as u32, (y as u64 * g.h as u64 / h as u64) as u32);
+                    255 - g.rgba[((gy * g.w + gx) * 4) as usize]
+                }
+                None => 220,
+            };
+            rgba.extend_from_slice(&[normal.rgba[at], normal.rgba[at + 1], rough, 255]);
+        }
+    }
+    Image { w, h, rgba, format: normal.format }
 }
 
 /// The texture packs next to the WAD: the shared one (`root.texpack`, which holds Kratos's) when `all` is false, else
@@ -65,10 +111,17 @@ pub fn decode_texture(name: &str, id_key: u64, buf: &[u8], es: &[Entry], packs: 
     }
 }
 
-/// For each of `materials` (indices into the mesh's material table), its colour map decoded and scaled to at most
-/// `max_side`, and a line per material saying what was found. `buf` holds the start of r_heroa00.wad (its chunk table
-/// `es`), `wad_dir` the folder with the texture packs.
-pub fn outfit_colours(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], max_side: u32) -> (BTreeMap<u16, Image>, String) {
+/// A material's look for the part: its colour map, and its surface (an Elden Ring normal map, see [`surface_image`]).
+#[derive(Default)]
+pub struct Look {
+    pub colour: Option<Image>,
+    pub surface: Option<Image>,
+}
+
+/// For each of `materials` (indices into the mesh's material table), its colour map scaled to at most `max_side` and
+/// its surface scaled to at most `max_surface`, and a line per material saying what was found. `buf` holds the start of
+/// r_heroa00.wad (its chunk table `es`), `wad_dir` the folder with the texture packs.
+pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], max_side: u32, max_surface: u32) -> (BTreeMap<u16, Look>, String) {
     let mut out = BTreeMap::new();
     let mut note = String::new();
     let bytes = |e: &Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
@@ -83,33 +136,69 @@ pub fn outfit_colours(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16
         let at = es.iter().position(|e| &e.name == name && e.id == 1);
         let refs = at.and_then(|a| es.get(a + 1)).filter(|e| e.id == 60).and_then(bytes).map(crate::kratos::references).unwrap_or_default();
         let ref_names: Vec<String> = refs.iter().map(|r| r.1.clone()).collect();
-        let Some(tex) = colour_map(&ref_names) else {
-            note.push_str(&format!("{m}: no colour map; "));
-            continue;
-        };
-        let id_key = refs.iter().find(|r| &r.1 == tex).map(|r| u64::from_le_bytes(r.0[8..16].try_into().unwrap())).unwrap_or(0);
-        let mut decoded = decode_texture(tex, id_key, buf, es, &packs);
-        if decoded.is_err() && !all_read {
-            // not in the shared pack: read the others' tables once
-            packs.extend(texture_packs(wad_dir, true));
-            all_read = true;
-            note.push_str(&format!("{} texture packs in all; ", packs.len()));
-            decoded = decode_texture(tex, id_key, buf, es, &packs);
-        }
-        match decoded {
-            Ok(img) => {
-                note.push_str(&format!("{m}: {tex} {}x{}; ", img.w, img.h));
-                out.insert(m, crate::dds::downscale(&img, max_side));
+        // the n-th reference of that name: names cut at 60 characters can repeat, the ids tell them apart
+        let mut get = |tex: &String| -> anyhow::Result<Image> {
+            let nth = ref_names.iter().take_while(|r| !std::ptr::eq(*r, tex)).filter(|r| *r == tex).count();
+            let id_key = refs.iter().filter(|r| &r.1 == tex).nth(nth).map(|r| u64::from_le_bytes(r.0[8..16].try_into().unwrap())).unwrap_or(0);
+            let mut decoded = decode_texture(tex, id_key, buf, es, &packs);
+            if decoded.is_err() && !all_read {
+                // not in the shared pack: read the others' tables once
+                packs.extend(texture_packs(wad_dir, true));
+                all_read = true;
+                decoded = decode_texture(tex, id_key, buf, es, &packs);
             }
-            Err(e) => note.push_str(&format!("{m}: {tex} failed ({e:#}); ")),
+            decoded
+        };
+        let mut look = Look::default();
+        match colour_map(&ref_names) {
+            Some(tex) => match get(tex) {
+                Ok(img) => {
+                    note.push_str(&format!("{m}: {} {}x{}", stem(tex), img.w, img.h));
+                    look.colour = Some(crate::dds::downscale(&img, max_side));
+                }
+                Err(e) => note.push_str(&format!("{m}: {} failed ({e:#})", stem(tex))),
+            },
+            None => note.push_str(&format!("{m}: no colour map")),
         }
+        let (normal, gloss) = surface_maps(&ref_names);
+        if let Some(n) = normal {
+            match get(n) {
+                Ok(img) => {
+                    let n_img = crate::dds::downscale(&img, max_surface);
+                    let g_img = gloss.and_then(|g| get(g).ok()).map(|g| crate::dds::downscale(&g, max_surface));
+                    note.push_str(&format!(", normal {}x{}{}", img.w, img.h, if g_img.is_some() { " and gloss" } else { "" }));
+                    look.surface = Some(surface_image(&n_img, g_img.as_ref()));
+                }
+                Err(e) => note.push_str(&format!(", normal failed ({e:#})")),
+            }
+        }
+        note.push_str("; ");
+        out.insert(m, look);
     }
+    note.insert_str(0, &format!("{} texture packs read; ", packs.len()));
     (out, note)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn surfaces_take_the_baked_normal_and_gloss_maps_or_the_heads_second_painted_map() {
+        let v = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let acc = v(&["TX_kratos00_int9_acc_m_gen_0d_111E00F602CC3843", "TX_kratos00_int9_acc_sand_m_gen_0n_4474E39761581525", "TX_kratos00_int9_acc_m_gen_0g_4D54C547F92E74E5", "TX_metal01_n_4198919D2DD536E2"]);
+        let (n, g) = surface_maps(&acc);
+        assert_eq!((n.unwrap().as_str(), g.unwrap().as_str()), ("TX_kratos00_int9_acc_sand_m_gen_0n_4474E39761581525", "TX_kratos00_int9_acc_m_gen_0g_4D54C547F92E74E5"));
+        let head = v(&["TX_kratos00_int9_head_m_paint_cine_", "TX_kratos00_int9_head_sand_m_gen_0n_ABCDEF0123456789", "TX_kratos00_int9_head_m_paint_cine_", "TX_kratos_head_o_0123456789ABCDEF"]);
+        let (n, g) = surface_maps(&head);
+        assert!(n.unwrap().contains("gen_0n"));
+        assert!(std::ptr::eq(g.unwrap(), &head[2]));
+        // red and green from the normal, blue = 255 - gloss
+        let normal = Image { w: 2, h: 1, rgba: vec![10, 20, 30, 40, 50, 60, 70, 80], format: crate::dds::Format::Bc5 };
+        let gloss = Image { w: 1, h: 1, rgba: vec![200, 0, 0, 255], format: crate::dds::Format::Bc4 };
+        assert_eq!(surface_image(&normal, Some(&gloss)).rgba, vec![10, 20, 55, 255, 50, 60, 55, 255]);
+        assert_eq!(surface_image(&normal, None).rgba[2], 220);
+    }
 
     #[test]
     fn the_baked_colour_map_comes_first_then_the_painted_one_then_a_plain_one() {

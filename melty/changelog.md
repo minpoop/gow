@@ -1,8 +1,9 @@
-Forty-ninth alpha: Kratos in his own colours.
+Fiftieth alpha: Kratos's skin and armour get depth.
 
-0.1.47 worked: Kratos moves with your character, his weapons in his hands, and the game closed cleanly.
+0.1.48 worked: Kratos stands in the Lands Between in his own colours, and the game ran and closed cleanly.
 
-- **His real colours.** Each part of his outfit now takes its colour from your own God of War Ragnarök install: the red sash, leather, furs, boots, bracers and his skin. They're read and converted when you press Play (a few extra seconds the first time).
-- **No more dark specks around his head.** The long strands of his beard need see-through textures that Elden Ring's armour can't show yet, so they are left out for now, along with his eyebrows and lashes. His goatee stays.
+- **Truer colours.** His colours were being shown slightly washed out, which made his ash skin look purple-grey. They now load the way Elden Ring's own colours do.
+- **Surface detail.** His muscles, scars, leather grain and fur should now catch the light, using the normal maps from your Ragnarök install, and rough and shiny areas follow his own gloss maps instead of one flat setting.
+- **Less disk space.** His copies for each body type and detail level now share one file instead of taking space each.
 
-Surfaces are flat for now: the bumps and shine of his skin and armour come later.
+His long beard strands, eyebrows and lashes are still left out for now.
