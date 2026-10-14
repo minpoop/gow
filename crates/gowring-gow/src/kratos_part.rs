@@ -30,6 +30,9 @@ pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
 /// with Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and
 /// left out otherwise.
 pub const CUT_OUT: [u16; 4] = [4, 7, 86, 87];
+/// The short goatee under the long beard (86, 87): left out when the long beard is drawn, which covers its place (it
+/// showed under it).
+pub const GOATEE: u16 = 89;
 /// Elden Ring's cut-out character material: Torrent's body (the `C[AMSN][PixelKill]` shader, the armour's own with
 /// pixels under half albedo alpha not drawn, and the same vertex layout), with its three samplers.
 pub const CUT_OUT_MTD: &str = "N:\\GR\\data\\Material\\mtd\\Chr\\matxml\\C[c4000]_Horse_Body.matxml";
@@ -45,6 +48,10 @@ pub const BODY: [u16; 4] = [72, 74, 88, 62];
 
 /// Kratos's eyes, the landmark [`fit_proportions`] puts on the character's.
 pub const EYES: u16 = 77;
+/// How far above the character's eyes Kratos's go: his eyes sit lower in his head (9.7 cm below his crown; the
+/// character's crown is about 11.5 cm above its eye bones, its chin about 10 cm below, by its lower lip bone), so with
+/// the eyes level the top of its head and its hair showed above his. 1.5 cm puts both crowns and chins level.
+pub const HEAD_RAISE: f32 = 0.015;
 
 /// The largest side of a colour map in the part (Ragnarök's are up to 2048).
 pub const MAX_TEXTURE: u32 = 1024;
@@ -188,7 +195,8 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
 /// vertices within 15 cm (a 5 cm grid): at most six, and only those within 2 cm of the nearest's distance, so cloth
 /// near an armpit takes the skin right under it, not the arm across the gap. Their arm-bone part (clavicle to fingers)
 /// replaces that much of the cloth's own weights, their leg-bone part (thigh to toes) times the material's leg factor,
-/// and their other bones (spine, neck) by how close the cloth is: wholly within 4 cm, fading to none at 12 cm. So cloth
+/// and their other bones (spine, neck) by how close the cloth is: wholly within 4 cm, fading to none at 12 cm (the
+/// limbs' parts fade from 8 to 15 cm, so cloth leaving the body has no edge where they stop). So cloth
 /// lying on the body moves exactly as the skin under it (no skin pushing through as an arm lowers), cloth over an arm
 /// follows the arm, and loose cloth stays with the torso. Bone names come from `skeleton`; top four bones. Cloth
 /// farther than 15 cm from the body keeps its own. Returns how many vertices changed.
@@ -251,6 +259,8 @@ pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Nod
             near.retain(|n| n.0 <= nearest + 0.02);
             near.truncate(6);
             let close = ((0.12 - nearest) / (0.12 - 0.04)).clamp(0.0, 1.0);
+            // the limbs' pull fades out before the search does, so loose cloth has no edge where it stops
+            let reach = ((0.15 - nearest) / (0.15 - 0.08)).clamp(0.0, 1.0);
             // the body's weights here, normalised
             let mut under: Vec<(u8, f32)> = Vec::new();
             let mut total = 0.0;
@@ -272,7 +282,7 @@ pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Nod
                 continue;
             }
             // the limbs' share of it, and the rest as near as the cloth lies, replaces that much of the cloth's own
-            let pull: Vec<(u8, f32)> = under.iter().map(|&(b, w)| (b, w / total * [close, 1.0, leg_factor][limb(b) as usize])).filter(|e| e.1 > 0.0).collect();
+            let pull: Vec<(u8, f32)> = under.iter().map(|&(b, w)| (b, w / total * [close, reach, leg_factor * reach][limb(b) as usize])).filter(|e| e.1 > 0.0).collect();
             let share: f32 = pull.iter().map(|e| e.1).sum::<f32>().min(1.0);
             if share < 0.02 {
                 continue;
@@ -320,7 +330,7 @@ pub fn fit_proportions(meshes: &mut [Mesh], used: &[u16], skeleton: &[Node], sho
     let eye_bones: Vec<[f32; 3]> = ["L_eyeA", "L_eyeB", "R_eyeA", "R_eyeB"].iter().filter_map(|n| at(n)).collect();
     let his_eyes: Vec<[f32; 3]> = meshes.iter().filter(|m| used.get(m.material as usize) == Some(&EYES)).flat_map(|m| m.vertices.iter().map(|v| v.position)).collect();
     let (to, from) = (mean(&eye_bones)?, mean(&his_eyes)?);
-    let head_step = [0.0, to[1] - from[1], to[2] - from[2]];
+    let head_step = [0.0, to[1] + HEAD_RAISE - from[1], to[2] - from[2]];
     let under_head = |mut i: usize| loop {
         if i == head {
             break true;
@@ -501,7 +511,8 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     };
     // his materials (the see-through ones left out, and the strands too when they have no coverage), each with its
     // colour map or a neutral grey
-    let used: Vec<u16> = outfit_materials(mesh, mg).into_iter().filter(|m| !CUT_OUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).collect();
+    let long_beard = [86, 87].iter().any(|m| looks.get(m).is_some_and(|l| l.cut_out));
+    let used: Vec<u16> = outfit_materials(mesh, mg).into_iter().filter(|m| !CUT_OUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).filter(|m| !(long_beard && *m == GOATEE)).collect();
     let (nodes, mut meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;
     if retargeted.is_some() {
         let shoulder_step = retargeted.as_ref().map_or(0.0, |r| r.shoulder_step);
@@ -574,7 +585,7 @@ mod tests {
         let arm = Mesh { material: 1, node: 0, vertices: (0..10).map(|i| v(0.3 + 0.02 * i as f32, 56)).collect(), indices: vec![0, 1, 2] };
         let torso = Mesh { material: 0, node: 0, vertices: (0..10).map(|i| v(-0.1 + 0.02 * i as f32, 50)).collect(), indices: vec![0, 1, 2] };
         // a cloak on bone 48: one vertex over the arm, one on the torso, one 8 cm off it, one far away
-        let mut cloak = Mesh { material: 2, node: 0, vertices: vec![v(0.42, 48), v(0.0, 48), v(0.0, 48), v(3.0, 48)], indices: vec![0, 1, 2, 1, 2, 3] };
+        let mut cloak = Mesh { material: 2, node: 0, vertices: vec![v(0.42, 48), v(0.0, 48), v(0.0, 48), v(3.0, 48)], indices: vec![0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3] };
         cloak.vertices[0].position[2] = 0.03;
         cloak.vertices[2].position[2] = 0.08;
         let mut meshes = vec![torso, arm, cloak];
@@ -614,17 +625,17 @@ mod tests {
         let body = Mesh { material: 1, node: 0, vertices: vec![v(0.8, 1), v(1.3, 2), v(1.4, 3), v(1.5, 4)], indices: vec![0, 1, 2] };
         let mut meshes = vec![eyes, body];
         let (step, moved) = fit_proportions(&mut meshes, &[EYES, 72], &skeleton, -0.05).unwrap();
-        assert!(step[0] == 0.0 && (step[1] + 0.064).abs() < 1e-4 && (step[2] + 0.008).abs() < 1e-4, "{step:?}");
+        assert!(step[0] == 0.0 && (step[1] - (HEAD_RAISE - 0.064)).abs() < 1e-4 && (step[2] + 0.008).abs() < 1e-4, "{step:?}");
         assert_eq!(moved, 4);
         let p: Vec<[f32; 3]> = meshes.iter().flat_map(|m| m.vertices.iter().map(|v| v.position)).collect();
-        // eyes onto the eye bones; the thigh stays; the chest by its share of the way to the shoulders; the arm by the
+        // eyes onto the eye bones (HEAD_RAISE above them); the thigh stays; the chest by its share of the way to the shoulders; the arm by the
         // shoulders' step; the neck between the shoulders' and the head's
-        assert!((p[0][1] - 1.617).abs() < 1e-4 && (p[0][2] + 0.076).abs() < 1e-4, "{:?}", p[0]);
+        assert!((p[0][1] - (1.617 + HEAD_RAISE)).abs() < 1e-4 && (p[0][2] + 0.076).abs() < 1e-4, "{:?}", p[0]);
         assert_eq!(p[1][1], 0.8);
         assert!((p[2][1] - (1.3 - 0.05 * 0.27 / 0.421)).abs() < 1e-4, "{:?}", p[2]);
         assert!((p[3][1] - 1.35).abs() < 1e-4);
         let t = 0.062 / 0.166;
-        assert!((p[4][1] - (1.5 - 0.05 - 0.014 * t)).abs() < 1e-4 && (p[4][2] - (-0.068 - 0.008 * t)).abs() < 1e-4, "{:?}", p[4]);
+        assert!((p[4][1] - (1.5 - 0.05 + (HEAD_RAISE - 0.014) * t)).abs() < 1e-4 && (p[4][2] - (-0.068 - 0.008 * t)).abs() < 1e-4, "{:?}", p[4]);
         // no eye bones: nothing moves
         assert!(fit_proportions(&mut meshes, &[EYES, 72], &skeleton[..6], -0.05).is_none());
     }

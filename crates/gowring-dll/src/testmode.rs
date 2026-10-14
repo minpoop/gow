@@ -284,6 +284,33 @@ pub fn report(name: &str, ok: bool, why: &str) {
     }
 }
 
+/// In a test run, every 30 s: checks every heap of the process (`HeapValidate`) and logs any that fails, so heap
+/// damage is caught near when it happens rather than when a later free trips on it (every crash so far was the
+/// game's own free finding a damaged heap, three of them as the game closed). A line every 5 minutes while all pass.
+pub fn spawn_heap_check() {
+    if !active() {
+        return;
+    }
+    let _ = std::thread::Builder::new().name("gowring-heaps".into()).spawn(|| {
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::Memory::{HeapValidate, HEAP_FLAGS};
+        let mut failed_before: HashSet<usize> = HashSet::new();
+        for round in 1u64.. {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let t0 = std::time::Instant::now();
+            let list = heaps();
+            let bad: Vec<usize> = list.iter().copied().filter(|h| !unsafe { HeapValidate(HANDLE(*h as _), HEAP_FLAGS(0), None) }.as_bool()).collect();
+            let ms = t0.elapsed().as_millis();
+            let new: Vec<String> = bad.iter().filter(|h| failed_before.insert(**h)).map(|h| format!("{h:#x}{}", if Some(h) == list.first() { " (the process heap)" } else { "" })).collect();
+            if !new.is_empty() {
+                crate::glog!("fault", "heap check {round} ({}s): damaged heap(s) {new:?} of {} ({ms} ms)", round * 30, list.len());
+            } else if bad.is_empty() && (round == 1 || round % 10 == 0) {
+                crate::glog!("fault", "heap check {round} ({}s): all {} heaps valid ({ms} ms)", round * 30, list.len());
+            }
+        }
+    });
+}
+
 /// Watches what can be known without playing (first 150 s) and then what needs the player in the world.
 pub fn spawn_watcher() {
     if !active() {

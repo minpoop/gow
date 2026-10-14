@@ -16,6 +16,10 @@ const NO_SKILL: i32 = 10;
 /// into a copy of today's carrier: 0.1.0-0.1.32 gave the Blades the Caestus (fists, by a wrong weapon type).
 const LEGACY_CARRIERS: [(&str, u32); 1] = [("blades_of_chaos", 21000000)];
 
+/// The hide flags for hair (Paramdex: 0-6 fringe tip and root, sideburns, crown twice, back hair and its tip; 7-9
+/// unnamed, before the collar's 10): Kratos's helm and body set them all.
+const HAIR_FLAGS: usize = 10;
+
 /// Sheet weapon id → every row that carries it (today's first, then legacy copies), once the patch has run.
 static CARRIER_ROWS: OnceLock<HashMap<&'static str, Vec<u32>>> = OnceLock::new();
 /// Skill (SwordArtsParam id) → the animation category its animations are in (600 + its animation type).
@@ -217,13 +221,21 @@ pub fn apply() -> Result<Carriers, String> {
                 notes.push("hd_m_9700 not installed".into());
             }
         }
+        // and every hair section (flags 0-9: fringe, sideburns, crown, back hair and three unnamed), which showed through
+        // the top of Kratos's head in the character creator
+        if let Some(r) = helm.and_then(|(id, _)| repo.get_mut::<EquipParamProtector>(id)) {
+            for set in &SET[..HAIR_FLAGS] {
+                set(r, 1);
+            }
+        }
         match (helm, repo.get_mut::<EquipParamProtector>(body_row as u32)) {
             (Some((helm_id, flags)), Some(body)) => {
                 for k in 0..96 {
-                    let v = GET[k](body) | flags[k];
+                    let v = GET[k](body) | flags[k] | (k < HAIR_FLAGS) as u8;
                     SET[k](body, v);
                 }
-                notes.push(format!("armour {body_row} also hides the head (the {} hide flags of helm {helm_id})", flags.iter().filter(|f| **f != 0).count()));
+                let on: Vec<usize> = (0..96).filter(|k| flags[*k] != 0).collect();
+                notes.push(format!("armour {body_row} also hides the head (helm {helm_id}'s hide flags {on:?}) and all hair (flags 0-{})", HAIR_FLAGS - 1));
             }
             _ => notes.push("no helm to take head-hiding flags from".into()),
         }

@@ -57,6 +57,7 @@ pub fn run(hmodule: usize) {
     crate::testmode::install_fault_watch();
     crate::testmode::init();
     crate::testmode::spawn_watcher();
+    crate::testmode::spawn_heap_check();
 
     // ---- boot_guard ---------------------------------------------------------------------------------
     if !p.from_launcher {

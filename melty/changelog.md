@@ -1,9 +1,9 @@
-Fifty-third alpha: Kratos fitted to your character's build (no more face at his neck), the cloak stays over the shoulders, and a second try at his full beard.
+Fifty-fourth alpha: fixes from the 0.1.52 character-creator screenshots, and a closer look at the crash on closing.
 
-0.1.51 ran without a crash (all eight checks passed; the run was ended early on purpose to send the logs).
+0.1.52 brought the full beard (it shows!) and fitted Kratos to your character's build. Your screenshots showed what still needed work:
 
-- **No more face at Kratos's neck.** Elden Ring draws your character's face under any helmet, and Kratos's torso and neck are longer than an Elden Ring character's: his eyes were 6.9 cm above your character's, so its ears and hair showed below his. He's now fitted to your character's skeleton: his torso is a little shorter so his shoulders sit on your character's shoulder joints (5 cm lower), and his head sits exactly where your character's head is, covering it. His arms now also turn at the right place, the shoulder joint. The 0.1.51 helmet face-shrink did nothing in Elden Ring and is gone.
-- **No more shoulders through the cloak.** The cloak and fur now copy exactly how the skin right under them moves, so when the arms come down the shoulders stay underneath. On Kratos's model with the arms lowered, the places where skin came through went from about 900 to about 30, and the deepest from 4.5 cm to 2 cm.
-- **Full beard, second try.** 0.1.51 looked for the beard's see-through texture by name and found none, so the beard stayed out. Ragnarök names it differently, so this version looks at the beard's textures themselves and picks the one that looks like strands. The eyebrows get the same treatment. The eyelashes (found last time) stay.
+- **Hair on top of Kratos's head.** Kratos's eyes sit lower in his skull than an Elden Ring character's, so lining up the eyes left your character's crown and hair just above his. His head now sits 1.5 cm higher, so both crowns and chins line up. The helmet and body also hide every hair section now (all ten hair flags), including in the character creator.
+- **The short beard under the long one.** Kratos's model also has a short goatee; it's now left out whenever the long beard is drawn.
+- **Shoulder through the cloak.** Kratos's shoulder skin followed Elden Ring's upper-arm "twist" bones, which its animations roll against the arm, while the cloak over it followed the arm itself. Now both follow the arm, so they turn together.
+- **The crash on closing.** It's the same crash each time, in the game's own shutdown, finding its memory damaged. Test runs now check the game's memory every 30 seconds and log when the damage first appears, to find what causes it.
 - **Rebuilds Kratos once.** The first start after updating rebuilds Kratos's model from your Ragnarök files.
-

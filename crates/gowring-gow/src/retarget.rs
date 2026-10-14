@@ -118,8 +118,10 @@ pub struct Retarget {
 fn region_bones(side: &str, part: &str) -> Vec<String> {
     let s = side;
     match part {
+        // not the upper arm's twist bones: Elden Ring's animations roll them back against the upper arm, and his
+        // shoulder skin on them turned apart from the cloak over it (on the upper arm) and came through it
         "arm" => {
-            let mut v: Vec<String> = ["UpperArm", "UpArmTwist", "UpArmTwist1", "Forearm", "ForeArmTwist", "ForeArmTwist1", "Hand"].iter().map(|b| format!("{s}_{b}")).collect();
+            let mut v: Vec<String> = ["UpperArm", "Forearm", "ForeArmTwist", "ForeArmTwist1", "Hand"].iter().map(|b| format!("{s}_{b}")).collect();
             for f in 0..5 {
                 v.push(format!("{s}_Finger{f}"));
                 v.push(format!("{s}_Finger{f}1"));
