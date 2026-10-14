@@ -27,6 +27,14 @@ pub const SCALE: f32 = 0.92;
 /// flakes decal (76), the eyes' outer shell (78) and the long beard's hair cards (86, 87).
 pub const SEE_THROUGH: [u16; 9] = [3, 4, 5, 6, 7, 76, 78, 86, 87];
 
+/// Cloth simulated in Ragnarök, with how much of the legs' pull it takes: its own weights go to physics joints, which
+/// land on torso bones here, so it would hang still while the arms and legs move through it. It takes the arms' share
+/// of the weights of the body underneath (see [`transfer_cloth_weights`]): the cloak (75) and the shoulder fur (29)
+/// none of the legs' (a cloak that followed each leg would tear down the middle), the skirt (60) a little over half.
+pub const CLOTH: [(u16, f32); 3] = [(75, 0.0), (29, 0.0), (60, 0.6)];
+/// The body surfaces cloth takes its weights from: the torso and arm skin (72, 74), the trousers (88) and boots (62).
+pub const BODY: [u16; 4] = [72, 74, 88, 62];
+
 /// The largest side of a colour map in the part (Ragnarök's are up to 2048).
 pub const MAX_TEXTURE: u32 = 1024;
 /// The largest side of a surface (normal and roughness) map.
@@ -162,6 +170,119 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
     }
     let (nodes, meshes) = merge_by_material(nodes, meshes, skeleton.len());
     Ok((nodes, meshes, failed))
+}
+
+/// Give each vertex of the cloth meshes (Kratos material in `CLOTH`; `used` maps a mesh's material index to Kratos's)
+/// the pull of the limbs under it. The body's weights there are the inverse-distance blend of the six nearest body
+/// vertices within 15 cm (a 5 cm grid); their arm-bone part (clavicle to fingers) replaces that much of the cloth's own
+/// weights, and their leg-bone part (thigh to toes) times the material's leg factor, so the cloth over an arm moves
+/// with it while the rest stays with the torso. Bone names come from `skeleton`; top four bones. Cloth farther than
+/// 15 cm from the body keeps its own. Returns how many vertices changed.
+pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Node]) -> usize {
+    let limb = |b: u8| -> u8 {
+        let n = skeleton.get(b as usize).map(|n| n.name.as_str()).unwrap_or("");
+        if ["Clavicle", "UpperArm", "UpArmTwist", "Forearm", "ForeArmTwist", "Hand", "Finger"].iter().any(|k| n.contains(k)) {
+            1
+        } else if ["Thigh", "Calf", "Foot", "Toe"].iter().any(|k| n.contains(k)) {
+            2
+        } else {
+            0
+        }
+    };
+    const CELL: f32 = 0.05;
+    let kratos = |m: &Mesh| used.get(m.material as usize).copied().unwrap_or(u16::MAX);
+    let cell = |p: [f32; 3]| -> (i32, i32, i32) { ((p[0] / CELL).floor() as i32, (p[1] / CELL).floor() as i32, (p[2] / CELL).floor() as i32) };
+    let mut body: Vec<([f32; 3], [u8; 4], [f32; 4])> = Vec::new();
+    for m in meshes.iter().filter(|m| BODY.contains(&kratos(m))) {
+        body.extend(m.vertices.iter().map(|v| (v.position, v.bones, v.weights)));
+    }
+    if body.is_empty() {
+        return 0;
+    }
+    let mut grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> = Default::default();
+    for (i, b) in body.iter().enumerate() {
+        grid.entry(cell(b.0)).or_default().push(i);
+    }
+    let mut changed = 0;
+    for m in meshes.iter_mut() {
+        let Some(&(_, leg_factor)) = CLOTH.iter().find(|c| c.0 == kratos(m)) else { continue };
+        for v in m.vertices.iter_mut() {
+            let c = cell(v.position);
+            let mut near: Vec<(f32, usize)> = Vec::new();
+            for reach in 1..=3 {
+                near.clear();
+                for dx in -reach..=reach {
+                    for dy in -reach..=reach {
+                        for dz in -reach..=reach {
+                            if let Some(list) = grid.get(&(c.0 + dx, c.1 + dy, c.2 + dz)) {
+                                for &i in list {
+                                    let d = (0..3).map(|k| (body[i].0[k] - v.position[k]).powi(2)).sum::<f32>().sqrt();
+                                    if d <= CELL * reach as f32 {
+                                        near.push((d, i));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if near.len() >= 6 {
+                    break;
+                }
+            }
+            if near.is_empty() {
+                continue;
+            }
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            near.truncate(6);
+            // the body's weights here, normalised
+            let mut under: Vec<(u8, f32)> = Vec::new();
+            let mut total = 0.0;
+            for (d, i) in &near {
+                let w = 1.0 / (d + 0.01);
+                for k in 0..4 {
+                    let (b, bw) = (body[*i].1[k], body[*i].2[k]);
+                    if bw <= 0.0 {
+                        continue;
+                    }
+                    total += w * bw;
+                    match under.iter_mut().find(|e| e.0 == b) {
+                        Some(e) => e.1 += w * bw,
+                        None => under.push((b, w * bw)),
+                    }
+                }
+            }
+            if total <= 0.0 {
+                continue;
+            }
+            // the limbs' share of it takes over that much of the cloth's own weights
+            let pull: Vec<(u8, f32)> = under.iter().map(|&(b, w)| (b, w / total * [0.0, 1.0, leg_factor][limb(b) as usize])).filter(|e| e.1 > 0.0).collect();
+            let share: f32 = pull.iter().map(|e| e.1).sum::<f32>().min(1.0);
+            if share < 0.02 {
+                continue;
+            }
+            let mut per_bone: Vec<(u8, f32)> = (0..4).filter(|k| v.weights[*k] > 0.0).map(|k| (v.bones[k], v.weights[k] * (1.0 - share))).collect();
+            for (b, w) in pull {
+                match per_bone.iter_mut().find(|e| e.0 == b) {
+                    Some(e) => e.1 += w,
+                    None => per_bone.push((b, w)),
+                }
+            }
+            per_bone.sort_by(|a, b| b.1.total_cmp(&a.1));
+            per_bone.truncate(4);
+            let sum: f32 = per_bone.iter().map(|e| e.1).sum();
+            if sum <= 0.0 {
+                continue;
+            }
+            v.bones = [0; 4];
+            v.weights = [0.0; 4];
+            for (k, (b, w)) in per_bone.iter().enumerate() {
+                v.bones[k] = *b;
+                v.weights[k] = w / sum;
+            }
+            changed += 1;
+        }
+    }
+    changed
 }
 
 /// One mesh per material (split only where a mesh would pass 65,535 vertices), each with its own mesh node after the
@@ -301,7 +422,11 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     };
     // his materials (the see-through ones left out), each with its colour map or a neutral grey
     let used = outfit_materials(mesh, mg);
-    let (nodes, meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;
+    let (nodes, mut meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;
+    if retargeted.is_some() {
+        let n = transfer_cloth_weights(&mut meshes, &used, skeleton);
+        note.push_str(&format!("{n} cloth vertices follow the body under them; "));
+    }
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let mut textures: Vec<(String, Vec<u8>, u8)> = Vec::new();
     let mut mats = Vec::new();
@@ -344,6 +469,28 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloth_takes_the_weights_of_the_body_under_it() {
+        let v = |x: f32, bone: u8| Vertex { position: [x, 1.0, 0.0], normal: [0.0, 0.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0], bones: [bone, 0, 0, 0], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[0.0; 2]; 2] };
+        // an arm (bone 56) from x = 0.3 to 0.5 and a torso (bone 50) from x = -0.1 to 0.1
+        let arm = Mesh { material: 1, node: 0, vertices: (0..10).map(|i| v(0.3 + 0.02 * i as f32, 56)).collect(), indices: vec![0, 1, 2] };
+        let torso = Mesh { material: 0, node: 0, vertices: (0..10).map(|i| v(-0.1 + 0.02 * i as f32, 50)).collect(), indices: vec![0, 1, 2] };
+        // a cloak on bone 48, one vertex over the arm, one over the torso, one far away
+        let mut cloak = Mesh { material: 2, node: 0, vertices: vec![v(0.42, 48), v(0.0, 48), v(3.0, 48)], indices: vec![0, 1, 2] };
+        cloak.vertices[0].position[2] = 0.03;
+        let mut meshes = vec![torso, arm, cloak];
+        let mut skeleton: Vec<Node> = (0..60).map(|i| Node { name: format!("bone{i}"), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }).collect();
+        skeleton[56].name = "L_UpperArm".into();
+        skeleton[50].name = "Spine2".into();
+        // the meshes' materials stand for Kratos's torso skin, arm skin and cloak
+        let n = transfer_cloth_weights(&mut meshes, &[72, 74, 75], &skeleton);
+        // over the arm it follows the arm; over the torso it keeps its own weights; far away too
+        assert_eq!(n, 1);
+        let c = &meshes[2].vertices;
+        assert_eq!((c[0].bones[0], c[1].bones[0], c[2].bones[0]), (56, 48, 48));
+        assert!((c[0].weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    }
 
     #[test]
     fn draws_merge_into_one_mesh_per_material_with_their_own_nodes() {

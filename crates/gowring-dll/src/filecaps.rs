@@ -1,7 +1,7 @@
 //! What the game made of our part files. Every file Elden Ring asks for gets an FD4FileCap in CSFile's repository: a
 //! hash table of caps, each with the file's name, reference count and load state (initial, queued, processing, ready).
-//! A few times after the player is in the world this logs the caps for our part ids (9701-9703) and a sample of the
-//! game's own part files for comparison. Read-only and off the game's thread: every read is a `ReadProcessMemory`
+//! A few times after the player is in the world this logs the caps for our part ids (9700-9703), the head, face and
+//! hair parts loaded, and a sample of the game's other part files for comparison. Read-only and off the game's thread: every read is a `ReadProcessMemory`
 //! copy (one per cap and one per name), and the walk stops at a time budget and on overlong chains.
 
 use std::fmt::Write as _;
@@ -13,7 +13,10 @@ use eldenring::fd4::{FD4FileCap, FD4ResCap, FD4ResCapHolder};
 use crate::skeleton::{read, read_vec, reads};
 
 /// The file ids of the parts the launcher installs.
-const OURS: [&str; 3] = ["9701", "9702", "9703"];
+const OURS: [&str; 4] = ["9700", "9701", "9702", "9703"];
+
+/// Name starts of the head, face and hair parts (the ones that can show around Kratos's head).
+const HEADS: [&str; 4] = ["parts:/hd_", "parts:/fc_", "parts:/fg_", "parts:/hr_"];
 
 /// CSFile's primary file repository, through the game's singleton table.
 fn file_repository() -> Option<usize> {
@@ -64,6 +67,7 @@ pub fn report(when: &str) {
     let (mut total, mut parts, mut cut) = (0usize, 0usize, None);
     let mut ours = Vec::new();
     let mut samples = Vec::new();
+    let mut head_parts = Vec::new();
     'walk: for holder in [offset_of!(CSFileRepository, res_cap_holder), offset_of!(CSFileRepository, holder2)] {
         let h = repo + holder;
         let (Some(count), Some(buckets)) = (read::<u32>(h + offset_of!(FD4ResCapHolder<FD4FileCap>, bucket_count)), read::<usize>(h + offset_of!(FD4ResCapHolder<FD4FileCap>, buckets))) else {
@@ -94,6 +98,8 @@ pub fn report(when: &str) {
                     let refs: u32 = field(&c, offset_of!(FD4FileCap, res_cap) + offset_of!(FD4ResCap, reference_count));
                     if OURS.iter().any(|id| lower.contains(id)) {
                         ours.push(format!("{name} ({}, {refs} refs)", state(st)));
+                    } else if HEADS.iter().any(|h| lower.starts_with(h)) {
+                        head_parts.push(format!("{} ({}, {refs} refs)", &name["parts:/".len()..], state(st)));
                     } else if lower.contains("parts") {
                         parts += 1;
                         if samples.len() < 6 {
@@ -111,7 +117,9 @@ pub fn report(when: &str) {
     } else {
         line.push_str(&ours.join(", "));
     }
-    let _ = write!(line, "; {parts} of the game's own part files, e.g. {}", samples.join(", "));
+    head_parts.sort();
+    let _ = write!(line, "; head, face and hair parts: {}", if head_parts.is_empty() { "none".to_string() } else { head_parts.join(", ") });
+    let _ = write!(line, "; {parts} of the game's other part files, e.g. {}", samples.join(", "));
     crate::glog!("parts", "{line}");
 }
 
