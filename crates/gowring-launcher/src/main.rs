@@ -260,7 +260,7 @@ fn play(ctx: &Ctx) -> Result<()> {
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 9;
+    const BUILD: u32 = 10;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {

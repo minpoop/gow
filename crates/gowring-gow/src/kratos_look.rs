@@ -54,6 +54,50 @@ pub fn coverage_map(refs: &[String]) -> Option<&String> {
     })
 }
 
+/// Could this texture be a strand mask, by its name: not a normal, occlusion or gloss map, not one of the shared
+/// layering maps (`dynamicmaterial*`, region ids, wrinkles, `death*`), and not laid out on the second UV set.
+pub fn coverage_candidate(t: &str) -> bool {
+    let s = stem(t);
+    let kind = s.rsplit("_gen_").next().filter(|_| s.contains("_gen_")).unwrap_or("");
+    t.starts_with("TX_")
+        && !(s.ends_with("_n") || s.ends_with("_ao") || s.ends_with("_nrm") || s.contains("normal") || kind.ends_with('n') || kind.ends_with("ao") || kind.ends_with('g'))
+        && !["dynamicmaterial", "regionid", "wrinkle", "death", "uv2"].iter().any(|k| s.contains(k))
+}
+
+/// How mask-like an image is: the channel a coverage would come from (its alpha where that varies, else red) and the
+/// shares of its pixels that are empty (under 32) and solid (over 192).
+pub fn mask_stats(img: &Image) -> (char, f32, f32) {
+    let alpha = (0.02..0.98).contains(&clear_share(img));
+    let k = if alpha { 3 } else { 0 };
+    let n = (img.w * img.h).max(1) as f32;
+    let (mut zero, mut full) = (0usize, 0usize);
+    for p in img.rgba.chunks_exact(4) {
+        zero += (p[k] < 32) as usize;
+        full += (p[k] > 192) as usize;
+    }
+    (if alpha { 'a' } else { 'r' }, zero as f32 / n, full as f32 / n)
+}
+
+/// The most mask-like of `seen` (named images): a strand mask is mostly empty with some solid strands (empty 20-97 %,
+/// solid 2 % or more); the one with the most pixels at either end wins, hair-like names first among near equals.
+/// With a line of every candidate's numbers.
+pub fn best_coverage(seen: &[(String, Image)]) -> (Option<usize>, String) {
+    let mut best: Option<(usize, f32)> = None;
+    let mut line = Vec::new();
+    for (i, (name, img)) in seen.iter().enumerate() {
+        let (ch, zero, full) = mask_stats(img);
+        line.push(format!("{name} {}x{} {ch}: {:.0} % empty, {:.0} % solid", img.w, img.h, zero * 100.0, full * 100.0));
+        if (0.2..=0.97).contains(&zero) && full >= 0.02 {
+            let hairy = ["hair", "beard", "brow", "lash", "strand", "fur"].iter().any(|k| name.contains(k));
+            let score = zero + full + if hairy { 0.1 } else { 0.0 };
+            if best.is_none_or(|b| score > b.1) {
+                best = Some((i, score));
+            }
+        }
+    }
+    (best.map(|b| b.0), line.join("; "))
+}
+
 /// Share of an image's pixels that are see-through (alpha under 128).
 fn clear_share(img: &Image) -> f32 {
     img.rgba.chunks_exact(4).filter(|p| p[3] < 128).count() as f32 / (img.w * img.h).max(1) as f32
@@ -224,7 +268,24 @@ pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16],
             let stems: Vec<&str> = ref_names.iter().filter(|r| r.starts_with("TX_")).map(|r| stem(r)).collect();
             note.push_str(&format!("{m} (cut-out; textures {stems:?}): "));
             let colour = colour_map(&ref_names).and_then(|t| get(t).ok().map(|img| (img, stem(t).contains("uv2"))));
-            let coverage = coverage_map(&ref_names).and_then(|t| get(t).ok());
+            let coverage = match coverage_map(&ref_names) {
+                Some(t) => get(t).ok(),
+                None => {
+                    // no opacity map by name: the strand-like textures' pixels tell
+                    let mut seen: Vec<(String, Image)> = Vec::new();
+                    for t in ref_names.iter().filter(|r| coverage_candidate(r)) {
+                        if let Ok(img) = get(t) {
+                            seen.push((stem(t).to_string(), crate::dds::downscale(&img, max_side)));
+                        }
+                    }
+                    let (best, line) = best_coverage(&seen);
+                    note.push_str(&format!("candidates [{line}], "));
+                    best.map(|i| {
+                        note.push_str(&format!("coverage {}, ", seen[i].0));
+                        seen.swap_remove(i).1
+                    })
+                }
+            };
             match cut_out_image(colour.as_ref().map(|(img, uv2)| (img, *uv2)), coverage.as_ref(), max_side) {
                 Some((img, how)) => {
                     note.push_str(&format!("{}x{}, {how}", img.w, img.h));
@@ -304,6 +365,24 @@ mod tests {
         // nothing gives a coverage: left out rather than drawn as solid cards
         assert!(cut_out_image(Some((&uv2, false)), None, 1024).is_none());
         assert!(cut_out_image(None, None, 1024).is_none());
+        // no opacity map by name (Kratos's beard): its strand-like textures, as the launcher found them
+        let beard = v(&["TX_kratos_newbeard01_screenshadowof", "TX_youngkratos_goatee_gen_0n_0123456789ABCDEF", "TX_kratosv2_hair_01_uv2_color_0DC3A62E063ED50B", "TX_kratosv2_hair_01_beard_whitehair_C9F325357CB4CC61", "TX_kratosv2_hair_01_beard_whitehair_41B21A1DE7E466D9"]);
+        assert!(coverage_map(&beard).is_none());
+        let kept: Vec<&str> = beard.iter().filter(|t| coverage_candidate(t)).map(|t| stem(t)).collect();
+        assert_eq!(kept, ["kratos_newbeard01_screenshadowof", "kratosv2_hair_01_beard_whitehair", "kratosv2_hair_01_beard_whitehair"]);
+        let brows = v(&["TX_death01_112E6D2408347E77", "TX_dynamicmaterial_m1_535B93377186405F", "TX_kratos00_int9_eyebrow_sand_m_gen", "TX_youngkratos_eyebrow_gen_0n_0FD63BCD32D73D12", "TX_youngkratos_eyebrow_gen_0ao_5319105F847B2440", "TX_youngkratos_eyebrow_gen_0h_5B34F04C682CB60B", "TX_kratos00_acc_m_gen_0g_0123456789ABCDEF"]);
+        let kept: Vec<&str> = brows.iter().filter(|t| coverage_candidate(t)).map(|t| stem(t)).collect();
+        assert_eq!(kept, ["kratos00_int9_eyebrow_sand_m_gen", "youngkratos_eyebrow_gen_0h"]);
+        // the most mask-like wins: a grey shadow map (no empty pixels) loses to strands on an empty ground
+        let img = |f: &dyn Fn(u32) -> [u8; 4]| Image { w: 10, h: 10, rgba: (0..100).flat_map(f).collect(), format: Format::Bc7 };
+        let shadow = img(&|i| [90 + (i % 50) as u8, 90, 90, 255]);
+        let strands = img(&|i| if i % 4 == 0 { [255, 255, 255, 255] } else { [0, 0, 0, 255] });
+        let solid = img(&|_| [250, 250, 250, 255]);
+        let seen = vec![("kratos_newbeard01_screenshadowof".to_string(), shadow), ("kratosv2_hair_01_beard_whitehair".to_string(), strands), ("kratosv2_hair_01_beard_whitehair".to_string(), solid)];
+        let (best, line) = best_coverage(&seen);
+        assert_eq!(best, Some(1), "{line}");
+        assert!(line.contains("75 % empty, 25 % solid"), "{line}");
+        assert_eq!(best_coverage(&seen[2..]).0, None);
     }
 
     #[test]

@@ -181,11 +181,14 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
 }
 
 /// Give each vertex of the cloth meshes (Kratos material in `CLOTH`; `used` maps a mesh's material index to Kratos's)
-/// the pull of the limbs under it. The body's weights there are the inverse-distance blend of the six nearest body
-/// vertices within 15 cm (a 5 cm grid); their arm-bone part (clavicle to fingers) replaces that much of the cloth's own
-/// weights, and their leg-bone part (thigh to toes) times the material's leg factor, so the cloth over an arm moves
-/// with it while the rest stays with the torso. Bone names come from `skeleton`; top four bones. Cloth farther than
-/// 15 cm from the body keeps its own. Returns how many vertices changed.
+/// the weights of the body under it. The body's weights there are the inverse-distance blend of the nearest body
+/// vertices within 15 cm (a 5 cm grid): at most six, and only those within 2 cm of the nearest's distance, so cloth
+/// near an armpit takes the skin right under it, not the arm across the gap. Their arm-bone part (clavicle to fingers)
+/// replaces that much of the cloth's own weights, their leg-bone part (thigh to toes) times the material's leg factor,
+/// and their other bones (spine, neck) by how close the cloth is: wholly within 4 cm, fading to none at 12 cm. So cloth
+/// lying on the body moves exactly as the skin under it (no skin pushing through as an arm lowers), cloth over an arm
+/// follows the arm, and loose cloth stays with the torso. Bone names come from `skeleton`; top four bones. Cloth
+/// farther than 15 cm from the body keeps its own. Returns how many vertices changed.
 pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Node]) -> usize {
     let limb = |b: u8| -> u8 {
         let n = skeleton.get(b as usize).map(|n| n.name.as_str()).unwrap_or("");
@@ -241,7 +244,10 @@ pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Nod
                 continue;
             }
             near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let nearest = near[0].0;
+            near.retain(|n| n.0 <= nearest + 0.02);
             near.truncate(6);
+            let close = ((0.12 - nearest) / (0.12 - 0.04)).clamp(0.0, 1.0);
             // the body's weights here, normalised
             let mut under: Vec<(u8, f32)> = Vec::new();
             let mut total = 0.0;
@@ -262,8 +268,8 @@ pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Nod
             if total <= 0.0 {
                 continue;
             }
-            // the limbs' share of it takes over that much of the cloth's own weights
-            let pull: Vec<(u8, f32)> = under.iter().map(|&(b, w)| (b, w / total * [0.0, 1.0, leg_factor][limb(b) as usize])).filter(|e| e.1 > 0.0).collect();
+            // the limbs' share of it, and the rest as near as the cloth lies, replaces that much of the cloth's own
+            let pull: Vec<(u8, f32)> = under.iter().map(|&(b, w)| (b, w / total * [close, 1.0, leg_factor][limb(b) as usize])).filter(|e| e.1 > 0.0).collect();
             let share: f32 = pull.iter().map(|e| e.1).sum::<f32>().min(1.0);
             if share < 0.02 {
                 continue;
@@ -497,19 +503,24 @@ mod tests {
         // an arm (bone 56) from x = 0.3 to 0.5 and a torso (bone 50) from x = -0.1 to 0.1
         let arm = Mesh { material: 1, node: 0, vertices: (0..10).map(|i| v(0.3 + 0.02 * i as f32, 56)).collect(), indices: vec![0, 1, 2] };
         let torso = Mesh { material: 0, node: 0, vertices: (0..10).map(|i| v(-0.1 + 0.02 * i as f32, 50)).collect(), indices: vec![0, 1, 2] };
-        // a cloak on bone 48, one vertex over the arm, one over the torso, one far away
-        let mut cloak = Mesh { material: 2, node: 0, vertices: vec![v(0.42, 48), v(0.0, 48), v(3.0, 48)], indices: vec![0, 1, 2] };
+        // a cloak on bone 48: one vertex over the arm, one on the torso, one 8 cm off it, one far away
+        let mut cloak = Mesh { material: 2, node: 0, vertices: vec![v(0.42, 48), v(0.0, 48), v(0.0, 48), v(3.0, 48)], indices: vec![0, 1, 2, 1, 2, 3] };
         cloak.vertices[0].position[2] = 0.03;
+        cloak.vertices[2].position[2] = 0.08;
         let mut meshes = vec![torso, arm, cloak];
         let mut skeleton: Vec<Node> = (0..60).map(|i| Node { name: format!("bone{i}"), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }).collect();
         skeleton[56].name = "L_UpperArm".into();
         skeleton[50].name = "Spine2".into();
         // the meshes' materials stand for Kratos's torso skin, arm skin and cloak
         let n = transfer_cloth_weights(&mut meshes, &[72, 74, 75], &skeleton);
-        // over the arm it follows the arm; over the torso it keeps its own weights; far away too
-        assert_eq!(n, 1);
+        // over the arm it follows the arm; on the torso it moves as the torso's skin; 8 cm off it, half of each (it
+        // fades from 4 to 12 cm); far away it keeps its own
+        assert_eq!(n, 3);
         let c = &meshes[2].vertices;
-        assert_eq!((c[0].bones[0], c[1].bones[0], c[2].bones[0]), (56, 48, 48));
+        assert_eq!((c[0].bones[0], c[1].bones[0], c[3].bones[0]), (56, 50, 48));
+        assert_eq!((c[1].weights[0], c[3].weights[0]), (1.0, 1.0));
+        let half: Vec<(u8, f32)> = (0..2).map(|k| (c[2].bones[k], c[2].weights[k])).collect();
+        assert!(half.iter().all(|(b, w)| [48, 50].contains(b) && (w - 0.5).abs() < 0.01), "{half:?}");
         assert!((c[0].weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
     }
 
