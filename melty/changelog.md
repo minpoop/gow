@@ -1,8 +1,8 @@
-Forty-eighth alpha: Kratos moves with you.
+Forty-ninth alpha: Kratos in his own colours.
 
-- **Kratos is now attached to Elden Ring's skeleton.** His arms and legs are re-posed into Elden Ring's rest pose, and every part of his outfit follows the bones it belongs to. He walks, runs and swings with your character instead of standing stiff.
-- **No more test pieces.** The bare upper body and the red cube are gone, and the arms and legs slots now hide your character's own limbs under him.
-- **Your own head is hidden.** Elden Ring removes a character's head only under a helmet, so new characters now start wearing an invisible one. Make a new character to see it; older characters keep their own head showing through.
-- **Better crash reports.** If the game crashes, the log now records what it was doing at that moment, to track down the crash some testers see when closing the game.
+0.1.47 worked: Kratos moves with your character, his weapons in his hands, and the game closed cleanly.
 
-He is still in a plain placeholder colour; his own textures come next.
+- **His real colours.** Each part of his outfit now takes its colour from your own God of War Ragnarök install: the red sash, leather, furs, boots, bracers and his skin. They're read and converted when you press Play (a few extra seconds the first time).
+- **No more dark specks around his head.** The long strands of his beard need see-through textures that Elden Ring's armour can't show yet, so they are left out for now, along with his eyebrows and lashes. His goatee stays.
+
+Surfaces are flat for now: the bumps and shine of his skin and armour come later.

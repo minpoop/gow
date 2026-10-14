@@ -260,7 +260,7 @@ fn play(ctx: &Ctx) -> Result<()> {
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 4;
+    const BUILD: u32 = 5;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -295,7 +295,13 @@ fn install_kratos_part(ctx: &Ctx) -> String {
             };
             // his own skeleton, to re-pose him onto the player's
             let kratos = chunk("goProtoheroa00", 1).and_then(gowring_gow::kratos::Skeleton::parse);
-            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref())?;
+            // his colours: each material's colour map from the texture packs next to root.lodpack
+            let t1 = std::time::Instant::now();
+            let materials = gowring_gow::kratos_part::outfit_materials(mesh, mg);
+            let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
+            let (colours, colour_note) = gowring_gow::kratos_look::outfit_colours(&buf, &es, &wad_dir, &materials, gowring_gow::kratos_part::MAX_TEXTURE);
+            ctx.log(&format!("play: Kratos's colours in {:.1}s: {} of {} materials; {colour_note}", t1.elapsed().as_secs_f32(), colours.len(), materials.len()));
+            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &colours)?;
             std::fs::create_dir_all(&cache)?;
             for (name, bytes) in files {
                 std::fs::write(cache.join(name), bytes)?;

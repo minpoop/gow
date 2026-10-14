@@ -586,6 +586,121 @@ pub fn dds_bc1(w: u32, h: u32, blocks: &[u8]) -> Vec<u8> {
     d
 }
 
+/// RGB 5:6:5 and back.
+fn to565(c: [f32; 3]) -> u16 {
+    let q = |v: f32, bits: u32| (v.clamp(0.0, 255.0) / 255.0 * ((1 << bits) - 1) as f32).round() as u16;
+    (q(c[0], 5) << 11) | (q(c[1], 6) << 5) | q(c[2], 5)
+}
+
+fn from565(c: u16) -> [f32; 3] {
+    let (r, g, b) = ((c >> 11) & 31, (c >> 5) & 63, c & 31);
+    [(r as f32) * 255.0 / 31.0, (g as f32) * 255.0 / 63.0, (b as f32) * 255.0 / 31.0]
+}
+
+/// One opaque BC1 block for 16 pixels (RGBA, row by row): the two end colours span the block's colours along their
+/// widest channel spread (the box diagonal, inset by a sixteenth), and each pixel takes the nearest of the four.
+pub fn bc1_block(px: &[[u8; 4]; 16]) -> [u8; 8] {
+    let mut lo = [255.0f32; 3];
+    let mut hi = [0.0f32; 3];
+    for p in px {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k] as f32);
+            hi[k] = hi[k].max(p[k] as f32);
+        }
+    }
+    // pick the box diagonal that follows the colours' own correlation
+    let mean: [f32; 3] = std::array::from_fn(|k| px.iter().map(|p| p[k] as f32).sum::<f32>() / 16.0);
+    let cov = |a: usize, b: usize| px.iter().map(|p| (p[a] as f32 - mean[a]) * (p[b] as f32 - mean[b])).sum::<f32>();
+    let (rg, rb, gb) = (cov(0, 1), cov(0, 2), cov(1, 2));
+    let (mut a, mut b) = (hi, lo);
+    // channels that fall as red rises swap their ends
+    if rg < 0.0 {
+        std::mem::swap(&mut a[1], &mut b[1]);
+    }
+    if rb < 0.0 || (rg >= 0.0 && gb < 0.0 && rb == 0.0) {
+        std::mem::swap(&mut a[2], &mut b[2]);
+    }
+    let inset: [f32; 3] = std::array::from_fn(|k| (a[k] - b[k]) / 16.0);
+    let (a, b): ([f32; 3], [f32; 3]) = (std::array::from_fn(|k| a[k] - inset[k]), std::array::from_fn(|k| b[k] + inset[k]));
+    let (mut c0, mut c1) = (to565(a), to565(b));
+    if c0 < c1 {
+        std::mem::swap(&mut c0, &mut c1);
+    }
+    let mut o = [0u8; 8];
+    o[0..2].copy_from_slice(&c0.to_le_bytes());
+    o[2..4].copy_from_slice(&c1.to_le_bytes());
+    if c0 == c1 {
+        return o; // one colour: every index 0
+    }
+    let (e0, e1) = (from565(c0), from565(c1));
+    let pal: [[f32; 3]; 4] = [e0, e1, std::array::from_fn(|k| (2.0 * e0[k] + e1[k]) / 3.0), std::array::from_fn(|k| (e0[k] + 2.0 * e1[k]) / 3.0)];
+    let mut bits = 0u32;
+    for (i, p) in px.iter().enumerate() {
+        let d = |c: &[f32; 3]| (0..3).map(|k| (c[k] - p[k] as f32).powi(2)).sum::<f32>();
+        let best = (0..4).min_by(|x, y| d(&pal[*x]).total_cmp(&d(&pal[*y]))).unwrap() as u32;
+        bits |= best << (2 * i);
+    }
+    o[4..8].copy_from_slice(&bits.to_le_bytes());
+    o
+}
+
+/// An RGBA image (`w` x `h`, row by row) as BC1 blocks; edges repeat to fill the last blocks.
+pub fn bc1_encode(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    let (bw, bh) = (w.div_ceil(4).max(1), h.div_ceil(4).max(1));
+    let mut out = Vec::with_capacity((bw * bh * 8) as usize);
+    for by in 0..bh {
+        for bx in 0..bw {
+            let px: [[u8; 4]; 16] = std::array::from_fn(|i| {
+                let (x, y) = ((bx * 4 + (i as u32 % 4)).min(w - 1), (by * 4 + (i as u32 / 4)).min(h - 1));
+                let at = ((y * w + x) * 4) as usize;
+                [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
+            });
+            out.extend_from_slice(&bc1_block(&px));
+        }
+    }
+    out
+}
+
+/// Half an RGBA image in each direction (2x2 averages; a side of 1 stays 1).
+pub fn half(w: u32, h: u32, rgba: &[u8]) -> (u32, u32, Vec<u8>) {
+    let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+    let mut out = vec![0u8; (nw * nh * 4) as usize];
+    for y in 0..nh {
+        for x in 0..nw {
+            for c in 0..4 {
+                let mut sum = 0u32;
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let (sx, sy) = ((x * 2 + dx).min(w - 1), (y * 2 + dy).min(h - 1));
+                    sum += rgba[((sy * w + sx) * 4 + c) as usize] as u32;
+                }
+                out[((y * nw + x) * 4 + c) as usize] = ((sum + 2) / 4) as u8;
+            }
+        }
+    }
+    (nw, nh, out)
+}
+
+/// A DDS file (DXT1) holding an RGBA image and its whole mip chain down to 1 x 1.
+pub fn dds_bc1_mips(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    let mut levels = vec![bc1_encode(w, h, rgba)];
+    let (mut lw, mut lh, mut px) = (w, h, rgba.to_vec());
+    while lw > 1 || lh > 1 {
+        let (nw, nh, np) = half(lw, lh, &px);
+        levels.push(bc1_encode(nw, nh, &np));
+        (lw, lh, px) = (nw, nh, np);
+    }
+    let mut d = dds_bc1(w, h, &levels[0]);
+    // mip count, with the flags that say there is one
+    let flags = u32::from_le_bytes(d[8..12].try_into().unwrap()) | 0x20000;
+    d[8..12].copy_from_slice(&flags.to_le_bytes());
+    d[28..32].copy_from_slice(&(levels.len() as u32).to_le_bytes());
+    d[108..112].copy_from_slice(&(0x1000u32 | 0x8 | 0x40_0000).to_le_bytes());
+    for l in &levels[1..] {
+        d.extend_from_slice(l);
+    }
+    d
+}
+
 /// One BC1 block of a single colour (RGB 5:6:5).
 pub fn bc1_solid(r: u8, g: u8, b: u8) -> [u8; 8] {
     let c = ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3);
@@ -996,6 +1111,32 @@ mod tests {
         let tex = |r, g, b| dds_bc1(4, 4, &bc1_solid(r, g, b));
         let t = tpf(&[("bd_m_9701_a".into(), tex(200, 150, 120), 0), ("bd_m_9701_m".into(), tex(0, 128, 0), 0), ("bd_m_9701_n".into(), tex(128, 128, 255), 0)]);
         std::fs::write(std::path::Path::new(&dir).join("bd_m_9701.partsbnd.dcx"), partsbnd("bd_m_9701", flver, t)).unwrap();
+    }
+
+    #[test]
+    fn bc1_keeps_an_images_colours_and_mips_halve_down_to_one_pixel() {
+        // a smooth gradient with a red stripe
+        let (w, h) = (64u32, 32u32);
+        let mut img = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let at = ((y * w + x) * 4) as usize;
+                let red = (8..12).contains(&y);
+                img[at..at + 4].copy_from_slice(&[if red { 230 } else { (x * 4) as u8 }, if red { 20 } else { (y * 8) as u8 }, if red { 20 } else { 128 }, 255]);
+            }
+        }
+        let blocks = bc1_encode(w, h, &img);
+        assert_eq!(blocks.len(), (16 * 8 * 8) as usize);
+        let back = crate::dds::decode_raw(crate::dds::Format::Bc1, w, h, &blocks).unwrap();
+        let err = img.iter().zip(&back.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        assert!(err <= 24, "worst channel error {err}");
+        let dds = dds_bc1_mips(w, h, &img);
+        // 64x32, 32x16, 16x8, 8x4, 4x2, 2x1, 1x1: blocks of 4x4 at least
+        let mips = u32::from_le_bytes(dds[28..32].try_into().unwrap());
+        assert_eq!(mips, 7);
+        assert_eq!(dds.len(), 128 + (128 + 32 + 8 + 2 + 1 + 1 + 1) * 8);
+        let decoded = crate::dds::decode(&dds).unwrap();
+        assert_eq!((decoded.w, decoded.h), (w, h));
     }
 
     #[test]
