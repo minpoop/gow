@@ -87,7 +87,8 @@ pub fn decode_raw(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> 
                 bail!("texture data truncated: {} < {size}", data.len());
             }
             let r = match format {
-                Format::Bc1 => texture2ddecoder::decode_bc1(data, wz, hz, &mut px),
+                // with BC1's one-bit alpha (the three-colour form's fourth index is transparent black), as Direct3D reads it
+                Format::Bc1 => texture2ddecoder::decode_bc1a(data, wz, hz, &mut px),
                 Format::Bc2 => texture2ddecoder::decode_bc2(data, wz, hz, &mut px),
                 Format::Bc3 => texture2ddecoder::decode_bc3(data, wz, hz, &mut px),
                 Format::Bc4 => texture2ddecoder::decode_bc4(data, wz, hz, &mut px),

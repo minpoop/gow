@@ -689,8 +689,55 @@ pub fn bc1_block(px: &[[u8; 4]; 16]) -> [u8; 8] {
     o
 }
 
+/// One BC1 block with cut-out alpha: a block with any pixel under half alpha uses BC1's three-colour form (first end
+/// colour not above the second), whose fourth index reads as transparent black, for those pixels; the end colours span
+/// only the pixels that are drawn. A block with none is [`bc1_block`].
+pub fn bc1_block_cut(px: &[[u8; 4]; 16]) -> [u8; 8] {
+    let shown: Vec<[u8; 4]> = px.iter().copied().filter(|p| p[3] >= 128).collect();
+    if shown.len() == 16 {
+        return bc1_block(px);
+    }
+    let mut o = [0u8; 8];
+    if shown.is_empty() {
+        o[4..8].copy_from_slice(&u32::MAX.to_le_bytes()); // end colours 0 and 0: three-colour form, every pixel index 3
+        return o;
+    }
+    // the drawn pixels' end colours, from the opaque encoder on a block of only them
+    let fill: [[u8; 4]; 16] = std::array::from_fn(|i| shown[i % shown.len()]);
+    let ends = bc1_block(&fill);
+    let (mut c0, mut c1) = (u16::from_le_bytes([ends[0], ends[1]]), u16::from_le_bytes([ends[2], ends[3]]));
+    if c0 > c1 {
+        std::mem::swap(&mut c0, &mut c1);
+    }
+    o[0..2].copy_from_slice(&c0.to_le_bytes());
+    o[2..4].copy_from_slice(&c1.to_le_bytes());
+    let (e0, e1) = (from565(c0), from565(c1));
+    let pal: [[f32; 3]; 3] = [e0, e1, std::array::from_fn(|k| (e0[k] + e1[k]) / 2.0)];
+    let mut bits = 0u32;
+    for (i, p) in px.iter().enumerate() {
+        let best = if p[3] < 128 {
+            3
+        } else {
+            let d = |c: &[f32; 3]| (0..3).map(|k| (c[k] - p[k] as f32).powi(2)).sum::<f32>();
+            (0..3).min_by(|x, y| d(&pal[*x]).total_cmp(&d(&pal[*y]))).unwrap() as u32
+        };
+        bits |= best << (2 * i);
+    }
+    o[4..8].copy_from_slice(&bits.to_le_bytes());
+    o
+}
+
 /// An RGBA image (`w` x `h`, row by row) as BC1 blocks; edges repeat to fill the last blocks.
 pub fn bc1_encode(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    bc1_encode_with(w, h, rgba, bc1_block)
+}
+
+/// As [`bc1_encode`], with cut-out alpha ([`bc1_block_cut`]).
+pub fn bc1_encode_cut(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    bc1_encode_with(w, h, rgba, bc1_block_cut)
+}
+
+fn bc1_encode_with(w: u32, h: u32, rgba: &[u8], block: fn(&[[u8; 4]; 16]) -> [u8; 8]) -> Vec<u8> {
     let (bw, bh) = (w.div_ceil(4).max(1), h.div_ceil(4).max(1));
     let mut out = Vec::with_capacity((bw * bh * 8) as usize);
     for by in 0..bh {
@@ -700,7 +747,7 @@ pub fn bc1_encode(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
                 let at = ((y * w + x) * 4) as usize;
                 [rgba[at], rgba[at + 1], rgba[at + 2], rgba[at + 3]]
             });
-            out.extend_from_slice(&bc1_block(&px));
+            out.extend_from_slice(&block(&px));
         }
     }
     out
@@ -729,11 +776,26 @@ pub fn half(w: u32, h: u32, rgba: &[u8]) -> (u32, u32, Vec<u8>) {
 /// textures use: `srgb` marks a colour map (DXGI 72, BC1_UNORM_SRGB, as Elden Ring's `SYSTEX_Dummy_a`) so the GPU
 /// turns it linear before shading; data maps (normals, roughness) are plain BC1_UNORM (DXGI 71).
 pub fn dds_bc1_mips(w: u32, h: u32, rgba: &[u8], srgb: bool) -> Vec<u8> {
-    let mut levels = vec![bc1_encode(w, h, rgba)];
+    dds_bc1_chain(w, h, rgba, srgb, false)
+}
+
+/// As [`dds_bc1_mips`] for a colour map with cut-out alpha (alpha under half is not drawn, see [`bc1_block_cut`]).
+/// Each smaller level keeps the share of drawn pixels its parent had: averaging alone would thin strands of hair to
+/// nothing a few levels down, so its alpha is raised until as many pixels pass as a quarter of the parent's did.
+pub fn dds_bc1_cut_mips(w: u32, h: u32, rgba: &[u8]) -> Vec<u8> {
+    dds_bc1_chain(w, h, rgba, true, true)
+}
+
+fn dds_bc1_chain(w: u32, h: u32, rgba: &[u8], srgb: bool, cut: bool) -> Vec<u8> {
+    let encode = if cut { bc1_encode_cut } else { bc1_encode };
+    let mut levels = vec![encode(w, h, rgba)];
     let (mut lw, mut lh, mut px) = (w, h, rgba.to_vec());
     while lw > 1 || lh > 1 {
-        let (nw, nh, np) = half(lw, lh, &px);
-        levels.push(bc1_encode(nw, nh, &np));
+        let (nw, nh, mut np) = half(lw, lh, &px);
+        if cut {
+            keep_coverage(&px, &mut np);
+        }
+        levels.push(encode(nw, nh, &np));
         (lw, lh, px) = (nw, nh, np);
     }
     let mut d = b"DDS ".to_vec();
@@ -766,6 +828,28 @@ pub fn dds_bc1_mips(w: u32, h: u32, rgba: &[u8], srgb: bool) -> Vec<u8> {
         d.extend_from_slice(l);
     }
     d
+}
+
+/// Raise `small`'s alpha (a half-size copy of `big`) so that a quarter as many of its pixels are drawn (alpha 128 or
+/// more) as of `big`'s: every alpha is scaled by the factor that does it (found by halving).
+fn keep_coverage(big: &[u8], small: &mut [u8]) {
+    let drawn = |px: &[u8], scale: f32| px.chunks_exact(4).filter(|p| p[3] as f32 * scale >= 128.0).count();
+    let want = drawn(big, 1.0) as f32 / 4.0;
+    if want <= 0.0 || drawn(small, 1.0) as f32 >= want {
+        return;
+    }
+    let (mut lo, mut hi) = (1.0f32, 16.0f32);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        if (drawn(small, mid) as f32) < want {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    for p in small.chunks_exact_mut(4) {
+        p[3] = (p[3] as f32 * hi).min(255.0) as u8;
+    }
 }
 
 /// One BC1 block of a single colour (RGB 5:6:5).
@@ -1178,6 +1262,46 @@ mod tests {
         let tex = |r, g, b| dds_bc1(4, 4, &bc1_solid(r, g, b));
         let t = tpf(&[("bd_m_9701_a".into(), tex(200, 150, 120), 0), ("bd_m_9701_m".into(), tex(0, 128, 0), 0), ("bd_m_9701_n".into(), tex(128, 128, 255), 0)]);
         std::fs::write(std::path::Path::new(&dir).join("bd_m_9701.partsbnd.dcx"), partsbnd("bd_m_9701", flver, t)).unwrap();
+    }
+
+    #[test]
+    fn cut_out_bc1_hides_the_clear_pixels_keeps_the_rest_and_thin_strands_last_down_the_mips() {
+        // brown hair on a quarter of the pixels, scattered, on a clear ground
+        let (w, h) = (32u32, 32u32);
+        let mut img = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                let at = ((y * w + x) * 4) as usize;
+                let strand = ((x.wrapping_mul(73856093) ^ y.wrapping_mul(19349663)) >> 3) % 4 == 0;
+                img[at..at + 4].copy_from_slice(&if strand { [120, 80, 50, 255] } else { [200, 200, 200, 0] });
+            }
+        }
+        let blocks = bc1_encode_cut(w, h, &img);
+        let back = crate::dds::decode_raw(crate::dds::Format::Bc1, w, h, &blocks).unwrap();
+        for (a, b) in img.chunks_exact(4).zip(back.rgba.chunks_exact(4)) {
+            if a[3] == 0 {
+                assert_eq!(b[3], 0);
+            } else {
+                assert_eq!(b[3], 255);
+                assert!((0..3).all(|k| (a[k] as i32 - b[k] as i32).abs() <= 8), "{a:?} -> {b:?}");
+            }
+        }
+        // a block with nothing drawn, and an opaque one as before
+        assert_eq!(bc1_block_cut(&[[9, 9, 9, 0]; 16]), [0, 0, 0, 0, 255, 255, 255, 255]);
+        assert_eq!(bc1_block_cut(&[[40, 80, 120, 255]; 16]), bc1_block(&[[40, 80, 120, 255]; 16]));
+        // every level still draws about a quarter of its pixels (plain averaging would leave none past the first)
+        let dds = dds_bc1_cut_mips(w, h, &img);
+        assert_eq!(u32::from_le_bytes(dds[128..132].try_into().unwrap()), 72);
+        let mut at = 148;
+        let (mut lw, mut lh) = (w, h);
+        for level in 0..4 {
+            let size = (lw.div_ceil(4) * lh.div_ceil(4) * 8) as usize;
+            let px = crate::dds::decode_raw(crate::dds::Format::Bc1, lw, lh, &dds[at..at + size]).unwrap();
+            let drawn = px.rgba.chunks_exact(4).filter(|p| p[3] > 0).count() as f32 / (lw * lh) as f32;
+            assert!((0.2..=0.6).contains(&drawn), "level {level}: {drawn}");
+            at += size;
+            (lw, lh) = ((lw / 2).max(1), (lh / 2).max(1));
+        }
     }
 
     #[test]

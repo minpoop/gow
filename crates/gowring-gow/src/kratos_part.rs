@@ -23,9 +23,17 @@ pub const MODEL_ID: u16 = 9701;
 pub const SCALE: f32 = 0.92;
 
 /// Materials of the default outfit drawn through transparency in Ragnarök, which an opaque material would turn into
-/// shells and slabs: the eye shadow border (3), eyebrows (4), a face layer (5), tear line (6), eyelashes (7), the snow
-/// flakes decal (76), the eyes' outer shell (78) and the long beard's hair cards (86, 87).
-pub const SEE_THROUGH: [u16; 9] = [3, 4, 5, 6, 7, 76, 78, 86, 87];
+/// shells and slabs, left out: the eye shadow border (3), a face layer (5), tear line (6), the snow flakes decal (76)
+/// and the eyes' outer shell (78).
+pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
+/// Materials made of strands on cards: the eyebrows (4), eyelashes (7) and the long beard (86, 87). They are drawn
+/// with Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and
+/// left out otherwise.
+pub const CUT_OUT: [u16; 4] = [4, 7, 86, 87];
+/// Elden Ring's cut-out character material: Torrent's body (the `C[AMSN][PixelKill]` shader, the armour's own with
+/// pixels under half albedo alpha not drawn, and the same vertex layout), with its three samplers.
+pub const CUT_OUT_MTD: &str = "N:\\GR\\data\\Material\\mtd\\Chr\\matxml\\C[c4000]_Horse_Body.matxml";
+const CUT_OUT_SAMPLERS: [&str; 3] = ["C_AMSN_PixelKill__snp_Texture2D_2_AlbedoMap_0", "C_AMSN_PixelKill__snp_Texture2D_0_MetallicMap_0", "C_AMSN_PixelKill__snp_Texture2D_7_NormalMap_4"];
 
 /// Cloth simulated in Ragnarök, with how much of the legs' pull it takes: its own weights go to physics joints, which
 /// land on torso bones here, so it would hang still while the arms and legs move through it. It takes the arms' share
@@ -420,8 +428,9 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
             None
         }
     };
-    // his materials (the see-through ones left out), each with its colour map or a neutral grey
-    let used = outfit_materials(mesh, mg);
+    // his materials (the see-through ones left out, and the strands too when they have no coverage), each with its
+    // colour map or a neutral grey
+    let used: Vec<u16> = outfit_materials(mesh, mg).into_iter().filter(|m| !CUT_OUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).collect();
     let (nodes, mut meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;
     if retargeted.is_some() {
         let n = transfer_cloth_weights(&mut meshes, &used, skeleton);
@@ -430,11 +439,16 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let mut textures: Vec<(String, Vec<u8>, u8)> = Vec::new();
     let mut mats = Vec::new();
-    let (mut coloured, mut surfaced) = (0, 0);
+    let (mut coloured, mut surfaced, mut strands) = (0, 0, 0);
     for m in &used {
         let look = looks.get(m);
+        let cut = look.is_some_and(|l| l.cut_out);
         let stem = format!("kratos_{MODEL_ID}_m{m}_a");
         let dds = match look.and_then(|l| l.colour.as_ref()) {
+            Some(img) if cut => {
+                strands += 1;
+                erpart::dds_bc1_cut_mips(img.w, img.h, &img.rgba)
+            }
             Some(img) => {
                 coloured += 1;
                 erpart::dds_bc1_mips(img.w, img.h, &img.rgba, true)
@@ -451,13 +465,20 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
             }
             None => format!("kratos_{MODEL_ID}_n"),
         };
-        mats.push(material_with(MODEL_ID, &format!("kratos_m{m}"), &stem, &normal));
+        let mut mat = material_with(MODEL_ID, &format!("kratos_m{m}"), &stem, &normal);
+        if cut {
+            mat.mtd = CUT_OUT_MTD.into();
+            for (t, name) in mat.textures.iter_mut().zip(CUT_OUT_SAMPLERS) {
+                t.0 = name.into();
+            }
+        }
+        mats.push(mat);
     }
     let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
     textures.push((format!("kratos_{MODEL_ID}_m"), solid([0, 160, 0]), 0));
     textures.push((format!("kratos_{MODEL_ID}_n"), solid([128, 128, 255]), 0));
     let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures));
-    note.push_str(&format!("body {} meshes ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
+    note.push_str(&format!("body {} meshes ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {strands} of strands cut out, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
     let (nodes, meshes) = empty_piece();
     for (slot, id) in [("hd", MODEL_ID - 1), ("am", MODEL_ID + 1), ("lg", MODEL_ID + 2)] {
         add(slot, id, &nodes, &meshes, &[material(id)], texture_pack(id, [128, 128, 128]));
@@ -663,7 +684,8 @@ mod tests {
         std::fs::write(dir.join("root.lodpack"), &pack).unwrap();
         let skeleton = std::env::var("GOWRING_ER_SKELETON").ok().map(|p| skeleton_nodes(&std::fs::read_to_string(p).unwrap()).unwrap());
         let kratos = std::env::var("GOWRING_PROTO").ok().map(|p| crate::kratos::Skeleton::parse(&std::fs::read(p).unwrap()).unwrap());
-        // a colour map per material when GOWRING_COLOURS names a folder of `<material>.png` files
+        // a colour map per material when GOWRING_COLOURS names a folder of `<material>.png` files (with alpha for the
+        // strands, see CUT_OUT)
         let mut colours = std::collections::BTreeMap::new();
         if let Ok(d) = std::env::var("GOWRING_COLOURS") {
             for e in std::fs::read_dir(d).unwrap().flatten() {
@@ -678,7 +700,9 @@ mod tests {
                     png::ColorType::Rgb => buf[..info.buffer_size()].chunks(3).flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
                     _ => continue,
                 };
-                colours.insert(m, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: info.width, h: info.height, rgba, format: crate::dds::Format::Bc1 }), surface: None });
+                // a strand material's map with alpha stands for a cut-out look
+                let cut_out = CUT_OUT.contains(&m) && rgba.chunks_exact(4).any(|p| p[3] < 128);
+                colours.insert(m, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: info.width, h: info.height, rgba, format: crate::dds::Format::Bc1 }), surface: None, cut_out });
             }
         }
         let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours).unwrap();
