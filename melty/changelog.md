@@ -1,9 +1,7 @@
-Fifty-fourth alpha: fixes from the 0.1.52 character-creator screenshots, and a closer look at the crash on closing.
+Fifty-fifth alpha: recording how Elden Ring really poses your character, to fix the shoulders properly.
 
-0.1.52 brought the full beard (it shows!) and fitted Kratos to your character's build. Your screenshots showed what still needed work:
+0.1.53 passed its test. The hair on top of Kratos's head is gone; some still shows at the back and sides in the character creator, and a shoulder still comes through the cloak there.
 
-- **Hair on top of Kratos's head.** Kratos's eyes sit lower in his skull than an Elden Ring character's, so lining up the eyes left your character's crown and hair just above his. His head now sits 1.5 cm higher, so both crowns and chins line up. The helmet and body also hide every hair section now (all ten hair flags), including in the character creator.
-- **The short beard under the long one.** Kratos's model also has a short goatee; it's now left out whenever the long beard is drawn.
-- **Shoulder through the cloak.** Kratos's shoulder skin followed Elden Ring's upper-arm "twist" bones, which its animations roll against the arm, while the cloak over it followed the arm itself. Now both follow the arm, so they turn together.
-- **The crash on closing.** It's the same crash each time, in the game's own shutdown, finding its memory damaged. Test runs now check the game's memory every 30 seconds and log when the damage first appears, to find what causes it.
-- **Rebuilds Kratos once.** The first start after updating rebuilds Kratos's model from your Ragnarök files.
+- **Pose recording (for fixing the shoulders).** Every shoulder fix so far was tested against a pose I made up, and none of them matched the game's real idle stance. This version records the character's real bone positions 10, 20 and 40 seconds after you enter the world, into `er_pose_10s.json`, `er_pose_20s.json` and `er_pose_40s.json` in your `%LOCALAPPDATA%\GowRing` folder. The cloak can then be fitted against the real pose.
+- **Hairstyle number.** The log also notes your character's face settings, to find which hairstyle number to switch to "none" so no hair can show under Kratos's head.
+- Kratos's model is the same as 0.1.53, so nothing rebuilds.

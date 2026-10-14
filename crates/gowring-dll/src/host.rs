@@ -338,6 +338,23 @@ impl Bridge {
         Some(&**b as *const _ as usize)
     }
 
+    /// The address of the player's model item (`CSFD4ModelItem`, which holds its bone matrices), for the pose probe.
+    pub fn player_model_item(&self) -> Option<usize> {
+        let wcm = unsafe { WorldChrMan::instance() }.ok()?;
+        let player = wcm.main_player.as_ref()?;
+        let model = &*player.chr_ins.chr_model_ins;
+        Some(&*model.model_ins.model_item as *const _ as usize)
+    }
+
+    /// The address of the player's face data (`FaceDataBuffer`: "FACE", version, size, then the parts and sliders the
+    /// character creator set), for the probe's log.
+    pub fn player_face_data(&self) -> Option<usize> {
+        let wcm = unsafe { WorldChrMan::instance() }.ok()?;
+        let player = wcm.main_player.as_ref()?;
+        let data = player.player_game_data.as_ptr() as usize;
+        Some(data + std::mem::offset_of!(eldenring::cs::PlayerGameData, face_data) + std::mem::offset_of!(eldenring::cs::FaceData, face_data_buffer))
+    }
+
     /// Read the world. `None` when there is no player yet (title screen, loading).
     pub fn build_frame(&mut self, time: f64, dt: f32, voice: Option<VoiceInfo>) -> Option<Frame> {
         let wcm = unsafe { WorldChrMan::instance() }.ok()?;

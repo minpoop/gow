@@ -14,6 +14,7 @@ mod mimir_text;
 mod overlay;
 mod params;
 mod paths;
+mod pose;
 mod runtime;
 mod savehook;
 mod settings;

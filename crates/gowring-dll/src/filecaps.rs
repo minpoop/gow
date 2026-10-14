@@ -126,8 +126,10 @@ pub fn report(when: &str) {
 static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Once per session, 5 s into the world: on a thread of our own, read the player skeleton (from the behaviour module
-/// at `behavior_module`) and then report the file table at 5 s, 30 s and 2 min. Nothing here runs on the game's thread.
-pub fn start_once(behavior_module: usize) {
+/// at `behavior_module`), report the file table at 5 s, 30 s and 2 min, and capture the player's live pose (from the
+/// model item at `model_item` and the behaviour module, see [`crate::pose`]) at 10, 20 and 40 s. Nothing here runs on
+/// the game's thread.
+pub fn start_once(behavior_module: usize, model_item: Option<usize>) {
     if STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
@@ -135,10 +137,20 @@ pub fn start_once(behavior_module: usize) {
         let t0 = std::time::Instant::now();
         let r = std::panic::catch_unwind(|| {
             crate::skeleton::dump_once(behavior_module);
-            for at in [5u64, 30, 120] {
+            let mut roots = vec![("behaviour", behavior_module)];
+            if let Some(m) = model_item {
+                roots.insert(0, ("model item", m));
+                if let Some(e) = crate::skeleton::read::<usize>(m + crate::pose::MTX43_ARRAY_ENTITY) {
+                    roots.insert(0, ("mtx43 array entity", e));
+                }
+            }
+            for at in [5u64, 10, 20, 30, 40, 120] {
                 let wait = std::time::Duration::from_secs(at - 5).saturating_sub(t0.elapsed());
                 std::thread::sleep(wait);
-                report(&format!("{at} s into the world"));
+                match at {
+                    10 | 20 | 40 => crate::glog!("pose", "{}", crate::pose::capture(&roots, &format!("{at}s"))),
+                    _ => report(&format!("{at} s into the world")),
+                }
             }
         });
         if r.is_err() {
