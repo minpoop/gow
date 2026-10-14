@@ -16,10 +16,6 @@ const NO_SKILL: i32 = 10;
 /// into a copy of today's carrier: 0.1.0-0.1.32 gave the Blades the Caestus (fists, by a wrong weapon type).
 const LEGACY_CARRIERS: [(&str, u32); 1] = [("blades_of_chaos", 21000000)];
 
-/// The face scale (width and depth) under Kratos's empty helm: the character's own face still draws there, and at
-/// full size it shows around Kratos's neck.
-const FACE_SCALE: f32 = 0.05;
-
 /// Sheet weapon id → every row that carries it (today's first, then legacy copies), once the patch has run.
 static CARRIER_ROWS: OnceLock<HashMap<&'static str, Vec<u32>>> = OnceLock::new();
 /// Skill (SwordArtsParam id) → the animation category its animations are in (600 + its animation type).
@@ -209,20 +205,13 @@ pub fn apply() -> Result<Carriers, String> {
         let helm = repo.rows::<EquipParamProtector>().filter(|(_, r)| r.protector_category() == 0 && r.head_equip() && r.equip_model_id() > 0).max_by_key(|(id, r)| (hides(r), std::cmp::Reverse(*id))).map(|(id, r)| (id, GET.map(|g| g(r))));
         if let Some((helm_id, _)) = helm {
             if parts.join("hd_m_9700.partsbnd.dcx").exists() {
-                // The face itself is drawn under every helmet (helmets shrink it to fit with the face scale), so ours
-                // shrinks it to a sliver inside Kratos's own head. What the game's helmets use, for the record:
-                let scaled: Vec<[f32; 4]> = repo.rows::<EquipParamProtector>().filter(|(_, r)| r.use_face_scale()).map(|(_, r)| [r.face_scale_m_scale_x(), r.face_scale_m_scale_z(), r.face_scale_m_max_x(), r.face_scale_m_max_z()]).collect();
-                let least = scaled.iter().fold([f32::MAX; 4], |a, s| std::array::from_fn(|k| a[k].min(s[k])));
+                // The character's face still draws under it (Elden Ring draws it under every helmet; the face scale is
+                // 1.0 on all 232 helmets that set it and changes nothing): Kratos's head is fitted over it instead.
                 if let Some(r) = repo.get_mut::<EquipParamProtector>(helm_id) {
                     let was = r.equip_model_id();
-                    let face_was = (r.use_face_scale(), r.face_scale_m_scale_x(), r.face_scale_m_scale_z(), r.face_scale_m_max_x(), r.face_scale_m_max_z());
                     r.set_equip_model_id(9700);
-                    r.set_use_face_scale(true);
-                    for set in [P::set_face_scale_m_scale_x, P::set_face_scale_m_scale_z, P::set_face_scale_m_max_x, P::set_face_scale_m_max_z, P::set_face_scale_f_scale_x, P::set_face_scale_f_scale_z, P::set_face_scale_f_max_x, P::set_face_scale_f_max_z] {
-                        set(r, FACE_SCALE);
-                    }
                     helm_row = helm_id as i32;
-                    notes.push(format!("helm {helm_id} (model {was}) now shows hd_m_9700, Kratos's empty head piece, and shrinks the face to {FACE_SCALE} (was {face_was:?}; {} helmets scale the face, the least scale x/z and max x/z {least:?})", scaled.len()));
+                    notes.push(format!("helm {helm_id} (model {was}) now shows hd_m_9700, Kratos's empty head piece"));
                 }
             } else {
                 notes.push("hd_m_9700 not installed".into());

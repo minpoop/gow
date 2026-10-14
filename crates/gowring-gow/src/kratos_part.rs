@@ -43,6 +43,9 @@ pub const CLOTH: [(u16, f32); 3] = [(75, 0.0), (29, 0.0), (60, 0.6)];
 /// The body surfaces cloth takes its weights from: the torso and arm skin (72, 74), the trousers (88) and boots (62).
 pub const BODY: [u16; 4] = [72, 74, 88, 62];
 
+/// Kratos's eyes, the landmark [`fit_proportions`] puts on the character's.
+pub const EYES: u16 = 77;
+
 /// The largest side of a colour map in the part (Ragnarök's are up to 2048).
 pub const MAX_TEXTURE: u32 = 1024;
 /// The largest side of a surface (normal and roughness) map.
@@ -299,6 +302,68 @@ pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Nod
     changed
 }
 
+/// Fit Kratos's proportions to the character's skeleton. Elden Ring draws the character's face under every helmet
+/// (the face scale on helmets is 1.0 everywhere and changes nothing), and Kratos's torso and neck are longer: with his
+/// hips on the character's, his shoulders sat 5 cm above its shoulder joints (so his arms turned about points below his
+/// shoulders) and his eyes 6.4 cm above its eyes, whose ears and hair showed below his. Each bone gets a step: none for
+/// the legs and hips, `shoulder_step` (height) for the arms (clavicle to fingers), his eyes' step onto the mean of the
+/// eye bones (height and depth; Kratos's eyes are material [`EYES`]) for the head and the bones under it, and for the
+/// rest by the bone's rest height: none at the hips, growing to the shoulders' step at the shoulders, then to the
+/// head's at the head. Every vertex moves by its bones' steps blended by its weights, so the torso shortens evenly, the
+/// neck barely, and cloth moves with the body under it. Returns the head's step and how many vertices moved.
+pub fn fit_proportions(meshes: &mut [Mesh], used: &[u16], skeleton: &[Node], shoulder_step: f32) -> Option<([f32; 3], usize)> {
+    let world = erpart::world_matrices(skeleton);
+    let at = |name: &str| skeleton.iter().position(|n| n.name == name).map(|i| [world[i][3][0], world[i][3][1], world[i][3][2]]);
+    let head = skeleton.iter().position(|n| n.name == "Head")?;
+    let (hip_y, shoulder_y, head_y) = (at("L_Thigh")?[1], at("L_UpperArm")?[1], world[head][3][1]);
+    let mean = |ps: &[[f32; 3]]| -> Option<[f32; 3]> { (!ps.is_empty()).then(|| std::array::from_fn(|k| ps.iter().map(|p| p[k]).sum::<f32>() / ps.len() as f32)) };
+    let eye_bones: Vec<[f32; 3]> = ["L_eyeA", "L_eyeB", "R_eyeA", "R_eyeB"].iter().filter_map(|n| at(n)).collect();
+    let his_eyes: Vec<[f32; 3]> = meshes.iter().filter(|m| used.get(m.material as usize) == Some(&EYES)).flat_map(|m| m.vertices.iter().map(|v| v.position)).collect();
+    let (to, from) = (mean(&eye_bones)?, mean(&his_eyes)?);
+    let head_step = [0.0, to[1] - from[1], to[2] - from[2]];
+    let under_head = |mut i: usize| loop {
+        if i == head {
+            break true;
+        }
+        match skeleton[i].parent {
+            p if p >= 0 => i = p as usize,
+            _ => break false,
+        }
+    };
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t.clamp(0.0, 1.0);
+    let steps: Vec<[f32; 3]> = skeleton
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            let name = n.name.as_str();
+            let y = world[i][3][1];
+            if under_head(i) {
+                head_step
+            } else if ["Clavicle", "UpperArm", "UpArm", "Forearm", "ForeArm", "Hand", "Finger", "Elbow", "Weapon", "Shield"].iter().any(|k| name.contains(k)) {
+                [0.0, shoulder_step, 0.0]
+            } else if ["Thigh", "Calf", "Foot", "Toe", "Knee", "Hip"].iter().any(|k| name.contains(k)) || y <= hip_y {
+                [0.0; 3]
+            } else if y <= shoulder_y {
+                [0.0, shoulder_step * (y - hip_y) / (shoulder_y - hip_y), 0.0]
+            } else {
+                let t = (y - shoulder_y) / (head_y - shoulder_y).max(1e-3);
+                [0.0, lerp(shoulder_step, head_step[1], t), lerp(0.0, head_step[2], t)]
+            }
+        })
+        .collect();
+    let mut moved = 0;
+    for v in meshes.iter_mut().flat_map(|m| m.vertices.iter_mut()) {
+        let step: [f32; 3] = std::array::from_fn(|k| (0..4).map(|j| v.weights[j] * steps.get(v.bones[j] as usize).map_or(0.0, |s| s[k])).sum());
+        if step.iter().any(|d| d.abs() > 1e-5) {
+            for k in 0..3 {
+                v.position[k] += step[k];
+            }
+            moved += 1;
+        }
+    }
+    Some((head_step, moved))
+}
+
 /// One mesh per material (split only where a mesh would pass 65,535 vertices), each with its own mesh node after the
 /// skeleton's `bones` nodes: Kratos's 62 draws become about two dozen meshes, nearer the game's own armour.
 fn merge_by_material(nodes: Vec<Node>, meshes: Vec<Mesh>, bones: usize) -> (Vec<Node>, Vec<Mesh>) {
@@ -439,6 +504,11 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     let used: Vec<u16> = outfit_materials(mesh, mg).into_iter().filter(|m| !CUT_OUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).collect();
     let (nodes, mut meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;
     if retargeted.is_some() {
+        let shoulder_step = retargeted.as_ref().map_or(0.0, |r| r.shoulder_step);
+        match fit_proportions(&mut meshes, &used, skeleton, shoulder_step) {
+            Some((step, n)) => note.push_str(&format!("fitted to the character: shoulders {shoulder_step:.3} m, head ({:.3}, {:.3}, {:.3}) m ({n} vertices); ", step[0], step[1], step[2])),
+            None => note.push_str("proportions left as they are (no eye bones or no eyes); "),
+        }
         let n = transfer_cloth_weights(&mut meshes, &used, skeleton);
         note.push_str(&format!("{n} cloth vertices follow the body under them; "));
     }
@@ -522,6 +592,41 @@ mod tests {
         let half: Vec<(u8, f32)> = (0..2).map(|k| (c[2].bones[k], c[2].weights[k])).collect();
         assert!(half.iter().all(|(b, w)| [48, 50].contains(b) && (w - 0.5).abs() < 0.01), "{half:?}");
         assert!((c[0].weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn kratos_fits_the_characters_proportions_bone_by_bone() {
+        let node = |name: &str, parent: i16, t: [f32; 3]| Node { name: name.into(), parent, t, r: [0.0; 3], s: [1.0; 3], flags: 8 };
+        // hips 0.97, Spine2 1.24, shoulders 1.391, Neck 1.453, Head 1.557, eyes 1.617 and 7.6 cm forward
+        let skeleton = vec![
+            node("Pelvis", -1, [0.0, 0.97, 0.0]),
+            node("L_Thigh", 0, [0.1, 0.0, 0.0]),
+            node("Spine2", 0, [0.0, 0.27, 0.0]),
+            node("L_UpperArm", 2, [0.17, 0.151, 0.0]),
+            node("Neck", 2, [0.0, 0.213, 0.025]),
+            node("Head", 4, [0.0, 0.104, -0.018]),
+            node("L_eyeA", 5, [-0.025, 0.06, -0.083]),
+            node("R_eyeA", 5, [0.025, 0.06, -0.083]),
+        ];
+        let v = |y: f32, bone: u8| Vertex { position: [0.0, y, -0.068], normal: [0.0, 0.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0], bones: [bone, 0, 0, 0], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[0.0; 2]; 2] };
+        // his eyes 6.4 cm higher and 8 mm further back than the eye bones; a thigh, chest, arm and neck vertex
+        let eyes = Mesh { material: 0, node: 0, vertices: vec![v(1.681, 5)], indices: vec![0, 0, 0] };
+        let body = Mesh { material: 1, node: 0, vertices: vec![v(0.8, 1), v(1.3, 2), v(1.4, 3), v(1.5, 4)], indices: vec![0, 1, 2] };
+        let mut meshes = vec![eyes, body];
+        let (step, moved) = fit_proportions(&mut meshes, &[EYES, 72], &skeleton, -0.05).unwrap();
+        assert!(step[0] == 0.0 && (step[1] + 0.064).abs() < 1e-4 && (step[2] + 0.008).abs() < 1e-4, "{step:?}");
+        assert_eq!(moved, 4);
+        let p: Vec<[f32; 3]> = meshes.iter().flat_map(|m| m.vertices.iter().map(|v| v.position)).collect();
+        // eyes onto the eye bones; the thigh stays; the chest by its share of the way to the shoulders; the arm by the
+        // shoulders' step; the neck between the shoulders' and the head's
+        assert!((p[0][1] - 1.617).abs() < 1e-4 && (p[0][2] + 0.076).abs() < 1e-4, "{:?}", p[0]);
+        assert_eq!(p[1][1], 0.8);
+        assert!((p[2][1] - (1.3 - 0.05 * 0.27 / 0.421)).abs() < 1e-4, "{:?}", p[2]);
+        assert!((p[3][1] - 1.35).abs() < 1e-4);
+        let t = 0.062 / 0.166;
+        assert!((p[4][1] - (1.5 - 0.05 - 0.014 * t)).abs() < 1e-4 && (p[4][2] - (-0.068 - 0.008 * t)).abs() < 1e-4, "{:?}", p[4]);
+        // no eye bones: nothing moves
+        assert!(fit_proportions(&mut meshes, &[EYES, 72], &skeleton[..6], -0.05).is_none());
     }
 
     #[test]

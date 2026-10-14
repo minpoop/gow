@@ -107,6 +107,10 @@ pub struct Retarget {
     /// Kratos's joints that move geometry (their bind pose is known), in his bind pose (scaled).
     pub deforms: Vec<bool>,
     pub bind_positions: Vec<[f32; 3]>,
+    /// How far the player skeleton's shoulders (upper arm bones) sit above Kratos's shoulder joints, on average (his
+    /// torso is longer: about -5 cm); the arms turn about his own joints, [`crate::kratos_part::fit_proportions`] then
+    /// moves them onto the player's.
+    pub shoulder_step: f32,
     pub note: String,
 }
 
@@ -201,6 +205,7 @@ pub fn retarget(sk: &Skeleton, scale: f32, er: &[Node]) -> Result<Retarget> {
     let mut aims: Vec<(usize, Vec<usize>, String, Vec<String>)> = Vec::new();
     let mut fixed: Vec<(usize, String)> = Vec::new();
     let mut regions: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
+    let mut shoulder_step = 0.0;
     for side in ["L", "R"] {
         // the arm
         let shoulder = limb_root(er_pos(&format!("{side}_UpperArm"))?).ok_or_else(|| anyhow::anyhow!("no {side} upper arm"))?;
@@ -209,6 +214,7 @@ pub fn retarget(sk: &Skeleton, scale: f32, er: &[Node]) -> Result<Retarget> {
             bail!("no hand on the {side} arm chain ({} joints)", path.len());
         };
         let elbow = halfway(&path, shoulder, hand).ok_or_else(|| anyhow::anyhow!("no elbow on the {side} arm"))?;
+        shoulder_step += (er_pos(&format!("{side}_UpperArm"))?[1] - pos[shoulder][1]) / 2.0;
         let fingers: Vec<usize> = children[hand].iter().copied().filter(|c| deforms[*c]).collect();
         aims.push((shoulder, vec![elbow], format!("{side}_UpperArm"), vec![format!("{side}_Forearm")]));
         aims.push((elbow, vec![hand], format!("{side}_Forearm"), vec![format!("{side}_Hand")]));
@@ -271,7 +277,7 @@ pub fn retarget(sk: &Skeleton, scale: f32, er: &[Node]) -> Result<Retarget> {
         };
         bone[j] = er_index(&name).unwrap_or(0).min(255) as u8;
     }
-    Ok(Retarget { moves, bone, deforms, bind_positions: pos, note })
+    Ok(Retarget { moves, bone, deforms, bind_positions: pos, shoulder_step, note })
 }
 
 fn write_note(note: &mut String, side: &str, limb: &str, joints: &[(&str, usize)], pos: &[[f32; 3]], er_root: [f32; 3]) -> std::fmt::Result {
@@ -350,6 +356,7 @@ mod tests {
             bone: vec![8, 56],
             deforms: vec![true, true],
             bind_positions: vec![[0.0; 3]; 2],
+            shoulder_step: 0.0,
             note: String::new(),
         };
         let (p, _, bones, weights) = skin(&r, [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], &[(1, 0.75), (0, 0.25)]);
