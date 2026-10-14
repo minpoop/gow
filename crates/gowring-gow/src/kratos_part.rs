@@ -160,7 +160,37 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
         erpart::compute_tangents(&mut mesh);
         meshes.push(mesh);
     }
+    let (nodes, meshes) = merge_by_material(nodes, meshes, skeleton.len());
     Ok((nodes, meshes, failed))
+}
+
+/// One mesh per material (split only where a mesh would pass 65,535 vertices), each with its own mesh node after the
+/// skeleton's `bones` nodes: Kratos's 62 draws become about two dozen meshes, nearer the game's own armour.
+fn merge_by_material(nodes: Vec<Node>, meshes: Vec<Mesh>, bones: usize) -> (Vec<Node>, Vec<Mesh>) {
+    let mut nodes: Vec<Node> = nodes.into_iter().take(bones).collect();
+    let mut merged: Vec<Mesh> = Vec::new();
+    let mut order: Vec<u32> = meshes.iter().map(|m| m.material).collect();
+    order.dedup();
+    let mut seen = std::collections::BTreeSet::new();
+    order.retain(|m| seen.insert(*m));
+    for mat in order {
+        let mut cur: Option<Mesh> = None;
+        for m in meshes.iter().filter(|m| m.material == mat) {
+            if cur.as_ref().is_some_and(|c| c.vertices.len() + m.vertices.len() > 65535) {
+                merged.push(cur.take().unwrap());
+            }
+            let c = cur.get_or_insert_with(|| Mesh { material: mat, node: 0, vertices: Vec::new(), indices: Vec::new() });
+            let base = c.vertices.len() as u32;
+            c.vertices.extend_from_slice(&m.vertices);
+            c.indices.extend(m.indices.iter().map(|i| i + base));
+        }
+        merged.extend(cur);
+    }
+    for (k, m) in merged.iter_mut().enumerate() {
+        m.node = nodes.len() as u32;
+        nodes.push(Node { name: format!("kratos_mesh_{k}"), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 });
+    }
+    (nodes, merged)
 }
 
 /// An empty piece: one triangle with no area (so nothing draws) on the root bone. The head, arms and legs slots wear
@@ -302,7 +332,7 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     textures.push((format!("kratos_{MODEL_ID}_m"), solid([0, 160, 0]), 0));
     textures.push((format!("kratos_{MODEL_ID}_n"), solid([128, 128, 255]), 0));
     let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures));
-    note.push_str(&format!("body {} draws ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
+    note.push_str(&format!("body {} meshes ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
     let (nodes, meshes) = empty_piece();
     for (slot, id) in [("hd", MODEL_ID - 1), ("am", MODEL_ID + 1), ("lg", MODEL_ID + 2)] {
         add(slot, id, &nodes, &meshes, &[material(id)], texture_pack(id, [128, 128, 128]));
@@ -314,6 +344,24 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draws_merge_into_one_mesh_per_material_with_their_own_nodes() {
+        let v = |x: f32| Vertex { position: [x, 0.0, 0.0], normal: [0.0, 0.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0], bones: [0; 4], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[0.0; 2]; 2] };
+        let mesh = |mat: u32, node: u32, n: usize| Mesh { material: mat, node, vertices: (0..n).map(|i| v(i as f32)).collect(), indices: vec![0, 1, 2] };
+        let mut nodes = master_only();
+        for k in 0..3 {
+            nodes.push(Node { name: format!("kratos_{k}"), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 });
+        }
+        let (nodes, meshes) = merge_by_material(nodes, vec![mesh(1, 1, 3), mesh(0, 2, 4), mesh(1, 3, 5)], 1);
+        assert_eq!(meshes.len(), 2);
+        assert_eq!((meshes[0].material, meshes[0].vertices.len()), (1, 8));
+        // the second draw's indices follow the first's vertices
+        assert_eq!(meshes[0].indices, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(nodes.len(), 3);
+        assert_eq!((meshes[0].node, meshes[1].node), (1, 2));
+        assert!(nodes[1..].iter().all(|n| n.flags == 4));
+    }
 
     #[test]
     fn a_skeleton_file_becomes_bones_at_their_rest_pose() {

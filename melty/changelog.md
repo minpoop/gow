@@ -1,9 +1,8 @@
-Fiftieth alpha: Kratos's skin and armour get depth.
+Fifty-first alpha: chasing a rare crash.
 
-0.1.48 worked: Kratos stands in the Lands Between in his own colours, and the game ran and closed cleanly.
+0.1.49 worked (Kratos now has true colours and surface detail) but one session crashed after a couple of minutes of play. The same kind of crash has appeared a few times since Kratos's model was added.
 
-- **Truer colours.** His colours were being shown slightly washed out, which made his ash skin look purple-grey. They now load the way Elden Ring's own colours do.
-- **Surface detail.** His muscles, scars, leather grain and fur should now catch the light, using the normal maps from your Ragnarök install, and rough and shiny areas follow his own gloss maps instead of one flat setting.
-- **Less disk space.** His copies for each body type and detail level now share one file instead of taking space each.
+- **A leaner model.** Kratos was made of 62 separate pieces, many more than Elden Ring's own armour uses. They're now merged into one piece per material (24), which should be easier on the game and may stop the crash. He looks the same.
+- **Sharper crash reports.** If it crashes again, the log now also says which part of memory was damaged, to narrow the cause down.
 
-His long beard strands, eyebrows and lashes are still left out for now.
+Your own head shows at Kratos's neck on characters made before 0.1.47. Make a new character to start with the invisible helmet that hides it.

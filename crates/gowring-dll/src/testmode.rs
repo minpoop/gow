@@ -82,6 +82,18 @@ pub fn locate(addr: usize) -> String {
     format!("{name}+{:#x}", addr - h.0 as usize)
 }
 
+/// The process's heaps (the first is the process heap, which the C runtimes and Rust use).
+fn heaps() -> Vec<usize> {
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Memory::{GetProcessHeap, GetProcessHeaps};
+    let mut list = [HANDLE::default(); 64];
+    let n = unsafe { GetProcessHeaps(&mut list) } as usize;
+    let main = unsafe { GetProcessHeap() }.map(|h| h.0 as usize).unwrap_or(0);
+    let mut out = vec![main];
+    out.extend(list[..n.min(64)].iter().map(|h| h.0 as usize).filter(|h| *h != main));
+    out
+}
+
 /// Up to 48 bytes at `addr` as hex, with any ASCII or UTF-16 text in them; empty when unreadable.
 fn peek(addr: usize) -> String {
     let Some(b) = crate::skeleton::read::<[u8; 48]>(addr) else { return String::new() };
@@ -107,8 +119,12 @@ fn describe(rec: &windows::Win32::System::Diagnostics::Debug::EXCEPTION_RECORD, 
     }
     let regs = [("rax", c.Rax), ("rbx", c.Rbx), ("rcx", c.Rcx), ("rdx", c.Rdx), ("rsi", c.Rsi), ("rdi", c.Rdi), ("rbp", c.Rbp), ("rsp", c.Rsp), ("r8", c.R8), ("r9", c.R9), ("r10", c.R10), ("r11", c.R11), ("r12", c.R12), ("r13", c.R13), ("r14", c.R14), ("r15", c.R15)];
     let _ = write!(o, "rip {}", locate(c.Rip as usize));
+    let heap_list = heaps();
     for (name, v) in regs {
         let _ = write!(o, "\n    {name} {v:#018x}");
+        if let Some(k) = heap_list.iter().position(|h| *h == v as usize && *h != 0) {
+            let _ = write!(o, " (heap #{k}{})", if k == 0 { ", the process heap" } else { "" });
+        }
         let seen = peek(v as usize);
         if !seen.is_empty() && name != "rsp" {
             let _ = write!(o, " -> {seen}");
@@ -166,6 +182,8 @@ unsafe extern "system" fn veh(info: *mut windows::Win32::System::Diagnostics::De
 
 pub fn install_fault_watch() {
     let _ = BORN.set(std::time::Instant::now());
+    let h = heaps();
+    crate::glog!("fault", "{} heaps at start; the process heap is {:#x}; others {:x?}", h.len(), h[0], &h[1..]);
     unsafe {
         windows::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(1, Some(veh));
     }
