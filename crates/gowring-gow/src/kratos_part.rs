@@ -155,39 +155,48 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
             }
             _ => Vec::new(),
         };
-        let vertices: Vec<Vertex> = (0..v.position.len())
-            .map(|i| {
-                let p = v.position[i];
-                let p = [p[0] * SCALE, p[1] * SCALE, p[2] * SCALE];
-                let n = v.normal.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
-                let (p, n, bones, weights) = match skin {
-                    Some(r) => {
-                        let inf = v.influences.get(i).filter(|x| !x.is_empty()).unwrap_or(&rigid);
-                        crate::retarget::skin(r, p, n, inf)
-                    }
-                    None => (p, n, [master; 4], [1.0, 0.0, 0.0, 0.0]),
-                };
-                // any unit vector across the normal serves as a tangent until his normal maps come in
-                let up = if n[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
-                let t = [up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2], up[0] * n[1] - up[1] * n[0]];
-                let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-6);
-                Vertex {
-                    position: [p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]],
-                    normal: n,
-                    tangent: [t[0] / len, t[1] / len, t[2] / len, 1.0],
-                    bones,
-                    weights,
-                    color: [255; 4],
-                    uv: [v.uv[0].get(i).copied().unwrap_or([0.0; 2]), v.uv[1].get(i).copied().unwrap_or([0.0; 2])],
+        meshes.push(draw_mesh(&v, material as u32, node, |i, p, n| {
+            let p = [p[0] * SCALE, p[1] * SCALE, p[2] * SCALE];
+            let (p, n, bones, weights) = match skin {
+                Some(r) => {
+                    let inf = v.influences.get(i).filter(|x| !x.is_empty()).unwrap_or(&rigid);
+                    crate::retarget::skin(r, p, n, inf)
                 }
-            })
-            .collect();
-        let mut mesh = Mesh { material: material as u32, node, vertices, indices: v.triangles.iter().flat_map(|t| t.map(|x| x as u32)).collect() };
-        erpart::compute_tangents(&mut mesh);
-        meshes.push(mesh);
+                None => (p, n, [master; 4], [1.0, 0.0, 0.0, 0.0]),
+            };
+            ([p[0] + offset[0], p[1] + offset[1], p[2] + offset[2]], n, bones, weights)
+        }));
     }
     let (nodes, meshes) = merge_by_material(nodes, meshes, skeleton.len());
     Ok((nodes, meshes, failed))
+}
+
+/// One draw as a mesh of `material` on mesh node `node`: each vertex placed by `place` (vertex index, Ragnarök
+/// position and normal, a missing normal as +Y; it gives the position, normal, bones and weights in the part), with a
+/// stand-in tangent across the normal, then tangents from the first UV set ([`erpart::compute_tangents`]).
+pub(crate) fn draw_mesh(v: &crate::kratos::Vertices, material: u32, node: u32, mut place: impl FnMut(usize, [f32; 3], [f32; 3]) -> ([f32; 3], [f32; 3], [u8; 4], [f32; 4])) -> Mesh {
+    let vertices: Vec<Vertex> = (0..v.position.len())
+        .map(|i| {
+            let n = v.normal.get(i).copied().unwrap_or([0.0, 1.0, 0.0]);
+            let (p, n, bones, weights) = place(i, v.position[i], n);
+            // any unit vector across the normal serves as a tangent where the UVs give none
+            let up = if n[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+            let t = [up[1] * n[2] - up[2] * n[1], up[2] * n[0] - up[0] * n[2], up[0] * n[1] - up[1] * n[0]];
+            let len = (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-6);
+            Vertex {
+                position: p,
+                normal: n,
+                tangent: [t[0] / len, t[1] / len, t[2] / len, 1.0],
+                bones,
+                weights,
+                color: [255; 4],
+                uv: [v.uv[0].get(i).copied().unwrap_or([0.0; 2]), v.uv[1].get(i).copied().unwrap_or([0.0; 2])],
+            }
+        })
+        .collect();
+    let mut mesh = Mesh { material, node, vertices, indices: v.triangles.iter().flat_map(|t| t.map(|x| x as u32)).collect() };
+    erpart::compute_tangents(&mut mesh);
+    mesh
 }
 
 /// Give each vertex of the cloth meshes (Kratos material in `CLOTH`; `used` maps a mesh's material index to Kratos's)
@@ -312,6 +321,225 @@ pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Nod
     changed
 }
 
+/// Kratos's skin (torso and arms), his cloak, and the fur on it.
+const SKIN: [u16; 2] = [72, 74];
+const CLOAK: u16 = 75;
+const FUR: u16 = 29;
+
+/// Closest point on triangle `abc` to `p`, with its barycentric weights (Ericson, Real-Time Collision Detection 5.1.5).
+fn closest_on_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let sub = |x: [f32; 3], y: [f32; 3]| [x[0] - y[0], x[1] - y[1], x[2] - y[2]];
+    let dot = |x: [f32; 3], y: [f32; 3]| x[0] * y[0] + x[1] * y[1] + x[2] * y[2];
+    let at = |w: [f32; 3]| -> ([f32; 3], [f32; 3]) { (std::array::from_fn(|k| w[0] * a[k] + w[1] * b[k] + w[2] * c[k]), w) };
+    let (ab, ac, ap) = (sub(b, a), sub(c, a), sub(p, a));
+    let (d1, d2) = (dot(ab, ap), dot(ac, ap));
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return at([1.0, 0.0, 0.0]);
+    }
+    let bp = sub(p, b);
+    let (d3, d4) = (dot(ab, bp), dot(ac, bp));
+    if d3 >= 0.0 && d4 <= d3 {
+        return at([0.0, 1.0, 0.0]);
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return at([1.0 - v, v, 0.0]);
+    }
+    let cp = sub(p, c);
+    let (d5, d6) = (dot(ab, cp), dot(ac, cp));
+    if d6 >= 0.0 && d5 <= d6 {
+        return at([0.0, 0.0, 1.0]);
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return at([1.0 - w, 0.0, w]);
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && d4 - d3 >= 0.0 && d5 - d6 >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return at([0.0, 1.0 - w, w]);
+    }
+    let sum = va + vb + vc;
+    if !(sum > 1e-20) {
+        return at([1.0, 0.0, 0.0]);
+    }
+    at([va / sum, vb / sum, vc / sum])
+}
+
+/// Kratos's skin as triangles in a 3 cm grid, to find how far a point lies outside it.
+struct SkinGrid {
+    points: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    triangles: Vec<[usize; 3]>,
+    cells: std::collections::HashMap<(i32, i32, i32), Vec<usize>>,
+}
+
+impl SkinGrid {
+    const CELL: f32 = 0.03;
+
+    fn new(meshes: &[Mesh], used: &[u16]) -> SkinGrid {
+        let mut g = SkinGrid { points: Vec::new(), normals: Vec::new(), triangles: Vec::new(), cells: Default::default() };
+        for m in meshes.iter().filter(|m| used.get(m.material as usize).is_some_and(|k| SKIN.contains(k))) {
+            let base = g.points.len();
+            g.points.extend(m.vertices.iter().map(|v| v.position));
+            g.normals.extend(m.vertices.iter().map(|v| v.normal));
+            g.triangles.extend(m.indices.chunks_exact(3).filter(|t| t.iter().all(|&i| (i as usize) < m.vertices.len())).map(|t| [base + t[0] as usize, base + t[1] as usize, base + t[2] as usize]));
+        }
+        for (i, t) in g.triangles.iter().enumerate() {
+            let lo = Self::cell(std::array::from_fn(|k| t.iter().map(|&v| g.points[v][k]).fold(f32::MAX, f32::min)));
+            let hi = Self::cell(std::array::from_fn(|k| t.iter().map(|&v| g.points[v][k]).fold(f32::MIN, f32::max)));
+            if (hi.0 - lo.0).max(hi.1 - lo.1).max(hi.2 - lo.2) > 16 {
+                continue;
+            }
+            for x in lo.0..=hi.0 {
+                for y in lo.1..=hi.1 {
+                    for z in lo.2..=hi.2 {
+                        g.cells.entry((x, y, z)).or_default().push(i);
+                    }
+                }
+            }
+        }
+        g
+    }
+
+    fn cell(p: [f32; 3]) -> (i32, i32, i32) {
+        ((p[0] / Self::CELL).floor() as i32, (p[1] / Self::CELL).floor() as i32, (p[2] / Self::CELL).floor() as i32)
+    }
+
+    /// The signed distance from `p` to the closest skin within `reach` (positive outside, by the skin's interpolated
+    /// normal there) and that normal, or None when no skin is that close.
+    fn outside(&self, p: [f32; 3], reach: f32, seen: &mut Vec<u32>, stamp: &mut u32) -> Option<(f32, [f32; 3])> {
+        if seen.len() != self.triangles.len() {
+            *seen = vec![0; self.triangles.len()];
+        }
+        *stamp = stamp.wrapping_add(1).max(1);
+        let c = Self::cell(p);
+        let k = (reach / Self::CELL).ceil() as i32;
+        let mut best: Option<(f32, usize, [f32; 3], [f32; 3])> = None;
+        for dx in -k..=k {
+            for dy in -k..=k {
+                for dz in -k..=k {
+                    for &t in self.cells.get(&(c.0 + dx, c.1 + dy, c.2 + dz)).into_iter().flatten() {
+                        if seen[t] == *stamp {
+                            continue;
+                        }
+                        seen[t] = *stamp;
+                        let [a, b, cc] = self.triangles[t];
+                        let (q, w) = closest_on_triangle(p, self.points[a], self.points[b], self.points[cc]);
+                        let d = (0..3).map(|i| (p[i] - q[i]).powi(2)).sum::<f32>();
+                        if d <= reach * reach && best.is_none_or(|b| d < b.0) {
+                            best = Some((d, t, q, w));
+                        }
+                    }
+                }
+            }
+        }
+        let (_, t, q, w) = best?;
+        let tri = self.triangles[t];
+        let n: [f32; 3] = std::array::from_fn(|i| (0..3).map(|j| w[j] * self.normals[tri[j]][i]).sum());
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if !(len > 1e-9) {
+            return None;
+        }
+        let n = [n[0] / len, n[1] / len, n[2] / len];
+        Some(((0..3).map(|i| (p[i] - q[i]) * n[i]).sum(), n))
+    }
+}
+
+/// How many cloak vertices above `CLOAK_FROM` lie inside Kratos's skin by more than `depth`.
+fn cloak_inside(meshes: &[Mesh], used: &[u16], skin: &SkinGrid, depth: f32) -> usize {
+    let (mut seen, mut stamp) = (Vec::new(), 0);
+    meshes
+        .iter()
+        .filter(|m| used.get(m.material as usize) == Some(&CLOAK))
+        .flat_map(|m| m.vertices.iter())
+        .filter(|v| v.position[1] > CLOAK_FROM && skin.outside(v.position, 0.05, &mut seen, &mut stamp).is_some_and(|(s, _)| s < -depth))
+        .count()
+}
+
+/// Only the cloak above this height (his shoulders and chest) is pushed out of the skin.
+const CLOAK_FROM: f32 = 1.0;
+
+/// Push Kratos's cloak out of his skin at rest. In his own bind pose his right deltoid already sits up to 4 cm in front
+/// of the cloak, with the same weights as the cloak there, so it shows in every pose (Ragnarök hides it with its cloth
+/// simulation). Each cloak vertex above `CLOAK_FROM` that lies inside the skin or less than 6 mm outside it (closest
+/// point on the skin's triangles within 5 cm, signed by their interpolated normal) pushes out to 6 mm; each push spreads
+/// over every cloak and fur vertex within 4 cm by (1 - (d/R)^2)^2, the strongest push winning, so stacked cloak layers
+/// and the fur on them move together and keep their order. Three passes at most; weights are left alone. Returns the
+/// cloak vertices inside the skin by more than 1 mm before and after, and how many cloak and fur vertices moved.
+pub fn push_cloak_out(meshes: &mut [Mesh], used: &[u16]) -> (usize, usize, usize) {
+    const MARGIN: f32 = 0.006;
+    const R: f32 = 0.04;
+    let skin = SkinGrid::new(meshes, used);
+    if skin.triangles.is_empty() {
+        return (0, 0, 0);
+    }
+    let kratos = |m: &Mesh| used.get(m.material as usize).copied().unwrap_or(u16::MAX);
+    let before = cloak_inside(meshes, used, &skin, 0.001);
+    let mut moved = vec![Vec::new(); meshes.len()];
+    let (mut seen, mut stamp) = (Vec::new(), 0);
+    for _ in 0..3 {
+        // where the cloak is inside or too near the skin, and the push that takes it out to the margin
+        let mut pushes: Vec<([f32; 3], [f32; 3], f32)> = Vec::new();
+        for m in meshes.iter().filter(|m| kratos(m) == CLOAK) {
+            for v in m.vertices.iter().filter(|v| v.position[1] > CLOAK_FROM) {
+                if let Some((s, n)) = skin.outside(v.position, 0.05, &mut seen, &mut stamp) {
+                    if s < MARGIN {
+                        let by = MARGIN - s;
+                        pushes.push((v.position, [n[0] * by, n[1] * by, n[2] * by], by));
+                    }
+                }
+            }
+        }
+        if pushes.is_empty() {
+            break;
+        }
+        let cell = |p: [f32; 3]| ((p[0] / R).floor() as i32, (p[1] / R).floor() as i32, (p[2] / R).floor() as i32);
+        let mut grid: std::collections::HashMap<(i32, i32, i32), Vec<usize>> = Default::default();
+        for (i, p) in pushes.iter().enumerate() {
+            grid.entry(cell(p.0)).or_default().push(i);
+        }
+        for (k, m) in meshes.iter_mut().enumerate() {
+            if ![CLOAK, FUR].contains(&kratos(m)) {
+                continue;
+            }
+            for (i, v) in m.vertices.iter_mut().enumerate() {
+                let c = cell(v.position);
+                let mut best = (0.0f32, [0.0f32; 3]);
+                for dx in -1..=1 {
+                    for dy in -1..=1 {
+                        for dz in -1..=1 {
+                            for &j in grid.get(&(c.0 + dx, c.1 + dy, c.2 + dz)).into_iter().flatten() {
+                                let (at, push, by) = pushes[j];
+                                let d2 = (0..3).map(|a| (v.position[a] - at[a]).powi(2)).sum::<f32>();
+                                let kern = (1.0 - d2 / (R * R)).max(0.0).powi(2);
+                                if kern * by > best.0 {
+                                    best = (kern * by, [push[0] * kern, push[1] * kern, push[2] * kern]);
+                                }
+                            }
+                        }
+                    }
+                }
+                if best.0 > 1e-4 {
+                    for a in 0..3 {
+                        v.position[a] += best.1[a];
+                    }
+                    moved[k].push(i);
+                }
+            }
+        }
+    }
+    let after = cloak_inside(meshes, used, &skin, 0.001);
+    let moved = moved.iter_mut().map(|l| {
+        l.sort_unstable();
+        l.dedup();
+        l.len()
+    });
+    (before, after, moved.sum())
+}
+
 /// Fit Kratos's proportions to the character's skeleton. Elden Ring draws the character's face under every helmet
 /// (the face scale on helmets is 1.0 everywhere and changes nothing), and Kratos's torso and neck are longer: with his
 /// hips on the character's, his shoulders sat 5 cm above its shoulder joints (so his arms turned about points below his
@@ -377,6 +605,11 @@ pub fn fit_proportions(meshes: &mut [Mesh], used: &[u16], skeleton: &[Node], sho
 /// One mesh per material (split only where a mesh would pass 65,535 vertices), each with its own mesh node after the
 /// skeleton's `bones` nodes: Kratos's 62 draws become about two dozen meshes, nearer the game's own armour.
 fn merge_by_material(nodes: Vec<Node>, meshes: Vec<Mesh>, bones: usize) -> (Vec<Node>, Vec<Mesh>) {
+    merge_by_material_named(nodes, meshes, bones, "kratos_mesh")
+}
+
+/// [`merge_by_material`] with the mesh nodes named `<prefix>_<k>`.
+pub(crate) fn merge_by_material_named(nodes: Vec<Node>, meshes: Vec<Mesh>, bones: usize, prefix: &str) -> (Vec<Node>, Vec<Mesh>) {
     let mut nodes: Vec<Node> = nodes.into_iter().take(bones).collect();
     let mut merged: Vec<Mesh> = Vec::new();
     let mut order: Vec<u32> = meshes.iter().map(|m| m.material).collect();
@@ -398,7 +631,7 @@ fn merge_by_material(nodes: Vec<Node>, meshes: Vec<Mesh>, bones: usize) -> (Vec<
     }
     for (k, m) in merged.iter_mut().enumerate() {
         m.node = nodes.len() as u32;
-        nodes.push(Node { name: format!("kratos_mesh_{k}"), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 });
+        nodes.push(Node { name: format!("{prefix}_{k}"), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 });
     }
     (nodes, merged)
 }
@@ -442,14 +675,87 @@ fn cube(at: [f32; 3], size: f32) -> (Vec<Node>, Vec<Mesh>) {
     (nodes, vec![Mesh { material: 0, node: 1, vertices, indices }])
 }
 
-fn tex_path(stem: &str) -> String {
-    format!("N:\\GR\\data\\INTERROOT_win64\\parts\\kratos\\tex\\{stem}.tif")
+/// The folder the body's texture paths name (the game looks a texture up by its file stem in the part's TPF).
+const KRATOS_TEX_DIR: &str = "N:\\GR\\data\\INTERROOT_win64\\parts\\kratos\\tex";
+
+fn tex_path_in(dir: &str, stem: &str) -> String {
+    format!("{dir}\\{stem}.tif")
 }
 
 /// The part's material for colour map `albedo` and normal map `normal` (texture stems in its TPF), with the shared flat
 /// metal map.
 fn material_with(id: u16, name: &str, albedo: &str, normal: &str) -> Material {
-    Material { name: name.into(), mtd: erpart::MATERIAL_MTD.into(), textures: vec![(erpart::ALBEDO.into(), tex_path(albedo)), (erpart::METALLIC.into(), tex_path(&format!("kratos_{id}_m"))), (erpart::NORMAL.into(), tex_path(normal))] }
+    material_in(KRATOS_TEX_DIR, name, albedo, &format!("kratos_{id}_m"), normal)
+}
+
+fn material_in(dir: &str, name: &str, albedo: &str, metallic: &str, normal: &str) -> Material {
+    Material { name: name.into(), mtd: erpart::MATERIAL_MTD.into(), textures: vec![(erpart::ALBEDO.into(), tex_path_in(dir, albedo)), (erpart::METALLIC.into(), tex_path_in(dir, metallic)), (erpart::NORMAL.into(), tex_path_in(dir, normal))] }
+}
+
+/// How a part names its textures and materials: a material's colour and surface maps are `<tex>_m<n>_a` and
+/// `<tex>_m<n>_n`, the shared flat metal and normal maps `<tex>_m` and `<tex>_n`, all under the folder `dir`; the
+/// material itself `<material>_m<n>`. Texture names must differ between parts the game shows together.
+pub(crate) struct Naming<'a> {
+    pub tex: &'a str,
+    pub material: &'a str,
+    pub dir: &'a str,
+}
+
+/// How many of a part's materials got their colour map, their surface, and a cut-out colour map (strands).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct LookCounts {
+    pub coloured: usize,
+    pub surfaced: usize,
+    pub strands: usize,
+}
+
+/// One material per Ragnarök material in `used` (in that order, so a mesh's material index is its position there),
+/// each with its colour map from `looks` (BC1 sRGB with mips; a neutral grey when there is none; a cut-out map and
+/// Elden Ring's cut-out material for strands) and its surface (else the shared flat normal map), and the textures for
+/// the part's TPF, the shared flat metal and normal maps last.
+pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>) -> (Vec<Material>, Vec<(String, Vec<u8>, u8)>, LookCounts) {
+    let mut textures: Vec<(String, Vec<u8>, u8)> = Vec::new();
+    let mut mats = Vec::new();
+    let mut counts = LookCounts::default();
+    let tex = naming.tex;
+    for m in used {
+        let look = looks.get(m);
+        let cut = look.is_some_and(|l| l.cut_out);
+        let stem = format!("{tex}_m{m}_a");
+        let dds = match look.and_then(|l| l.colour.as_ref()) {
+            Some(img) if cut => {
+                counts.strands += 1;
+                erpart::dds_bc1_cut_mips(img.w, img.h, &img.rgba)
+            }
+            Some(img) => {
+                counts.coloured += 1;
+                erpart::dds_bc1_mips(img.w, img.h, &img.rgba, true)
+            }
+            None => erpart::dds_bc1(4, 4, &erpart::bc1_solid(150, 140, 130)),
+        };
+        textures.push((stem.clone(), dds, 0));
+        let normal = match look.and_then(|l| l.surface.as_ref()) {
+            Some(img) => {
+                counts.surfaced += 1;
+                let n = format!("{tex}_m{m}_n");
+                textures.push((n.clone(), erpart::dds_bc1_mips(img.w, img.h, &img.rgba, false), 0));
+                n
+            }
+            None => format!("{tex}_n"),
+        };
+        let mut mat = material_in(naming.dir, &format!("{}_m{m}", naming.material), &stem, &format!("{tex}_m"), &normal);
+        if cut {
+            mat.mtd = CUT_OUT_MTD.into();
+            for (t, name) in mat.textures.iter_mut().zip(CUT_OUT_SAMPLERS) {
+                t.0 = name.into();
+            }
+        }
+        mats.push(mat);
+    }
+    let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
+    textures.push((format!("{tex}_m"), solid([0, 160, 0]), 0));
+    textures.push((format!("{tex}_n"), solid([128, 128, 255]), 0));
+    (mats, textures, counts)
 }
 
 fn material(id: u16) -> Material {
@@ -522,48 +828,12 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
         }
         let n = transfer_cloth_weights(&mut meshes, &used, skeleton);
         note.push_str(&format!("{n} cloth vertices follow the body under them; "));
+        let (before, after, moved) = push_cloak_out(&mut meshes, &used);
+        note.push_str(&format!("cloak inside the skin at rest: {before} vertices, {after} after pushing it out ({moved} cloak and fur vertices moved); "));
     }
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
-    let mut textures: Vec<(String, Vec<u8>, u8)> = Vec::new();
-    let mut mats = Vec::new();
-    let (mut coloured, mut surfaced, mut strands) = (0, 0, 0);
-    for m in &used {
-        let look = looks.get(m);
-        let cut = look.is_some_and(|l| l.cut_out);
-        let stem = format!("kratos_{MODEL_ID}_m{m}_a");
-        let dds = match look.and_then(|l| l.colour.as_ref()) {
-            Some(img) if cut => {
-                strands += 1;
-                erpart::dds_bc1_cut_mips(img.w, img.h, &img.rgba)
-            }
-            Some(img) => {
-                coloured += 1;
-                erpart::dds_bc1_mips(img.w, img.h, &img.rgba, true)
-            }
-            None => erpart::dds_bc1(4, 4, &erpart::bc1_solid(150, 140, 130)),
-        };
-        textures.push((stem.clone(), dds, 0));
-        let normal = match look.and_then(|l| l.surface.as_ref()) {
-            Some(img) => {
-                surfaced += 1;
-                let n = format!("kratos_{MODEL_ID}_m{m}_n");
-                textures.push((n.clone(), erpart::dds_bc1_mips(img.w, img.h, &img.rgba, false), 0));
-                n
-            }
-            None => format!("kratos_{MODEL_ID}_n"),
-        };
-        let mut mat = material_with(MODEL_ID, &format!("kratos_m{m}"), &stem, &normal);
-        if cut {
-            mat.mtd = CUT_OUT_MTD.into();
-            for (t, name) in mat.textures.iter_mut().zip(CUT_OUT_SAMPLERS) {
-                t.0 = name.into();
-            }
-        }
-        mats.push(mat);
-    }
-    let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
-    textures.push((format!("kratos_{MODEL_ID}_m"), solid([0, 160, 0]), 0));
-    textures.push((format!("kratos_{MODEL_ID}_n"), solid([128, 128, 255]), 0));
+    let tex = format!("kratos_{MODEL_ID}");
+    let (mats, textures, LookCounts { coloured, surfaced, strands }) = look_materials(&Naming { tex: &tex, material: "kratos", dir: KRATOS_TEX_DIR }, &used, looks);
     let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures));
     note.push_str(&format!("body {} meshes ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {strands} of strands cut out, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
     let (nodes, meshes) = empty_piece();
@@ -606,6 +876,34 @@ mod tests {
     }
 
     #[test]
+    fn the_cloak_is_pushed_out_of_the_skin_and_the_fur_on_it_follows() {
+        let v = |p: [f32; 3]| Vertex { position: p, normal: [0.0, 0.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0], bones: [0; 4], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[0.0; 2]; 2] };
+        // a 20 cm square of skin facing +z at shoulder height
+        let skin = Mesh { material: 0, node: 0, vertices: vec![v([-0.1, 1.3, 0.0]), v([0.1, 1.3, 0.0]), v([0.1, 1.5, 0.0]), v([-0.1, 1.5, 0.0])], indices: vec![0, 1, 2, 0, 2, 3] };
+        // cloak: 5 mm inside the skin, 3 cm in front of it, 10 cm to the side and inside, and below the shoulders
+        let cloak = Mesh { material: 1, node: 0, vertices: vec![v([0.0, 1.4, -0.005]), v([0.05, 1.45, 0.03]), v([0.3, 1.4, -0.005]), v([0.0, 0.5, -0.005])], indices: vec![0, 1, 2] };
+        // fur 1 cm from the cloak vertex inside the skin, and fur far from it
+        let fur = Mesh { material: 2, node: 0, vertices: vec![v([0.01, 1.4, 0.0]), v([0.0, 1.0, 0.0])], indices: vec![0, 1, 0] };
+        let mut meshes = vec![skin, cloak, fur];
+        let (before, after, moved) = push_cloak_out(&mut meshes, &[72, 75, 29]);
+        assert_eq!((before, after), (1, 0));
+        let c = &meshes[1].vertices;
+        // out to the 6 mm margin along the skin's normal, nothing else moves sideways
+        assert!((c[0].position[2] - 0.006).abs() < 1e-5, "{:?}", c[0].position);
+        assert_eq!(&c[0].position[..2], &[0.0, 1.4]);
+        // already clear of the skin, beyond the skin's reach, and below the shoulders: left alone
+        assert_eq!(c[1].position, [0.05, 1.45, 0.03]);
+        assert_eq!(c[2].position, [0.3, 1.4, -0.005]);
+        assert_eq!(c[3].position, [0.0, 0.5, -0.005]);
+        // the fur about 1 cm away moves by the falloff, (1 - (d/4 cm)^2)^2 of the 11 mm push; the far fur stays
+        let f = &meshes[2].vertices;
+        let d2: f32 = 0.01 * 0.01 + 0.005 * 0.005;
+        assert!((f[0].position[2] - 0.011 * (1.0 - d2 / 0.0016).powi(2)).abs() < 1e-5, "{:?}", f[0].position);
+        assert_eq!(f[1].position, [0.0, 1.0, 0.0]);
+        assert_eq!(moved, 2);
+    }
+
+    #[test]
     fn kratos_fits_the_characters_proportions_bone_by_bone() {
         let node = |name: &str, parent: i16, t: [f32; 3]| Node { name: name.into(), parent, t, r: [0.0; 3], s: [1.0; 3], flags: 8 };
         // hips 0.97, Spine2 1.24, shoulders 1.391, Neck 1.453, Head 1.557, eyes 1.617 and 7.6 cm forward
@@ -641,6 +939,27 @@ mod tests {
     }
 
     #[test]
+    fn a_parts_materials_and_textures_take_its_own_names() {
+        let mut looks = std::collections::BTreeMap::new();
+        looks.insert(3u16, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: 4, h: 4, rgba: vec![200; 64], format: crate::dds::Format::Bc1 }), surface: None, cut_out: false });
+        let dir = "N:\\GR\\data\\INTERROOT_win64\\parts\\Weapon\\WP_A_9710\\tex";
+        let (mats, tex, counts) = look_materials(&Naming { tex: "wp_a_9710", material: "WP_A_9710", dir }, &[3, 5], &looks);
+        assert_eq!(mats.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["WP_A_9710_m3", "WP_A_9710_m5"]);
+        assert_eq!(mats[0].textures[0].1, format!("{dir}\\wp_a_9710_m3_a.tif"));
+        assert_eq!(mats[1].textures[2].1, format!("{dir}\\wp_a_9710_n.tif"));
+        assert_eq!(tex.iter().map(|t| t.0.as_str()).collect::<Vec<_>>(), ["wp_a_9710_m3_a", "wp_a_9710_m5_a", "wp_a_9710_m", "wp_a_9710_n"]);
+        assert_eq!(counts, LookCounts { coloured: 1, surfaced: 0, strands: 0 });
+        // one draw placed by its caller, tangents from its UVs
+        let v = crate::kratos::Vertices { position: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], normal: vec![], uv: [vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], vec![]], influences: vec![], triangles: vec![[0, 1, 2]] };
+        let m = draw_mesh(&v, 1, 7, |_, p, n| ([p[0] * 2.0, p[1], p[2]], n, [0; 4], [1.0, 0.0, 0.0, 0.0]));
+        assert_eq!((m.material, m.node, m.indices.clone()), (1, 7, vec![0, 1, 2]));
+        assert_eq!(m.vertices[1].position, [2.0, 0.0, 0.0]);
+        // no normal stored: +Y; the tangent along U (+X) made square to it
+        assert_eq!(m.vertices[0].normal, [0.0, 1.0, 0.0]);
+        assert!((m.vertices[0].tangent[0] - 1.0).abs() < 1e-6, "{:?}", m.vertices[0].tangent);
+    }
+
+    #[test]
     fn draws_merge_into_one_mesh_per_material_with_their_own_nodes() {
         let v = |x: f32| Vertex { position: [x, 0.0, 0.0], normal: [0.0, 0.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0], bones: [0; 4], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[0.0; 2]; 2] };
         let mesh = |mat: u32, node: u32, n: usize| Mesh { material: mat, node, vertices: (0..n).map(|i| v(i as f32)).collect(), indices: vec![0, 1, 2] };
@@ -656,6 +975,9 @@ mod tests {
         assert_eq!(nodes.len(), 3);
         assert_eq!((meshes[0].node, meshes[1].node), (1, 2));
         assert!(nodes[1..].iter().all(|n| n.flags == 4));
+        assert_eq!(nodes[2].name, "kratos_mesh_1");
+        let (nodes, _) = merge_by_material_named(nodes, meshes, 1, "WP_A_9710_mesh");
+        assert_eq!(nodes[1].name, "WP_A_9710_mesh_0");
     }
 
     #[test]

@@ -515,6 +515,101 @@ pub fn references(b: &[u8]) -> Vec<([u8; 16], String)> {
         .collect()
 }
 
+/// The bytes of the chunk `name` with `id` in a WAD (`buf` holds its decompressed start, `es` its table), when they
+/// were read; the first of that name, as the body's lookups take it.
+pub fn chunk<'a>(buf: &'a [u8], es: &[crate::wtoc::Entry], name: &str, id: u16) -> Option<&'a [u8]> {
+    chunk_at(es, name, id).and_then(|i| entry_bytes(buf, &es[i]))
+}
+
+/// Where in the table the chunk `name` with `id` is: the first spelled exactly so, else the first that differs only
+/// in case (the skeleton is `goProtokratosShield00` beside `MESH_kratosshield00_0`).
+pub fn chunk_at(es: &[crate::wtoc::Entry], name: &str, id: u16) -> Option<usize> {
+    es.iter().position(|e| e.name == name && e.id == id).or_else(|| es.iter().position(|e| e.id == id && e.name.eq_ignore_ascii_case(name)))
+}
+
+/// A chunk's bytes in the decompressed WAD, when they were read.
+pub fn entry_bytes<'a>(buf: &'a [u8], e: &crate::wtoc::Entry) -> Option<&'a [u8]> {
+    buf.get(e.file_off as usize..(e.file_off as usize).checked_add(e.length as usize)?)
+}
+
+/// A model's chunks in its WAD, as the body's are found for `heroa00` (every model's sit in the same order: GPU
+/// chunk, `MESH_<m>_0`, its material table, `MG_<m>_0`, `MDL_<m>`).
+#[derive(Clone, Debug)]
+pub struct ModelChunks<'a> {
+    pub model: String,
+    /// `MESH_<m>_0` (id 1): the draws ([`mesh_records`]).
+    pub mesh: &'a [u8],
+    /// The material table: the id-60 chunk right after the mesh ([`material_names`]). None when the mesh has a
+    /// single material (then a zero-length `MAT_` marker sits there instead).
+    pub materials: Option<&'a [u8]>,
+    /// `MG_<m>_0` (id 1): the parts and their levels of detail ([`mg_parts`]).
+    pub mg: &'a [u8],
+    /// `MG_<m>_0_gpu` (id 29): the resident (coarsest) draws' vertex data.
+    pub gpu: &'a [u8],
+    /// `goProto<m>` (id 1, any case): the skeleton ([`Skeleton::parse`]).
+    pub proto: Option<&'a [u8]>,
+}
+
+/// The chunks of `model` (e.g. `axe00`) in the WAD, or which one is missing from the bytes read.
+pub fn model_chunks<'a>(buf: &'a [u8], es: &[crate::wtoc::Entry], model: &str) -> Result<ModelChunks<'a>, String> {
+    let need = |name: String, id: u16| chunk(buf, es, &name, id).ok_or(format!("{name} (id {id}) is not in the bytes read"));
+    let mesh_name = format!("MESH_{model}_0");
+    let mesh = need(mesh_name.clone(), 1)?;
+    let materials = chunk_at(es, &mesh_name, 1).and_then(|i| es.get(i + 1)).filter(|e| e.id == 60 && e.name.starts_with("MAT_")).and_then(|e| entry_bytes(buf, e));
+    Ok(ModelChunks {
+        model: model.to_string(),
+        mesh,
+        materials,
+        mg: need(format!("MG_{model}_0"), 1)?,
+        gpu: need(format!("MG_{model}_0_gpu"), 29)?,
+        proto: chunk(buf, es, &format!("goProto{model}"), 1),
+    })
+}
+
+/// The records of the most detailed level of each of `parts` (every part when None), in part order.
+pub fn level0_records(mg: &[u8], parts: Option<&[u16]>) -> Vec<usize> {
+    let all = mg_parts(mg);
+    let pick: Vec<usize> = match parts {
+        Some(list) => list.iter().map(|p| *p as usize).collect(),
+        None => (0..all.len()).collect(),
+    };
+    pick.iter().filter_map(|p| all.get(*p)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect()
+}
+
+/// A material's own reference list (its textures, parent materials and shaders, [`references`]): the id-60 chunk
+/// right after the first id-1 chunk of that name (the first copy always carries it). Empty when it is not there.
+pub fn material_refs(buf: &[u8], es: &[crate::wtoc::Entry], name: &str) -> Vec<([u8; 16], String)> {
+    material_refs_chunk(buf, es, name).map(references).unwrap_or_default()
+}
+
+/// The bytes of a material's reference list (see [`material_refs`]).
+pub fn material_refs_chunk<'a>(buf: &'a [u8], es: &[crate::wtoc::Entry], name: &str) -> Option<&'a [u8]> {
+    let at = es.iter().position(|e| e.name == name && e.id == 1)?;
+    es.get(at + 1).filter(|e| e.id == 60).and_then(|e| entry_bytes(buf, e))
+}
+
+/// A part of a model's `MG_` chunk with what [`mg_parts`] leaves out: the joint it is attached to (u16 at +0x00) and
+/// its kind (+0x03: 2 skinned, 0 rigid, as Kratos's eyes and belt items are).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PartInfo {
+    pub joint: u16,
+    pub kind: u8,
+    pub levels: Vec<Level>,
+}
+
+/// Every part of an `MG_` chunk with its joint, kind and levels (the same parts [`mg_parts`] reads).
+pub fn mg_part_info(b: &[u8]) -> Vec<PartInfo> {
+    let levels = mg_parts(b);
+    levels
+        .into_iter()
+        .enumerate()
+        .map_while(|(p, levels)| {
+            let a = u32_at(b, 0x44 + 4 * p)? as usize;
+            Some(PartInfo { joint: u16_at(b, a)?, kind: *b.get(a + 3)?, levels })
+        })
+        .collect()
+}
+
 /// One level of detail of a part: `draws` records of the `MESH_` chunk from `first`, shown up to `distance`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Level {
@@ -1286,6 +1381,40 @@ mod tests {
         assert!((inf[0].1 - 0.4).abs() < 0.01 && (inf[3].1 - 0.3).abs() < 0.01);
     }
 
+    fn entry(name: &str, id: u16, file_off: u64, length: u32) -> crate::wtoc::Entry {
+        crate::wtoc::Entry { id, version: 0, length, name: name.into(), debug_size: 0, temp_size: 0, align: 16, client: 0, server: 0, mem_type: 0, bits: 0, mem_off: 0, file_off, block: 0 }
+    }
+
+    #[test]
+    fn a_models_chunks_are_found_by_name_its_skeleton_in_any_case_and_its_table_after_the_mesh() {
+        let buf: Vec<u8> = (0..200u8).collect();
+        let es = vec![
+            entry("MG_axe00_0_gpu", 29, 0, 10),
+            entry("MESH_axe00_0", 1, 10, 20),
+            entry("MAT_15394922D6E57ABC", 60, 30, 8),
+            entry("MG_axe00_0", 1, 40, 12),
+            entry("goProtoAxe00", 1, 60, 4),
+            entry("MAT_15394922D6E57ABC", 1, 70, 6),
+            entry("TX_gem_blue_base_96B139E57CE66328", 60, 80, 5),
+            entry("beyond", 1, 190, 50),
+        ];
+        let c = model_chunks(&buf, &es, "axe00").unwrap();
+        assert_eq!((c.mesh, c.mg, c.gpu), (&buf[10..30], &buf[40..52], &buf[0..10]));
+        assert_eq!(c.materials, Some(&buf[30..38]));
+        assert_eq!(c.proto, Some(&buf[60..64]));
+        // exact spelling first, then any case
+        assert_eq!(chunk_at(&es, "goprotoaxe00", 1), Some(4));
+        assert_eq!(chunk_at(&es, "goProtoAxe00", 60), None);
+        // a chunk past the bytes read is not there
+        assert_eq!(chunk(&buf, &es, "beyond", 1), None);
+        // a material's references follow its first id-1 chunk
+        assert_eq!(material_refs_chunk(&buf, &es, "MAT_15394922D6E57ABC"), Some(&buf[80..85]));
+        assert_eq!(model_chunks(&buf, &es, "kratosspear00").unwrap_err(), "MESH_kratosspear00_0 (id 1) is not in the bytes read");
+        let no_table = vec![es[0].clone(), es[1].clone(), entry("MAT_0000000000000000", 1, 30, 0), es[3].clone()];
+        let c = model_chunks(&buf, &no_table, "axe00").unwrap();
+        assert!(c.materials.is_none() && c.proto.is_none());
+    }
+
     #[test]
     fn parts_list_their_levels_most_detailed_first() {
         // two parts: one with levels (1 draw from 0, then 1 from 1, then the empty last), one with 2 draws from 2
@@ -1312,6 +1441,15 @@ mod tests {
             b[0x44 + 4 * k..0x48 + 4 * k].copy_from_slice(&at.to_le_bytes());
             b.extend(part(levels));
         }
+        // part 1 attached to joint 457, rigid; part 0 skinned
+        let a1 = u32::from_le_bytes(b[0x48..0x4C].try_into().unwrap()) as usize;
+        b[a1..a1 + 2].copy_from_slice(&457u16.to_le_bytes());
+        let a0 = u32::from_le_bytes(b[0x44..0x48].try_into().unwrap()) as usize;
+        b[a0 + 3] = 2;
+        let info = mg_part_info(&b);
+        assert_eq!(info.iter().map(|p| (p.joint, p.kind, p.levels.len())).collect::<Vec<_>>(), [(0, 2, 3), (457, 0, 2)]);
+        assert_eq!(level0_records(&b, None), vec![0, 2, 3]);
+        assert_eq!(level0_records(&b, Some(&[1, 7])), vec![2, 3]);
         let ps = mg_parts(&b);
         assert_eq!(ps.len(), 2);
         assert_eq!(ps[0][1], Level { draws: 1, distance: 2560.0, first: 1 });

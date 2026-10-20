@@ -1,4 +1,4 @@
-//! Elden Ring armour parts, written from scratch for Kratos's body: the model (FLVER2, version 0x2001A), its textures
+//! Elden Ring armour and weapon parts, written from scratch for Kratos's body and weapons: the model (FLVER2, version 0x2001A), its textures
 //! (a TPF of DDS files), the two in a BND4 container, compressed as DCX with DFLT (zlib). Nothing here comes from
 //! either game; the layouts follow the community's documentation of these formats (SoulsFormatsNEXT, soulstruct and
 //! the FLVER editors' material banks), written as our own code, and were checked field by field against the game's
@@ -61,6 +61,26 @@ pub struct Material {
     pub mtd: String,
     /// (sampler name, texture path; the game looks the path's file stem up in the part's TPF).
     pub textures: Vec<(String, String)>,
+}
+
+/// A hit point ("dummy poly") of a weapon model: where its attacks reach (100 tip, 110 middle, 120 by the hand, 122
+/// pommel, 130 between tip and middle), where weapon buffs and trails run (300 to 301), each a point with a forward and
+/// an up direction. Written as the game's own (SoulsFormats' `FLVER.Dummy`, version 0x2001A): 64 bytes each.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dummy {
+    pub position: [f32; 3],
+    pub forward: [f32; 3],
+    pub upward: [f32; 3],
+    /// The id attacks and effects name it by.
+    pub reference_id: i16,
+    /// The node its position is relative to (a node with flag 2), and the node it follows when animated (-1: none,
+    /// as a rigid sword's are).
+    pub parent_node: i16,
+    pub attach_node: i16,
+    /// Stored A, R, G, B.
+    pub color: [u8; 4],
+    pub flag1: bool,
+    pub use_upward: bool,
 }
 
 struct W {
@@ -318,8 +338,15 @@ pub fn mesh_box(m: &Mesh) -> ([f32; 3], [f32; 3], [f32; 3]) {
     (std::array::from_fn(|k| (hi[k] - lo[k]) / 2.0 + BOX_MARGIN), [0.0; 3], std::array::from_fn(|k| (hi[k] + lo[k]) / 2.0))
 }
 
-/// The FLVER2 model.
+/// The FLVER2 model, without hit points (armour has none).
 pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8> {
+    flver2_with(nodes, materials, meshes, &[])
+}
+
+/// The FLVER2 model with `dummies` (hit points, see [`Dummy`]): their count in the header (+0x14) and their 64-byte
+/// records right after it, before the materials, as the game's own weapons have them. The node a dummy is relative to
+/// should carry flag 2 (it owns dummies). With none, the bytes are those [`flver2`] always wrote.
+pub fn flver2_with(nodes: &[Node], materials: &[Material], meshes: &[Mesh], dummies: &[Dummy]) -> Vec<u8> {
     const LOD_FLAGS: [u32; 6] = [0, 0x0100_0000, 0x0200_0000, 0x8000_0000, 0x8100_0000, 0x8200_0000];
     let mut w = W::new();
     let world = world_matrices(nodes);
@@ -331,7 +358,7 @@ pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8
     w.i32(0x2001A);
     w.reserve("data_offset");
     w.reserve("data_size");
-    w.i32(0); // dummies
+    w.i32(dummies.len() as i32);
     w.i32(materials.len() as i32);
     w.i32(nodes.len() as i32);
     w.i32(meshes.len() as i32);
@@ -360,6 +387,18 @@ pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8
     w.zeros(8);
     debug_assert_eq!(w.pos(), 0x80);
 
+    for d in dummies {
+        w.v3(d.position);
+        w.bytes(&d.color);
+        w.v3(d.forward);
+        w.i16(d.reference_id);
+        w.i16(d.parent_node);
+        w.v3(d.upward);
+        w.i16(d.attach_node);
+        w.u8(d.flag1 as u8);
+        w.u8(d.use_upward as u8);
+        w.zeros(16); // two unknowns (0 in the game's own static weapons) and two zeros
+    }
     for (i, m) in materials.iter().enumerate() {
         w.reserve(format!("mat_name{i}"));
         w.reserve(format!("mat_mtd{i}"));
@@ -1191,6 +1230,69 @@ mod tests {
         let mesh = Mesh { material: 0, node: 1, vertices: vec![v(0.0, 0.0), v(1.0, 0.0), v(0.0, 1.0)], indices: vec![0, 1, 2] };
         let mat = Material { name: "kratos".into(), mtd: MATERIAL_MTD.into(), textures: vec![(ALBEDO.into(), "N:\\kratos_a.tif".into())] };
         (nodes, vec![mat], vec![mesh])
+    }
+
+    /// A model like the body's: a small skeleton, two materials, a mesh skinned to two bones and one with 32-bit
+    /// indices (over 65,535 vertices).
+    fn body_like_sample() -> (Vec<Node>, Vec<Material>, Vec<Mesh>) {
+        let bone = |name: &str, parent: i16, t: [f32; 3], r: [f32; 3]| Node { name: name.into(), parent, t, r, s: [1.0; 3], flags: 8 };
+        let mut nodes = vec![bone("Master", -1, [0.0; 3], [0.0; 3]), bone("Pelvis", 0, [0.0, 0.97, 0.0], [0.1, -0.2, 0.3]), bone("Spine", 1, [0.0, 0.2, 0.01], [0.0, 0.0, -0.1])];
+        for k in 0..2 {
+            nodes.push(Node { name: format!("kratos_mesh_{k}"), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 4 });
+        }
+        let mat = |n: &str| Material { name: n.into(), mtd: MATERIAL_MTD.into(), textures: vec![(ALBEDO.into(), format!("N:\\x\\{n}_a.tif")), (METALLIC.into(), "N:\\x\\m.tif".into()), (NORMAL.into(), format!("N:\\x\\{n}_n.tif"))] };
+        let v = |k: u32| {
+            let f = k as f32;
+            Vertex { position: [(f * 0.37).sin(), 1.0 + (f * 0.11).cos(), (f * 0.05).sin() * 0.2], normal: [0.0, (f * 0.3).cos(), (f * 0.3).sin()], tangent: [1.0, 0.0, 0.0, if k % 2 == 0 { 1.0 } else { -1.0 }], bones: [1, 2, 0, 0], weights: [0.75, 0.25, 0.0, 0.0], color: [255; 4], uv: [[f * 0.01, -f * 0.02], [0.5, 0.25]] }
+        };
+        let small = Mesh { material: 1, node: 3, vertices: (0..300).map(v).collect(), indices: (0..297).flat_map(|k| [k, k + 1, k + 2]).collect() };
+        let big = Mesh { material: 0, node: 4, vertices: (0..66_000).map(v).collect(), indices: (0..65_997).step_by(3).flat_map(|k| [k, k + 2, k + 1]).collect() };
+        (nodes, vec![mat("kratos_m0"), mat("kratos_m1")], vec![small, big])
+    }
+
+    fn fnv64(b: &[u8]) -> u64 {
+        b.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, x| (h ^ *x as u64).wrapping_mul(0x0100_0000_01b3))
+    }
+
+    #[test]
+    fn the_body_writers_output_is_unchanged() {
+        // fingerprints of the writer's output before hit points were added: the body part must stay byte for byte
+        let (nodes, mats, meshes) = body_like_sample();
+        let f = flver2(&nodes, &mats, &meshes);
+        let (n1, m1, s1) = one_triangle();
+        let g = flver2(&n1, &m1, &s1);
+        assert_eq!((f.len(), fnv64(&f)), (4_249_888, 0x5e33_d74a_adf8_ef93));
+        assert_eq!((g.len(), fnv64(&g)), (1632, 0x4cc5_9876_8d2b_6c63));
+        assert_eq!(flver2_with(&nodes, &mats, &meshes, &[]), f);
+    }
+
+    #[test]
+    fn hit_points_sit_after_the_header_with_their_count_and_push_the_tables_back() {
+        let (mut nodes, mats, meshes) = one_triangle();
+        nodes[0].flags = 8 | 2;
+        let dummy = |id: i16, y: f32| Dummy { position: [0.01, y, -0.02], forward: [0.0, -1.0, 0.0], upward: [0.0, 0.0, -1.0], reference_id: id, parent_node: 0, attach_node: -1, color: [255; 4], flag1: false, use_upward: true };
+        let f = flver2_with(&nodes, &mats, &meshes, &[dummy(100, -0.8), dummy(120, -0.1)]);
+        let plain = flver2(&nodes, &mats, &meshes);
+        assert_eq!(f.len(), plain.len() + 2 * 64);
+        assert_eq!(i32::from_le_bytes(f[0x14..0x18].try_into().unwrap()), 2);
+        let f32_at = |o: usize| f32::from_le_bytes(f[o..o + 4].try_into().unwrap());
+        let i16_at = |o: usize| i16::from_le_bytes(f[o..o + 2].try_into().unwrap());
+        // the second record: position, colour, forward, id, parent, up, attach, flags, then 16 zero bytes
+        let d = 0x80 + 64;
+        assert_eq!([f32_at(d), f32_at(d + 4), f32_at(d + 8)], [0.01, -0.1, -0.02]);
+        assert_eq!(&f[d + 12..d + 16], &[255; 4]);
+        assert_eq!([f32_at(d + 16), f32_at(d + 20), f32_at(d + 24)], [0.0, -1.0, 0.0]);
+        assert_eq!((i16_at(d + 28), i16_at(d + 30)), (120, 0));
+        assert_eq!([f32_at(d + 32), f32_at(d + 36), f32_at(d + 40)], [0.0, 0.0, -1.0]);
+        assert_eq!((i16_at(d + 44), f[d + 46], f[d + 47]), (-1, 0, 1));
+        assert!(f[d + 48..d + 64].iter().all(|b| *b == 0));
+        assert_eq!(i16_at(0x80 + 28), 100);
+        // the material table follows the dummies, and its name offset still finds its name
+        let name_at = u32::from_le_bytes(f[0x100..0x104].try_into().unwrap()) as usize;
+        let name: Vec<u16> = f[name_at..name_at + 12].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        assert_eq!(String::from_utf16_lossy(&name), "kratos");
+        let data = u32::from_le_bytes(f[12..16].try_into().unwrap()) as usize;
+        assert_eq!(data + u32::from_le_bytes(f[16..20].try_into().unwrap()) as usize, f.len());
     }
 
     #[test]

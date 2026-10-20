@@ -236,11 +236,20 @@ pub struct Look {
 /// in the line. `buf` holds the start of r_heroa00.wad (its chunk table `es`), `wad_dir` the folder with the texture
 /// packs.
 pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32) -> (BTreeMap<u16, Look>, String) {
+    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, max_side, max_surface, &[])
+}
+
+/// [`outfit_looks`] for any model: the materials are indices into the table after its `mesh_chunk` (`MESH_<m>_0`).
+/// Textures whose names hold one of `skip` (lower case, e.g. a weapon's frost or gold variants, see
+/// [`crate::weapon_part::PartRules::reject`]) are passed over when a map is chosen, so a material layered with a
+/// variant's maps draws with its own.
+#[allow(clippy::too_many_arguments)]
+pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32, skip: &[&str]) -> (BTreeMap<u16, Look>, String) {
     let mut out = BTreeMap::new();
     let mut note = String::new();
     let bytes = |e: &Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
-    let Some(mesh_at) = es.iter().position(|e| e.name == "MESH_heroa00_0" && e.id == 1) else { return (out, "no MESH_heroa00_0".into()) };
-    let Some(table) = es.get(mesh_at + 1).filter(|e| e.id == 60).and_then(bytes) else { return (out, "no material table after MESH_heroa00_0".into()) };
+    let Some(mesh_at) = es.iter().position(|e| e.name == mesh_chunk && e.id == 1) else { return (out, format!("no {mesh_chunk}")) };
+    let Some(table) = es.get(mesh_at + 1).filter(|e| e.id == 60).and_then(bytes) else { return (out, format!("no material table after {mesh_chunk}")) };
     let names = crate::kratos::material_names(table);
     let mut packs = texture_packs(wad_dir, false);
     let mut all_read = false;
@@ -249,11 +258,13 @@ pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16],
         let Some(name) = names.get(m as usize) else { continue };
         let at = es.iter().position(|e| &e.name == name && e.id == 1);
         let refs = at.and_then(|a| es.get(a + 1)).filter(|e| e.id == 60).and_then(bytes).map(crate::kratos::references).unwrap_or_default();
-        let ref_names: Vec<String> = refs.iter().map(|r| r.1.clone()).collect();
+        let all_names: Vec<String> = refs.iter().map(|r| r.1.clone()).collect();
+        // the names maps are chosen from: skipped ones blanked, so each keeps its place beside its id
+        let ref_names: Vec<String> = all_names.iter().map(|r| if skip.iter().any(|k| r.to_ascii_lowercase().contains(k)) { String::new() } else { r.clone() }).collect();
         // the n-th reference of that name: names cut at 60 characters can repeat, the ids tell them apart
         let mut get = |tex: &String| -> anyhow::Result<Image> {
             let nth = ref_names.iter().take_while(|r| !std::ptr::eq(*r, tex)).filter(|r| *r == tex).count();
-            let id_key = refs.iter().filter(|r| &r.1 == tex).nth(nth).map(|r| u64::from_le_bytes(r.0[8..16].try_into().unwrap())).unwrap_or(0);
+            let id_key = refs.iter().filter(|r| &r.1 == tex).nth(nth).map(|r| r.0[8..16].try_into().map(u64::from_le_bytes).unwrap_or(0)).unwrap_or(0);
             let mut decoded = decode_texture(tex, id_key, buf, es, &packs);
             if decoded.is_err() && !all_read {
                 // not in the shared pack: read the others' tables once
@@ -265,7 +276,7 @@ pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16],
         };
         let mut look = Look::default();
         if cut_out.contains(&m) {
-            let stems: Vec<&str> = ref_names.iter().filter(|r| r.starts_with("TX_")).map(|r| stem(r)).collect();
+            let stems: Vec<&str> = all_names.iter().filter(|r| r.starts_with("TX_")).map(|r| stem(r)).collect();
             note.push_str(&format!("{m} (cut-out; textures {stems:?}): "));
             let colour = colour_map(&ref_names).and_then(|t| get(t).ok().map(|img| (img, stem(t).contains("uv2"))));
             let coverage = match coverage_map(&ref_names) {
@@ -383,6 +394,35 @@ mod tests {
         assert_eq!(best, Some(1), "{line}");
         assert!(line.contains("75 % empty, 25 % solid"), "{line}");
         assert_eq!(best_coverage(&seen[2..]).0, None);
+    }
+
+    #[test]
+    fn any_models_table_is_read_and_skipped_textures_are_passed_over() {
+        // a mesh, its table of one material, the material and its references: an ice layer's map before its own
+        let list = |names: &[&str]| {
+            let mut b = vec![0u8; 4 + 76 * names.len()];
+            b[0..4].copy_from_slice(&(names.len() as u32).to_le_bytes());
+            for (i, n) in names.iter().enumerate() {
+                let end = (8 + 76 * i + 16 + n.len()).min(b.len());
+                b[8 + 76 * i + 16..end].copy_from_slice(&n.as_bytes()[..end - (8 + 76 * i + 16)]);
+            }
+            b
+        };
+        let chunks = [("MESH_axe00_0", 1u16, vec![0u8; 16]), ("MAT_15394922D6E57ABC", 60, list(&["MAT_15394922D6E57ABC"])), ("MAT_15394922D6E57ABC", 1, vec![0; 8]), ("TX_axe02_base_ice_gen_0d_0123456789ABCDEF", 60, list(&["TX_axe02_base_ice_gen_0d_0123456789ABCDEF", "TX_axe02_base_metal_gen_0d_0123456789ABCDEF"]))];
+        let (mut buf, mut es) = (Vec::new(), Vec::new());
+        for (name, id, b) in chunks {
+            es.push(Entry { id, version: 0, length: b.len() as u32, name: name.into(), debug_size: 0, temp_size: 0, align: 16, client: 0, server: 0, mem_type: 0, bits: 0, mem_off: 0, file_off: buf.len() as u64, block: 0 });
+            buf.extend(b);
+        }
+        let dir = std::env::temp_dir().join(format!("gowring-looks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // no texture pack and no texture in the WAD: the note names the map that was chosen
+        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &[]);
+        assert!(plain.contains("0: axe02_base_ice_gen_0d failed"), "{plain}");
+        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &["ice"]);
+        assert!(skipped.contains("0: axe02_base_metal_gen_0d failed"), "{skipped}");
+        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], 64, 64, &[]).1, "no MESH_kratosspear00_0");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

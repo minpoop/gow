@@ -115,6 +115,71 @@ impl Toc {
     }
 }
 
+/// Resources by hash from the level-of-detail packs beside a WAD: `root.lodpack` (where all of Kratos's are) first,
+/// and for a hash it lacks the other `*.lodpack` files in its folder, whose tables are read once, the first time one
+/// is needed (a weapon's detailed draws may live in the pack of the area that shows it first). Each resource is read
+/// once and kept. The body part keeps reading `root.lodpack` alone through [`Toc`].
+pub struct LodPacks {
+    dir: std::path::PathBuf,
+    packs: Vec<(std::path::PathBuf, Toc)>,
+    others_read: bool,
+    cache: HashMap<u64, (usize, Vec<u8>)>,
+    /// What reading the other packs' tables found: how many, and those that did not read.
+    pub note: String,
+}
+
+impl LodPacks {
+    /// The packs, starting from `root` (`root.lodpack`), whose table must read.
+    pub fn open(root: &Path) -> Result<LodPacks> {
+        let toc = Toc::read_from_pack(root)?;
+        let dir = root.parent().map(Path::to_path_buf).unwrap_or_default();
+        Ok(LodPacks { dir, packs: vec![(root.to_path_buf(), toc)], others_read: false, cache: HashMap::new(), note: String::new() })
+    }
+
+    /// The bytes of the resource `hash`, from the first pack that lists it (None when none does).
+    pub fn get(&mut self, hash: u64) -> Result<Option<&[u8]>> {
+        if !self.cache.contains_key(&hash) {
+            let mut at = self.packs.iter().position(|(_, t)| t.find(hash).is_some());
+            if at.is_none() && !self.others_read {
+                self.read_others();
+                at = self.packs.iter().position(|(_, t)| t.find(hash).is_some());
+            }
+            let Some(k) = at else { return Ok(None) };
+            let (path, toc) = &self.packs[k];
+            let mut f = std::fs::File::open(path).with_context(|| path.display().to_string())?;
+            let Some(bytes) = toc.read(&mut f, hash)? else { return Ok(None) };
+            self.cache.insert(hash, (k, bytes));
+        }
+        Ok(self.cache.get(&hash).map(|(_, b)| b.as_slice()))
+    }
+
+    /// The file name of the pack a resource already read came from.
+    pub fn pack_of(&self, hash: u64) -> Option<String> {
+        let (k, _) = self.cache.get(&hash)?;
+        self.packs.get(*k).and_then(|(p, _)| p.file_name()).map(|n| n.to_string_lossy().into_owned())
+    }
+
+    /// How many packs' tables are read so far.
+    pub fn packs_read(&self) -> usize {
+        self.packs.len()
+    }
+
+    fn read_others(&mut self) {
+        self.others_read = true;
+        let first = self.packs[0].0.clone();
+        let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(&self.dir).map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("lodpack")) && *p != first).collect()).unwrap_or_default();
+        names.sort();
+        let mut failed = Vec::new();
+        for p in names {
+            match Toc::read_from_pack(&p) {
+                Ok(t) => self.packs.push((p, t)),
+                Err(_) => failed.push(p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()),
+            }
+        }
+        self.note = format!("{} other pack table(s) read{}", self.packs.len() - 1, if failed.is_empty() { String::new() } else { format!(", {} did not read ({})", failed.len(), failed.join(", ")) });
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -177,6 +242,28 @@ pub(crate) mod tests {
         // a file that does not start with a table is refused
         std::fs::write(&path, b"not a pack at all, just words").unwrap();
         assert!(Toc::read_from_pack(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_hash_root_lacks_is_found_in_the_other_packs_whose_tables_read_once() {
+        let dir = std::env::temp_dir().join(format!("gowring-lodpacks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("root.lodpack"), pack(&[(0x11, b"in root", 0)])).unwrap();
+        std::fs::write(dir.join("valhalla.lodpack"), pack(&[(0x22, b"in valhalla", 0), (0x11, b"a copy", 0)])).unwrap();
+        // not a pack: its table does not read, and it is named in the note
+        std::fs::write(dir.join("broken.lodpack"), b"nothing here at all").unwrap();
+        std::fs::write(dir.join("root.lodpack.toc"), b"an LZ4 copy of the table").unwrap();
+        let mut packs = LodPacks::open(&dir.join("root.lodpack")).unwrap();
+        // root first, even when another pack has the hash too; the others are not read for it
+        assert_eq!(packs.get(0x11).unwrap(), Some(&b"in root"[..]));
+        assert_eq!(packs.packs_read(), 1);
+        assert_eq!(packs.get(0x22).unwrap(), Some(&b"in valhalla"[..]));
+        assert_eq!(packs.packs_read(), 2);
+        assert_eq!(packs.pack_of(0x22).as_deref(), Some("valhalla.lodpack"));
+        assert!(packs.note.contains("1 other pack table(s) read") && packs.note.contains("broken.lodpack"), "{}", packs.note);
+        assert_eq!(packs.get(0x33).unwrap(), None);
+        assert_eq!(packs.packs_read(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,7 +1,6 @@
-Fifty-fifth alpha: recording how Elden Ring really poses your character, to fix the shoulders properly.
+Fifty-sixth alpha: Kratos's own weapons, and fixes for the shoulder and the hair.
 
-0.1.53 passed its test. The hair on top of Kratos's head is gone; some still shows at the back and sides in the character creator, and a shoulder still comes through the cloak there.
-
-- **Pose recording (for fixing the shoulders).** Every shoulder fix so far was tested against a pose I made up, and none of them matched the game's real idle stance. This version records the character's real bone positions 10, 20 and 40 seconds after you enter the world, into `er_pose_10s.json`, `er_pose_20s.json` and `er_pose_40s.json` in your `%LOCALAPPDATA%\GowRing` folder. The cloak can then be fitted against the real pose.
-- **Hairstyle number.** The log also notes your character's face settings, to find which hairstyle number to switch to "none" so no hair can show under Kratos's head.
-- Kratos's model is the same as 0.1.53, so nothing rebuilds.
+- **Kratos's weapons.** The Leviathan Axe, the Draupnir Spear and the Guardian Shield are built from your own Ragnarök install, the same way as his body, and replace the models of the Elden Ring weapons that carry them. The Blades of Chaos keep Elden Ring's whip model for now, so they keep the whip's reach. A weapon that doesn't build, or comes out the wrong size, keeps its Elden Ring model, and the log says why. The first start after updating takes a little longer while they build.
+- **Shoulder through the cloak.** In Kratos's own model his right shoulder already sits in front of the cloak; Ragnarök hides that with cloth physics. The cloak is now pushed out of the skin before anything else, so the shoulder stays under it in every pose.
+- **Hair at the sides of the head.** Elden Ring numbers its hair pieces differently from what the modding notes said, so 0.1.53 hid the wrong ones. Kratos's armour now hides all of the character's hair, beard and skin.
+- **Weapon report.** The weapon builds write a report to `%LOCALAPPDATA%\GowRing\weapon_probe`. Please send that folder along with the logs after the test.

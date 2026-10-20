@@ -26,6 +26,7 @@ pub mod scan;
 pub mod texpack;
 pub mod wad;
 pub mod wadtex;
+pub mod weapon_part;
 pub mod wtoc;
 
 pub use catalog::{Catalog, CatalogEntry, EntryKind};

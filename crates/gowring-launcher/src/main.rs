@@ -207,9 +207,15 @@ fn play(ctx: &Ctx) -> Result<()> {
     for note in saves::backup(ctx) {
         ctx.log(&note);
     }
-    // Kratos's body part, built from the player's Ragnarök install, must be in the mod folder before the game looks
-    let note = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| install_kratos_part(ctx))).unwrap_or_else(|_| "Kratos's body part: the build panicked".into());
-    ctx.log(&format!("play: {note}"));
+    // Kratos's body part and weapons, built from the player's Ragnarök install, must be in the mod folder before the
+    // game looks. They share one read of r_heroa00.wad, let go before the game starts.
+    {
+        let hero = HeroWad::default();
+        let note = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| install_kratos_part(ctx, &hero))).unwrap_or_else(|_| "Kratos's body part: the build panicked".into());
+        ctx.log(&format!("play: {note}"));
+        let note = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| install_weapon_parts(ctx, &hero))).unwrap_or_else(|_| "Kratos's weapons: the build panicked".into());
+        ctx.log(&format!("play: {note}"));
+    }
     let cfg = me2::write_config(ctx, &dll)?;
     ctx.log(&format!("play: ModEngine2 config {}", cfg.display()));
     let mut cmd = std::process::Command::new(&launcher);
@@ -254,13 +260,34 @@ fn play(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+/// The first 200 MB of r_heroa00.wad, decompressed, and its chunk table: read at most once, by whichever of Kratos's
+/// parts needs it first (a cached build needs none).
+#[derive(Default)]
+struct HeroWad {
+    read: std::cell::OnceCell<Result<(Vec<u8>, Vec<gowring_gow::wtoc::Entry>), String>>,
+}
+
+impl HeroWad {
+    fn get(&self, wad: &Path) -> Result<(&[u8], &[gowring_gow::wtoc::Entry])> {
+        let read = self.read.get_or_init(|| {
+            let (buf, _) = gowring_gow::lz4::read_file_prefix(wad, 200 << 20).map_err(|e| format!("{e:#}"))?;
+            let es = gowring_gow::wtoc::read(&buf).ok_or("no chunk table in r_heroa00.wad")?;
+            Ok((buf, es))
+        });
+        match read {
+            Ok((buf, es)) => Ok((buf, es)),
+            Err(e) => bail!("{e}"),
+        }
+    }
+}
+
 /// Build Kratos's armour parts (see `kratos_part::build_parts`) from the player's Ragnarök install once per install,
 /// builder version and player skeleton, keep them in the cache, and copy them into the mod folder ModEngine2 serves
 /// (`mod/parts`). The skeleton is the one gowring.dll read from the game in an earlier session (`er_skeleton.json`);
 /// until there is one, the parts carry the root bone alone.
-fn install_kratos_part(ctx: &Ctx) -> String {
+fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 11;
+    const BUILD: u32 = 12;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -287,8 +314,7 @@ fn install_kratos_part(ctx: &Ctx) -> String {
     let mut note = String::new();
     if !cached {
         let built = (|| -> anyhow::Result<String> {
-            let (buf, _) = gowring_gow::lz4::read_file_prefix(&wad, 200 << 20)?;
-            let es = gowring_gow::wtoc::read(&buf).context("no chunk table in r_heroa00.wad")?;
+            let (buf, es) = hero.get(&wad)?;
             let chunk = |name: &str, id: u16| es.iter().find(|e| e.name == name && e.id == id).and_then(|e| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize));
             let (Some(mesh), Some(mg), Some(gpu)) = (chunk("MESH_heroa00_0", 1), chunk("MG_heroa00_0", 1), chunk("MG_heroa00_0_gpu", 29)) else {
                 bail!("Kratos's mesh chunks are not in the first 200 MB of r_heroa00.wad");
@@ -299,7 +325,7 @@ fn install_kratos_part(ctx: &Ctx) -> String {
             let t1 = std::time::Instant::now();
             let materials = gowring_gow::kratos_part::outfit_materials(mesh, mg);
             let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
-            let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(&buf, &es, &wad_dir, &materials, &gowring_gow::kratos_part::CUT_OUT, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE);
+            let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, &gowring_gow::kratos_part::CUT_OUT, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE);
             ctx.log(&format!("play: Kratos's look in {:.1}s for {} materials: {look_note}", t1.elapsed().as_secs_f32(), materials.len()));
             let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks)?;
             std::fs::create_dir_all(&cache)?;
@@ -334,6 +360,101 @@ fn install_kratos_part(ctx: &Ctx) -> String {
         }
     }
     format!("Kratos's body part on {skeleton_note}: {note}installed in {}", parts.display())
+}
+
+/// Build the weapons Kratos carries (see `weapon_part::build_weapon`) once per install and builder version, keep them
+/// in the cache and link them into `mod/parts`. A weapon that does not build is taken out of the mod folder, so its
+/// carrier keeps its own model (gowring.dll repoints a carrier only when the file is there). A build also writes a
+/// probe of each model to `weapon_probe\<model>\` for the next round.
+fn install_weapon_parts(ctx: &Ctx, hero: &HeroWad) -> String {
+    use gowring_gow::weapon_part::{build_weapon, file_names, WEAPONS};
+    const WEAPON_BUILD: u32 = 1;
+    let parts = ctx.managed.join("mod").join("parts");
+    // when nothing can be built, an earlier build's files leave too, so the carriers keep their own models
+    let unplug = |why: String| -> String {
+        for n in WEAPONS.iter().flat_map(|spec| file_names(spec.er_model)) {
+            let _ = std::fs::remove_file(parts.join(n));
+        }
+        format!("Kratos's weapons: {why}")
+    };
+    let Some(gow) = ctx.gow.as_deref() else { return unplug("no Ragnarök install".into()) };
+    let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
+        return unplug("r_heroa00.wad or root.lodpack not found".into());
+    };
+    let size = |p: &std::path::Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let stamp = format!("weapons {WEAPON_BUILD} wad {} pack {}\n", size(&wad), size(&pack));
+    let cache = ctx.cache.join("weapon_parts");
+    let cached = std::fs::read_to_string(cache.join("stamp.txt")).is_ok_and(|s| s == stamp);
+    let t0 = std::time::Instant::now();
+    let mut built = String::new();
+    if !cached {
+        let (buf, es) = match hero.get(&wad) {
+            Ok(read) => read,
+            Err(e) => return unplug(format!("could not build them: {e:#}")),
+        };
+        let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
+        let mut lod = gowring_gow::lodpack::LodPacks::open(&pack).ok();
+        let probe_root = ctx.local.join("weapon_probe");
+        let _ = std::fs::remove_dir_all(&cache);
+        let _ = std::fs::remove_dir_all(&probe_root);
+        if let Err(e) = std::fs::create_dir_all(&cache) {
+            return unplug(format!("{}: {e}", cache.display()));
+        }
+        let mut notes = Vec::new();
+        for spec in WEAPONS {
+            let mut log = |l: &str| ctx.log(&format!("play: weapon: {l}"));
+            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build_weapon(spec, buf, es, &wad_dir, lod.as_mut(), &mut log)));
+            let (files, note, probe) = match made {
+                Ok(Ok(made)) => made,
+                Ok(Err(e)) => (Vec::new(), format!("{}: {e:#}", spec.name), Default::default()),
+                Err(_) => (Vec::new(), format!("{}: the build panicked", spec.name), Default::default()),
+            };
+            let dir = probe_root.join(spec.model);
+            for (name, bytes) in &probe.files {
+                let path = dir.join(name);
+                let _ = path.parent().map(std::fs::create_dir_all);
+                let _ = std::fs::write(&path, bytes);
+            }
+            // the low-detail copy is the same bytes: write it once, link the other
+            for (i, (name, bytes)) in files.iter().enumerate() {
+                let path = cache.join(name);
+                let same = files[..i].iter().find(|(_, b)| b == bytes).map(|(n, _)| cache.join(n));
+                if !same.is_some_and(|src| std::fs::hard_link(src, &path).is_ok()) {
+                    if let Err(e) = std::fs::write(&path, bytes) {
+                        let _ = std::fs::remove_file(cache.join("stamp.txt"));
+                        return unplug(format!("{}: {e}", path.display()));
+                    }
+                }
+            }
+            notes.push(note);
+        }
+        let _ = std::fs::write(cache.join("notes.txt"), notes.join("\n"));
+        let _ = std::fs::write(cache.join("stamp.txt"), &stamp);
+        built = format!("built in {:.1}s; ", t0.elapsed().as_secs_f32());
+    }
+    if let Err(e) = std::fs::create_dir_all(&parts) {
+        return format!("Kratos's weapons: {}: {e}", parts.display());
+    }
+    let mut installed = Vec::new();
+    for spec in WEAPONS {
+        let names = file_names(spec.er_model);
+        let ready = names.iter().all(|n| cache.join(n).exists());
+        for n in &names {
+            // a link to the cached file where the two folders share a drive, else a copy; none for a weapon not built
+            let target = parts.join(n);
+            let _ = std::fs::remove_file(&target);
+            if ready && std::fs::hard_link(cache.join(n), &target).is_err() {
+                if let Err(e) = std::fs::copy(cache.join(n), &target) {
+                    return unplug(format!("copying {n}: {e}"));
+                }
+            }
+        }
+        if ready {
+            installed.push(spec.name);
+        }
+    }
+    let notes = std::fs::read_to_string(cache.join("notes.txt")).unwrap_or_default().replace('\n', "; ");
+    format!("Kratos's weapons: {built}installed {} of {} ({}): {notes}", installed.len(), WEAPONS.len(), installed.join(", "))
 }
 
 /// While the game loads, write the same report `--diagnose` writes (once per version) so a tester only has to
