@@ -495,26 +495,22 @@ pub const STAND_INS: &[u16] = &[67, 237, 242, 244, 245, 246, 247, 248, 249, 250,
 /// The names in a mesh's material table (the id-60 `MAT_` chunk beside its `MESH_` chunk): u32 count, then 76-byte
 /// entries of a 16-byte id and a 60-byte name. A draw's material is the u16 at record +0x28.
 pub fn material_names(b: &[u8]) -> Vec<String> {
-    let n = u32_at(b, 0).unwrap_or(0) as usize;
-    (0..n.min(4096))
-        .map_while(|i| {
-            let at = 8 + 76 * i + 16;
-            let raw = b.get(at..at + 60)?;
-            Some(String::from_utf8_lossy(&raw[..raw.iter().position(|c| *c == 0).unwrap_or(60)]).into_owned())
-        })
-        .collect()
+    references(b).into_iter().map(|(_, name)| name).collect()
 }
 
 /// The entries of an id-60 reference list (a mesh's material table, or a material's list of textures, parent
 /// materials and shaders): (16-byte id, name). For textures the id is 8 bytes of tag and then the texture's key.
+/// The chunk is 4 + 76 n bytes, so the last entry's name slot runs 4 bytes past its end: the name is read up to the
+/// end of the chunk (taking whole slots dropped every list's last entry, among them Kratos's belt material 97).
 pub fn references(b: &[u8]) -> Vec<([u8; 16], String)> {
     let n = u32_at(b, 0).unwrap_or(0) as usize;
     (0..n.min(4096))
         .map_while(|i| {
             let at = 8 + 76 * i;
             let id: [u8; 16] = b.get(at..at + 16)?.try_into().ok()?;
-            let raw = b.get(at + 16..at + 76)?;
-            Some((id, String::from_utf8_lossy(&raw[..raw.iter().position(|c| *c == 0).unwrap_or(60)]).into_owned()))
+            let raw = b.get(at + 16..(at + 76).min(b.len())).filter(|r| !r.is_empty())?;
+            let end = raw.iter().position(|c| *c == 0).unwrap_or(raw.len());
+            Some((id, String::from_utf8_lossy(&raw[..end]).into_owned()))
         })
         .collect()
 }
@@ -876,6 +872,23 @@ pub fn index_tsv(file: &str, file_len: u64, idx: &SetIndex) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_lists_keep_their_last_entry_whose_name_slot_runs_past_the_chunk() {
+        // u32 count, 4 bytes, then 76-byte entries (16-byte id, 60-byte name); the chunk is 4 + 76 n bytes long
+        let names = ["MAT_15394922D6E57ABC", "b9fdf91541174798_ps_20003207"];
+        let mut b = vec![0u8; 4 + 76 * names.len()];
+        b[0..4].copy_from_slice(&(names.len() as u32).to_le_bytes());
+        for (i, n) in names.iter().enumerate() {
+            let at = 8 + 76 * i;
+            b[at] = i as u8 + 1;
+            b[at + 16..at + 16 + n.len()].copy_from_slice(n.as_bytes());
+        }
+        let refs = references(&b);
+        assert_eq!(refs.iter().map(|r| r.1.as_str()).collect::<Vec<_>>(), names);
+        assert_eq!(refs[1].0[0], 2);
+        assert_eq!(material_names(&b), names);
+    }
 
     fn set_header(name: &str, flags: u32, off: u32, size: u32, id: u16, offs: &[u64]) -> Vec<u8> {
         let mut b = vec![0u8; SET_HEADER];
