@@ -322,6 +322,13 @@ pub fn choose_parts(rules: &PartRules, shape: ShapeKind, parts: &[PartView], ref
                 c.dropped.push((p.index, format!("names none of {:?}", rules.require)));
             }
             cands = matching;
+            // the guardian parts can still hold several discs (damaged and broken ones): one is drawn
+            if shape == ShapeKind::Shield && cands.iter().filter(|p| p.bounds.as_ref().is_some_and(disc_shaped)).count() > 1 {
+                let (kept, dropped, note) = one_disc(&cands);
+                notes.push(note);
+                c.dropped.extend(dropped);
+                cands.retain(|p| kept.contains(&p.index));
+            }
         }
     }
     if rules.parts.is_none() && !rules.prefer.is_empty() {
@@ -811,7 +818,21 @@ pub fn orient(shape: ShapeKind, g: &Geometry, scale_by: f32) -> Result<Pose, Str
                 note.push(format!("face normal {}; the attach point is in the disc's plane: front taken as {} (it may need flipping)", v3s(n0), v3s(f)));
                 f
             };
-            let (up, _) = snap_across(positive(axes[wide].0), front);
+            // a round face has no long axis (the principal one follows a strap or a boss and turns the face by its
+            // angle): Ragnarök's own up across the face is taken instead
+            let other = (0..3).find(|k| *k != thin && *k != wide).unwrap_or(1);
+            let round = span(other) >= 0.9 * span(wide);
+            let long = if !round {
+                positive(axes[wide].0)
+            } else if dot([0.0, 1.0, 0.0], front).abs() < 0.95 {
+                [0.0, 1.0, 0.0]
+            } else {
+                [0.0, 0.0, 1.0]
+            };
+            if round {
+                note.push(format!("a round face ({:.3} and {:.3} m across): Ragnarök's {} across it is up", span(wide), span(other), v3s(long)));
+            }
+            let (up, _) = snap_across(long, front);
             let side = cross(up, front);
             let (fl, fh) = extent(g, front);
             let (ul, uh) = extent(g, up);
@@ -1177,6 +1198,12 @@ pub fn build_weapon(spec: &WeaponSpec, buf: &[u8], es: &[Entry], wad_dir: &Path,
         let v = &decoded[k];
         chosen.add(&v.position, &v.triangles);
     }
+    if draws.len() < choice.draws.len() {
+        say(&mut lines, format!("{} of the {} chosen draws did not decode and are left out", choice.draws.len() - draws.len(), choice.draws.len()));
+    }
+    if draws.is_empty() || chosen.triangles.is_empty() {
+        return Ok(refuse(&mut lines, &mut probe, "none of the chosen draws decoded".into()));
+    }
     let pose = match orient(spec.shape, &chosen, kratos_part::SCALE) {
         Ok(p) => p,
         Err(e) => return Ok(refuse(&mut lines, &mut probe, format!("cannot orient it: {e}"))),
@@ -1466,6 +1493,16 @@ mod tests {
         let c = choose_parts(rules, ShapeKind::Shield, &parts, &shared);
         assert_eq!(c.kept, vec![0, 2], "{}", c.note);
         assert!(c.note.contains("shared material"), "{}", c.note);
+        // the guardian parts hold a damaged disc too: one of them is drawn, not both on top of each other
+        let damaged = refs_of(&[
+            (0, &["TX_kratosshield00_guardian_gen_0d_0123456789ABCDEF"]),
+            (1, &["TX_kratosshield00_guardian_d_damage_gen_0d_0123456789ABCDEF"]),
+            (2, &["TX_shieldweaponcomponent1_gen_0d_FDA2FF1B24C31D5C"]),
+            (3, &["TX_blitzshield00_gen_0d_51F4DF1D126132D2"]),
+        ]);
+        let c = choose_parts(rules, ShapeKind::Shield, &parts[..4], &damaged);
+        assert_eq!(c.kept, vec![0], "{}", c.note);
+        assert!(c.dropped.iter().any(|d| d.0 == 1 && d.1.contains("another disc")), "{:?}", c.dropped);
     }
 
     #[test]
@@ -1552,6 +1589,24 @@ mod tests {
         let pose = orient(ShapeKind::Shield, &flat, 1.0).unwrap();
         assert!(pose.note.contains("may need flipping"), "{}", pose.note);
         assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, 1.0], 1e-5));
+    }
+
+    #[test]
+    fn a_round_shield_keeps_ragnaroks_up_whatever_its_strap_does() {
+        // a round face along Y with a strap across it at 30 degrees: the strap must not turn the face
+        let mut g = Geometry::default();
+        disc(&mut g, [0.0, 0.04, 0.0], 0.3, 1, 0.03);
+        let mut strap = Geometry::default();
+        cuboid(&mut strap, [-0.01, 0.055, -0.27], [0.01, 0.065, 0.27]);
+        let (s, c) = (30f32.to_radians().sin(), 30f32.to_radians().cos());
+        let strap = turned(&strap, [[c, 0.0, s], [0.0, 1.0, 0.0], [-s, 0.0, c]], [0.0; 3]);
+        let base = g.positions.len() as u32;
+        g.positions.extend(strap.positions);
+        g.triangles.extend(strap.triangles.iter().map(|t| t.map(|i| i + base)));
+        let pose = orient(ShapeKind::Shield, &g, 1.0).unwrap();
+        assert!(pose.note.contains("round face"), "{}", pose.note);
+        assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, 1.0], 1e-5), "{}", pose.note);
+        assert!(close(pose.turn([0.0, 0.0, 1.0]), [0.0, 1.0, 0.0], 1e-5), "{}", pose.note);
     }
 
     #[test]

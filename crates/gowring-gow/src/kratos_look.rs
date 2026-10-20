@@ -259,8 +259,9 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
         let at = es.iter().position(|e| &e.name == name && e.id == 1);
         let refs = at.and_then(|a| es.get(a + 1)).filter(|e| e.id == 60).and_then(bytes).map(crate::kratos::references).unwrap_or_default();
         let all_names: Vec<String> = refs.iter().map(|r| r.1.clone()).collect();
-        // the names maps are chosen from: skipped ones blanked, so each keeps its place beside its id
-        let ref_names: Vec<String> = all_names.iter().map(|r| if skip.iter().any(|k| r.to_ascii_lowercase().contains(k)) { String::new() } else { r.clone() }).collect();
+        // the names maps are chosen from: skipped ones blanked, so each keeps its place beside its id (a marker counts at
+        // the start of a word, as `weapon_part` matches it: "frost" skips `frost00`, not `bifrost00`)
+        let ref_names: Vec<String> = all_names.iter().map(|r| if skip.iter().any(|k| crate::weapon_part::starts_a_word(r, k)) { String::new() } else { r.clone() }).collect();
         // the n-th reference of that name: names cut at 60 characters can repeat, the ids tell them apart
         let mut get = |tex: &String| -> anyhow::Result<Image> {
             let nth = ref_names.iter().take_while(|r| !std::ptr::eq(*r, tex)).filter(|r| *r == tex).count();
