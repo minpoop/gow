@@ -26,6 +26,10 @@ pub const SCALE: f32 = 0.92;
 /// shells and slabs, left out: the eye shadow border (3), a face layer (5), tear line (6), the snow flakes decal (76)
 /// and the eyes' outer shell (78).
 pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
+
+/// Story items on the default outfit left out: Heimdall's horn, Gjallarhorn (94), which hangs on the pelt over the axe
+/// holster and showed there as a black horn on the cloak.
+pub const LEFT_OUT: [u16; 1] = [94];
 /// Materials made of strands on cards: the eyebrows (4), eyelashes (7) and the long beard (86, 87). They are drawn
 /// with Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and
 /// left out otherwise.
@@ -59,7 +63,7 @@ pub const MAX_TEXTURE: u32 = 1024;
 pub const MAX_SURFACE: u32 = 512;
 
 /// The Kratos materials the body part draws: every material of the default outfit's most detailed level, less the
-/// see-through ones.
+/// see-through ones and the story items left out.
 pub fn outfit_materials(mesh: &[u8], mg: &[u8]) -> Vec<u16> {
     let rs = mesh_records(mesh);
     let parts = mg_parts(mg);
@@ -70,7 +74,7 @@ pub fn outfit_materials(mesh: &[u8], mg: &[u8]) -> Vec<u16> {
         .flat_map(|l| l.first as usize..l.first as usize + l.draws as usize)
         .filter_map(|k| rs.get(k))
         .map(|r| r.material)
-        .filter(|m| !SEE_THROUGH.contains(m))
+        .filter(|m| !SEE_THROUGH.contains(m) && !LEFT_OUT.contains(m))
         .collect();
     m.sort_unstable();
     m.dedup();

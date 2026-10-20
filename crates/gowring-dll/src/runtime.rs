@@ -168,9 +168,13 @@ impl Runtime {
         // body part, then what the game made of the part files
         if self.entered_at.is_some_and(|t| t.elapsed().as_secs() >= 5) {
             if let Some(b) = self.bridge.player_behavior_module() {
+                // once: it ran every frame in 0.1.54 and 0.1.55 (7,540 lines in one session)
+                static FACE_LOGGED: std::sync::Once = std::sync::Once::new();
                 if let Some(f) = self.bridge.player_face_data() {
-                    let bytes = crate::skeleton::read::<[u8; 0x40]>(f).map(|b| b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")).unwrap_or_default();
-                    crate::glog!("pose", "face data at {f:#x}: {bytes}");
+                    FACE_LOGGED.call_once(|| {
+                        let bytes = crate::skeleton::read::<[u8; 0x40]>(f).map(|b| b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                        crate::glog!("pose", "face data at {f:#x}: {bytes}");
+                    });
                 }
                 crate::filecaps::start_once(b, self.bridge.player_model_item());
             }

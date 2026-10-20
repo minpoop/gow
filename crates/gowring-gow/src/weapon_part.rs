@@ -949,6 +949,9 @@ pub fn shield_dummies(g: &Geometry, extra: &[(i16, f32)]) -> Vec<Dummy> {
     let (top, bottom) = (0.8 * lo[1].min(0.0), 0.8 * hi[1].max(0.0));
     let at = |share: f32| -> [f32; 3] { [0.0, if share >= 0.0 { share * top } else { -share * bottom }, 0.0] };
     let mut out: Vec<Dummy> = [(100, 1.0), (110, 0.0), (120, -1.0), (300, -1.0), (301, 1.0)].iter().map(|(id, s)| dummy(*id, at(*s))).collect();
+    // the shield bash: Elden Ring's shield attacks (the Guardian Shield's carrier) hit from 130 in 122 of 124 uses, so
+    // it sits on the middle of the face, in front
+    out.push(dummy(130, [0.0, 0.0, hi[2].max(0.0)]));
     out.extend(extra.iter().map(|(id, s)| dummy(*id, at(*s))));
     out
 }
@@ -1664,8 +1667,10 @@ mod tests {
         disc(&mut s, [0.0; 3], 0.25, 2, 0.03);
         let d = shield_dummies(&s, &[]);
         let ys: Vec<(i16, f32)> = d.iter().map(|x| (x.reference_id, x.position[1])).collect();
-        assert_eq!(ys.iter().map(|x| x.0).collect::<Vec<_>>(), [100, 110, 120, 300, 301]);
+        assert_eq!(ys.iter().map(|x| x.0).collect::<Vec<_>>(), [100, 110, 120, 300, 301, 130]);
         assert!((ys[0].1 + 0.2).abs() < 1e-3 && ys[1].1 == 0.0 && (ys[2].1 - 0.2).abs() < 1e-3 && ys[3].1 == ys[2].1 && ys[4].1 == ys[0].1, "{ys:?}");
+        // the bash point on the middle of the face, in front (the disc is 3 cm thick along Z)
+        assert!((d[5].position[0], d[5].position[1]) == (0.0, 0.0) && (d[5].position[2] - 0.015).abs() < 1e-3, "{:?}", d[5].position);
     }
 
     #[test]
