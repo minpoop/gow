@@ -1,6 +1,6 @@
 [package]
 name = "gowring-dll"
-version = "0.1.57"
+version = "0.1.58"
 edition = "2021"
 description = "gowring.dll — the in-game half of Kratos in the Lands Between. Loaded by ModEngine2 into eldenring.exe."
 
@@ -13,12 +13,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 gowring-core = { path = "../gowring-core" }
-# Elden Ring 2.7.2.0 (1.17.2, the current Steam build) is not in a crates.io release; this is the upstream commit
-# that carries its RVA table (fromsoftware-rs). From 2026-10-12 upstream is under the MIT NON-AI / Apache NON-AI
+# Elden Ring 2.7.2.0 (1.17.2, the current Steam build) is not in a crates.io release: upstream's 09a4208 carries its
+# RVA table, and this commit (pull request #329, "Update shifted WorldChrMan fields", not merged yet) the WorldChrMan
+# fields 1.17.2 moved (the by-distance list 0x10 further on; 0.1.57 crashed reading it on entering the world). From 2026-10-12 upstream is under the MIT NON-AI / Apache NON-AI
 # licences: MIT or Apache-2.0 terms, plus no use of it to train or improve machine-learning models and no inclusion
 # in such training data (packaging/licenses/eldenring-rs-LICENSE-MIT-NON-AI.txt ships with the release).
-eldenring = { git = "https://github.com/vswarte/eldenring-rs", rev = "09a4208ac26af4ae07b08c5273ee0e89faf97cb8" }
-fromsoftware-shared = { git = "https://github.com/vswarte/eldenring-rs", rev = "09a4208ac26af4ae07b08c5273ee0e89faf97cb8" }
+eldenring = { git = "https://github.com/vswarte/eldenring-rs", rev = "5baf0dd2243e2affa8bc436d27d7305c2eab9490" }
+fromsoftware-shared = { git = "https://github.com/vswarte/eldenring-rs", rev = "5baf0dd2243e2affa8bc436d27d7305c2eab9490" }
 # the game's singleton table (the same crate fromsoftware-shared looks singletons up with)
 from-singleton = "3"
 hudhook = { version = "0.9.3", default-features = false, features = ["dx12"] }

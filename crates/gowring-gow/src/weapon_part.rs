@@ -956,16 +956,22 @@ pub fn orient(shape: ShapeKind, g: &Geometry, scale_by: f32) -> Result<Pose, Str
             let (fl, fh) = extent(g, front);
             let (ul, uh) = extent(g, up);
             let (sl, sh) = extent(g, side);
-            grip = [scale(side, (sl + sh) / 2.0), scale(up, (ul + uh) / 2.0), scale(front, (fl + fh) / 2.0)].iter().fold([0.0; 3], |acc, v| [acc[0] + v[0], acc[1] + v[1], acc[2] + v[2]]);
-            note.push(format!("disc {:.3} x {:.3} m, {:.3} m thick, its centre {} to the origin; the face's long axis {} to +Y", uh - ul, sh - sl, fh - fl, v3s(grip), v3s(up)));
-            // side -> +X, up -> +Y, front -> +Z
-            rows = [side, up, front];
+            // the hand behind the middle of the back, SHIELD_HAND_DEPTH behind its face nearest the arm (`fl`)
+            grip = [scale(side, (sl + sh) / 2.0), scale(up, (ul + uh) / 2.0), scale(front, fl - SHIELD_HAND_DEPTH)].iter().fold([0.0; 3], |acc, v| [acc[0] + v[0], acc[1] + v[1], acc[2] + v[2]]);
+            note.push(format!("disc {:.3} x {:.3} m, {:.3} m thick, the hand {:.0} cm behind the middle of its back ({}); the face's long axis {} to +Y", uh - ul, sh - sl, fh - fl, 100.0 * SHIELD_HAND_DEPTH, v3s(grip), v3s(up)));
+            // front -> -Z (0.1.56 had +Z, and the player saw the shield's inside), up -> +Y, side -> -X (a turn, not a
+            // mirror)
+            rows = [scale(side, -1.0), up, scale(front, -1.0)];
         }
     }
     let pose = Pose { rotation: rows.map(|r| r.map(|x| x as f32)), grip: grip.map(|x| x as f32), scale: scale_by, note: String::new() };
     let axes_line = pose.axes_line();
     Ok(Pose { note: format!("{}; {axes_line}", note.join("; ")), ..pose })
 }
+
+/// How far behind the back of a shield the hand holds it: Elden Ring's fist is about this deep, so the shield's back
+/// clears it (0.1.56 put the middle of the shield's thickness at the hand).
+pub const SHIELD_HAND_DEPTH: f64 = 0.03;
 
 /// The longest an axe or spear may be (Elden Ring's own greatspears are under 3 m).
 pub const MAX_LENGTH: f32 = 3.0;
@@ -1069,8 +1075,8 @@ pub fn shield_dummies(g: &Geometry, extra: &[(i16, f32)]) -> Vec<Dummy> {
     let at = |share: f32| -> [f32; 3] { [0.0, if share >= 0.0 { share * top } else { -share * bottom }, 0.0] };
     let mut out: Vec<Dummy> = [(100, 1.0), (110, 0.0), (120, -1.0), (300, -1.0), (301, 1.0)].iter().map(|(id, s)| dummy(*id, at(*s))).collect();
     // the shield bash: Elden Ring's shield attacks (the Guardian Shield's carrier) hit from 130 in 122 of 124 uses, so
-    // it sits on the middle of the face, in front
-    out.push(dummy(130, [0.0, 0.0, hi[2].max(0.0)]));
+    // it sits on the middle of the face, in front (-Z)
+    out.push(dummy(130, [0.0, 0.0, lo[2].min(0.0)]));
     out.extend(extra.iter().map(|(id, s)| dummy(*id, at(*s))));
     out
 }
@@ -1713,36 +1719,37 @@ mod tests {
     }
 
     #[test]
-    fn a_shield_puts_its_centre_at_the_origin_and_its_front_away_from_the_arm_on_plus_z() {
+    fn a_shield_faces_minus_z_with_its_back_a_fist_in_front_of_the_hand() {
         // a disc face along Y in front of the attach point, with a boss on its front
         let mut g = Geometry::default();
         disc(&mut g, [0.0, 0.04, 0.0], 0.25, 1, 0.03);
         cuboid(&mut g, [-0.04, 0.055, -0.04], [0.04, 0.08, 0.04]);
         let pose = orient(ShapeKind::Shield, &g, 1.0).unwrap();
         assert!((det(pose.rotation) - 1.0).abs() < 1e-5);
-        assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, 1.0], 1e-5), "{}", pose.note);
-        // the box's centre (y from 0.025 to 0.08) at the origin; the boss in front
-        assert!(close(pose.grip, [0.0, 0.0525, 0.0], 1e-3), "{:?}", pose.grip);
-        assert!(close(pose.place([0.0, 0.08, 0.0]), [0.0, 0.0, 0.0275], 1e-3));
+        assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, -1.0], 1e-5), "{}", pose.note);
+        // the back (y = 0.025) 3 cm in front of the hand, the boss (y = 0.08) at the front
+        assert!(close(pose.grip, [0.0, -0.005, 0.0], 1e-3), "{:?}", pose.grip);
+        assert!(close(pose.place([0.0, 0.025, 0.0]), [0.0, 0.0, -0.03], 1e-3));
+        assert!(close(pose.place([0.0, 0.08, 0.0]), [0.0, 0.0, -0.085], 1e-3));
         assert!(pose.note.contains("that side is the front"), "{}", pose.note);
         let placed = g.placed(&pose);
         let (lo, hi) = placed.bounds();
         assert!((hi[0] - lo[0] - 0.5).abs() < 0.01 && (hi[1] - lo[1] - 0.5).abs() < 0.01, "{lo:?} {hi:?}");
         assert!(check_shape(ShapeKind::Shield, &placed).is_ok());
-        // turned in Ragnarök's space, its face still comes out on +Z and its centre at the origin
+        // turned in Ragnarök's space, its face still comes out on -Z, centred on the hand
         let (s, c) = (0.7f32.sin(), 0.7f32.cos());
         let tilt = [[c, -s, 0.0], [s * 0.6, c * 0.6, -0.8], [s * 0.8, c * 0.8, 0.6]];
         let pose = orient(ShapeKind::Shield, &turned(&g, tilt, [0.0; 3]), 1.0).unwrap();
         let normal = [tilt[0][1], tilt[1][1], tilt[2][1]];
-        assert!(close(pose.turn(normal), [0.0, 0.0, 1.0], 1e-3), "{}", pose.note);
+        assert!(close(pose.turn(normal), [0.0, 0.0, -1.0], 1e-3), "{}", pose.note);
         let front = [0.08 * tilt[0][1], 0.08 * tilt[1][1], 0.08 * tilt[2][1]];
-        assert!(close(pose.place(front), [0.0, 0.0, 0.0275], 2e-3), "{:?}", pose.place(front));
+        assert!(close(pose.place(front), [0.0, 0.0, -0.085], 2e-3), "{:?}", pose.place(front));
         // the attach point in the disc's plane: the front is a guess, and the log says so
         let mut flat = Geometry::default();
         disc(&mut flat, [0.0; 3], 0.25, 1, 0.03);
         let pose = orient(ShapeKind::Shield, &flat, 1.0).unwrap();
         assert!(pose.note.contains("may need flipping"), "{}", pose.note);
-        assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, 1.0], 1e-5));
+        assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, -1.0], 1e-5));
     }
 
     #[test]
@@ -1759,7 +1766,7 @@ mod tests {
         g.triangles.extend(strap.triangles.iter().map(|t| t.map(|i| i + base)));
         let pose = orient(ShapeKind::Shield, &g, 1.0).unwrap();
         assert!(pose.note.contains("round face"), "{}", pose.note);
-        assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, 1.0], 1e-5), "{}", pose.note);
+        assert!(close(pose.turn([0.0, 1.0, 0.0]), [0.0, 0.0, -1.0], 1e-5), "{}", pose.note);
         assert!(close(pose.turn([0.0, 0.0, 1.0]), [0.0, 1.0, 0.0], 1e-5), "{}", pose.note);
     }
 
@@ -1820,8 +1827,8 @@ mod tests {
         let ys: Vec<(i16, f32)> = d.iter().map(|x| (x.reference_id, x.position[1])).collect();
         assert_eq!(ys.iter().map(|x| x.0).collect::<Vec<_>>(), [100, 110, 120, 300, 301, 130]);
         assert!((ys[0].1 + 0.2).abs() < 1e-3 && ys[1].1 == 0.0 && (ys[2].1 - 0.2).abs() < 1e-3 && ys[3].1 == ys[2].1 && ys[4].1 == ys[0].1, "{ys:?}");
-        // the bash point on the middle of the face, in front (the disc is 3 cm thick along Z)
-        assert!((d[5].position[0], d[5].position[1]) == (0.0, 0.0) && (d[5].position[2] - 0.015).abs() < 1e-3, "{:?}", d[5].position);
+        // the bash point on the middle of the face, in front (-Z; the disc is 3 cm thick along Z)
+        assert!((d[5].position[0], d[5].position[1]) == (0.0, 0.0) && (d[5].position[2] + 0.015).abs() < 1e-3, "{:?}", d[5].position);
     }
 
     #[test]

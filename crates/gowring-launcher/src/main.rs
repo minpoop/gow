@@ -287,7 +287,7 @@ impl HeroWad {
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 13;
+    const BUILD: u32 = 14;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -368,7 +368,7 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
 /// probe of each model to `weapon_probe\<model>\` for the next round.
 fn install_weapon_parts(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::weapon_part::{build_weapon, file_names, WEAPONS};
-    const WEAPON_BUILD: u32 = 2;
+    const WEAPON_BUILD: u32 = 3;
     let parts = ctx.managed.join("mod").join("parts");
     // when nothing can be built, an earlier build's files leave too, so the carriers keep their own models
     let unplug = |why: String| -> String {

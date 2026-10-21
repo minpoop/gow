@@ -30,10 +30,11 @@ pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
 /// Story items on the default outfit left out: Heimdall's horn, Gjallarhorn (94), which hangs on the pelt over the axe
 /// holster and showed there as a black horn on the cloak.
 pub const LEFT_OUT: [u16; 1] = [94];
-/// Materials made of strands on cards: the eyebrows (4), eyelashes (7) and the long beard (86, 87). They are drawn
+/// Materials made of strands on cards: the eyebrows (4), eyelashes (7), the cloak's fur (29; drawn solid it showed as
+/// grey blocks by the claw on the upper back) and the long beard (86, 87). They are drawn
 /// with Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and
 /// left out otherwise.
-pub const CUT_OUT: [u16; 4] = [4, 7, 86, 87];
+pub const CUT_OUT: [u16; 5] = [4, 7, 29, 86, 87];
 /// The short goatee under the long beard (86, 87): left out when the long beard is drawn, which covers its place (it
 /// showed under it).
 pub const GOATEE: u16 = 89;
