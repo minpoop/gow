@@ -13,7 +13,7 @@ world, with the Ragnarök HUD. Solo, offline, on its own save.
 
 ## How it plays
 * Controls are Elden Ring's, mapped to Ragnarök's feel (see `design/bindings.json`):
-  R1/R2 attack · L1 guard (tap just before a hit to parry) · **L2 hold = aim, + R1 = throw** (Axe, Spear) ·
+  R1/R2 attack · Kratos holds his weapon in both hands; **hold L1 to raise the shield** (start a guard just before a hit to parry) · **L2 hold = aim, + R1 = throw** (Axe, Spear) ·
   **Triangle (two-hand) = recall / detonate** · **D-pad right = swap Axe → Blades → Spear** · **D-pad up / down = light / heavy runic** ·
   **L3 + R3 = Spartan Rage** (when the bar is full) · **R3 on a stunned enemy = finisher**.
 * A new character on this mashup's own save starts as Kratos, whatever class you pick.

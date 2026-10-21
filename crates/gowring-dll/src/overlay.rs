@@ -373,7 +373,7 @@ impl ImguiRenderLoop for Overlay {
                 "L2 hold: aim     L2 + R1: throw",
                 "Triangle: recall axe / detonate spears",
                 "D-pad right: Axe > Blades > Spear",
-                "L1: block (tap just before a hit: parry)",
+                "L1 hold: shield up (just before a hit: parry)",
                 "D-pad up / down: light / heavy runic",
                 "Square / X (use item): drink your flask; walk over green stones to heal",
                 "L1 + D-pad up / down: change light / heavy runic",

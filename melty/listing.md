@@ -14,8 +14,8 @@
 Step into the Lands Between as post-game Kratos. A new character on this mashup's own save is born with the full Ragnarök kit and a Ragnarök-style HUD, and Elden Ring's world is the sandbox.
 
 ## What you get
-- **Leviathan Axe + Guardian Shield** — hold **L2** to aim, **L2 + R1** to throw, **Triangle / Y** (Elden Ring's interact button, taken over only while a throw is out) to recall it through everything in its path. Raise the shield to block; start a guard just before a hit lands for a **perfect parry** that staggers the attacker.
-- **Blades of Chaos** — long, fast, chained arcs. (The shield is stowed while they are out, as in Ragnarök.)
+- **Leviathan Axe + Guardian Shield** — hold **L2** to aim, **L2 + R1** to throw, **Triangle / Y** (Elden Ring's interact button, taken over only while a throw is out) to recall it through everything in its path. Kratos holds his weapon in both hands, and the shield comes up while you hold **L1**; start a guard just before a hit lands for a **perfect parry** that staggers the attacker.
+- **Blades of Chaos** — Kratos's own Blades, swung with Elden Ring's whip moves for now, so they reach less far than the chains would. (The shield is stowed while they are out, as in Ragnarök.)
 - **Draupnir Spear** — throw up to three spears, then **Triangle / Y** to detonate them together.
 - **Light and heavy runic attacks** for every weapon (**D-pad up / down**), each with a cooldown ring on the HUD.
 - **Spartan Rage** — fills as you fight and take hits; **L3 + R3** when full. Hit harder, take half damage, regenerate, and shake the ground on activation.

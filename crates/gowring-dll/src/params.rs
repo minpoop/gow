@@ -27,9 +27,9 @@ const UNDER_KRATOS: [usize; 34] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
 /// Kratos's weapons whose models the launcher builds from the player's own Ragnarök install, as sheet weapon id and
 /// Elden Ring weapon model id: the launcher writes `mod/parts/wp_a_<id>.partsbnd.dcx` and its `_l` twin, and every
 /// carrier row of the weapon is pointed at that model. The armour's ids (9700-9703) are in the armour step below. The
-/// Blades of Chaos keep Elden Ring's whip this round, because a rigid model would lose the reach the whip's animated
-/// chain gives; 9711 is kept free for them.
-const WEAPON_MODELS: [(&str, u16); 3] = [("leviathan_axe", 9710), ("draupnir_spear", 9712), ("guardian_shield", 9713)];
+/// Blades of Chaos are one rigid blade on the whip's carrier: its moves keep their timing and hit points (100-130 on
+/// the blade) but lose the reach the whip's animated chain gave, until the animation work.
+const WEAPON_MODELS: [(&str, u16); 4] = [("leviathan_axe", 9710), ("blades_of_chaos", 9711), ("draupnir_spear", 9712), ("guardian_shield", 9713)];
 
 /// The one-time weapon report reads BehaviorParam_PC once and AtkParam_Pc per attack; these caps keep it short even on
 /// a regulation far larger than the vanilla one (about 13,000 behaviours), since it runs inside the param patch.
@@ -434,7 +434,7 @@ pub fn apply() -> Result<Carriers, String> {
         }
     }
 
-    // ---- Kratos's weapon models (built by the launcher from the player's Ragnarök install): wp_a_9710/9712/9713 ----------
+    // ---- Kratos's weapon models (built by the launcher from the player's Ragnarök install): wp_a_9710 to wp_a_9713 -------
     // Every row carrying a ported weapon (today's carrier and the legacy copies) shows our model, only when its part is in
     // the mod folder: the launcher leaves out a weapon whose build failed or whose geometry looked wrong, and its carrier
     // keeps the vanilla model.
@@ -504,8 +504,9 @@ mod tests {
     fn weapon_parts_are_named_by_their_four_digit_model() {
         assert_eq!(weapon_part_file(9710), "wp_a_9710.partsbnd.dcx");
         assert_eq!(weapon_part_file(120), "wp_a_0120.partsbnd.dcx");
-        // the Blades keep the whip, and no two weapons share a model
-        assert!(WEAPON_MODELS.iter().all(|(w, m)| *w != "blades_of_chaos" && (9710..=9713).contains(m) && *m != 9711));
+        // every weapon has its own model, the Blades included
+        assert!(WEAPON_MODELS.iter().all(|(_, m)| (9710..=9713).contains(m)));
+        assert!(WEAPON_MODELS.contains(&("blades_of_chaos", 9711)));
         let mut models: Vec<u16> = WEAPON_MODELS.iter().map(|(_, m)| *m).collect();
         models.sort_unstable();
         models.dedup();

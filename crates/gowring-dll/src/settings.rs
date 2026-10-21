@@ -45,6 +45,9 @@ pub struct Settings {
     /// Kratos wears the Black Bear Set (the fur cloak, black leggings, boots and belt) instead of the Survival Set.
     /// Read by the launcher when it builds his body part, so it applies from the next Play.
     pub black_bear_outfit: bool,
+    /// Kratos holds his right-hand weapon in both hands, and the shield comes out (one-handed) only while the guard
+    /// button is held.
+    pub two_hand_by_default: bool,
 }
 
 /// The six runic slots: (settings key, weapon, heavy?, the weapon's own pick).
@@ -98,12 +101,13 @@ impl Default for Settings {
             debug_enemy_damage_multiplier: 3.5,
             runics: OWN_RUNICS,
             black_bear_outfit: true,
+            two_hand_by_default: true,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 8;
+const FILE_VERSION: u32 = 9;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -129,6 +133,9 @@ fn render(s: &Settings) -> String {
 
   "black_bear_outfit": {bear},
   "_black_bear_outfit": "Kratos wears the Black Bear Set: the bear fur cloak, with his leggings, boots and belt in black. false = the Survival Set with the leather cloak. Applies the next time you press Play.",
+
+  "two_hand_by_default": {two_hand},
+  "_two_hand_by_default": "Kratos holds his weapon in both hands, and the Guardian Shield comes up only while you hold the guard button (L1); let go and he two-hands again. false = Elden Ring's own one-handed stance and two-hand toggle.",
 {runic_lines}
   "hud_scale": {scale:?},
   "_hud_scale": "HUD size. 1.0 = normal, 1.3 = bigger, 0.8 = smaller (0.4 to 3.0).",
@@ -194,6 +201,7 @@ fn render(s: &Settings) -> String {
         dhp = s.debug_enemy_health,
         ddm = s.debug_enemy_damage_multiplier,
         bear = s.black_bear_outfit,
+        two_hand = s.two_hand_by_default,
         runic_lines = runic_lines(s),
     )
 }
@@ -255,6 +263,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     debug_enemy_damage_multiplier: 3.5,
     runics: OWN_RUNICS,
     black_bear_outfit: true,
+    two_hand_by_default: true,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -311,6 +320,7 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     }
     flag(&v, "health_stones", &mut s.health_stones);
     flag(&v, "black_bear_outfit", &mut s.black_bear_outfit);
+    flag(&v, "two_hand_by_default", &mut s.two_hand_by_default);
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
     num(&v, "debug_enemy_damage_multiplier", 1.0, 10.0, &mut s.debug_enemy_damage_multiplier);
     for (i, (key, ..)) in RUNIC_SLOTS.iter().enumerate() {
@@ -374,8 +384,8 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
         s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
-    // versions 3, 7 and 8 only added keys (7: the runic slots; 8: the Rage key and health stones): re-rendering the
-    // file shows them with their notes
+    // versions 3, 7, 8 and 9 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
+    // two-handing): re-rendering the file shows them with their notes
     Some(render(&s))
 }
 
@@ -469,6 +479,7 @@ mod tests {
             debug_enemy_damage_multiplier: 4.0,
             runics: ["axe_ice_lance", "axe_frostfall", "blades_runic_light", "blades_scorched_arc", "spear_thunder_step", "spear_runic_heavy"],
             black_bear_outfit: false,
+            two_hand_by_default: false,
         };
         assert_eq!(parse(&render(&s)).unwrap(), s);
     }

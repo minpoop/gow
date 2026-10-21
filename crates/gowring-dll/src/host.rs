@@ -6,7 +6,7 @@
 //! thread. Nothing in this file has been run against the real game yet (docs/STATUS.md).
 
 use crate::audio::Audio;
-use eldenring::cs::{CSCamExt, CSCamera, CSFeManImp, CSHavokMan, ChrActions, ChrDebugSpawnRequest, ChrIns, EnemyIns, FieldInsHandle, WorldChrMan};
+use eldenring::cs::{CSCamExt, CSCamera, CSFeManImp, CSHavokMan, ChrActions, ChrAsmArmStyle, ChrDebugSpawnRequest, ChrIns, EnemyIns, FieldInsHandle, PlayerIns, WorldChrMan};
 use eldenring::position::{HavokPosition, PositionDelta};
 use fromsoftware_shared::{FromStatic, Superclass};
 use gowring_core::sheets::{ErAction, RunicStatus, RUNICS};
@@ -107,6 +107,23 @@ struct Burn {
 /// How long after the mod last owned D-pad up/down a spell or quick-item switch is still put back.
 const DPAD_LOCK_S: f64 = 0.6;
 
+/// How long the shield stays up after the guard button is let go, so a tap does not flick the stance back and forth.
+const SHIELD_LINGER_S: f64 = 0.25;
+/// Frames in a row the game may undo the stance written before two-handing by default stops for the session.
+const ARM_STYLE_GIVE_UP: u32 = 120;
+/// Elden Ring's "unarmed" weapon, in an empty hand.
+const UNARMED: i32 = 110000;
+
+fn arm_style_name(style: u32) -> &'static str {
+    match style {
+        0 => "empty-handed",
+        1 => "one-handed",
+        2 => "left weapon in both hands",
+        3 => "right weapon in both hands",
+        _ => "unknown",
+    }
+}
+
 pub struct Bridge {
     /// The six weapon slot param ids last read from the player (for the self-checks).
     pub last_equip: [i32; 6],
@@ -132,6 +149,13 @@ pub struct Bridge {
     slot_lock: Option<(i32, i32)>,
     dpad_owned_at: f64,
     slot_restores: u32,
+    /// Two-handing by default (see `steer_arm_style`): the stance last written, frames in a row the game had undone it,
+    /// writes and undos so far (for the log), whether it stopped for the session, and until when the shield stays up.
+    arm_written: Option<u32>,
+    arm_undone_run: u32,
+    arm_counts: (u32, u32),
+    arm_stopped: bool,
+    shield_until: f64,
     prev_player_hp: Option<i32>,
     prev_enemy_hp: HashMap<u64, i32>,
     prev_player_last_hit: u64,
@@ -196,6 +220,11 @@ impl Bridge {
             slot_lock: None,
             dpad_owned_at: f64::NEG_INFINITY,
             slot_restores: 0,
+            arm_written: None,
+            arm_undone_run: 0,
+            arm_counts: (0, 0),
+            arm_stopped: false,
+            shield_until: f64::NEG_INFINITY,
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
             prev_player_last_hit: u64::MAX,
@@ -749,6 +778,11 @@ impl Bridge {
         }
         // masks: clear what we set last frame that we no longer want, set what we want now
         if let Some(p) = wcm.main_player.as_mut() {
+            // the guard button as the player holds it, before the masks below take anything out
+            let held = bits_from_er(&p.chr_ins.modules.action_request.action_requests);
+            if !self.arm_stopped && crate::settings::get().two_hand_by_default {
+                self.steer_arm_style(p, held.has(ErAction::Guard) || held.has(ErAction::L1), now);
+            }
             let ar = &mut p.chr_ins.modules.action_request;
             let stale = ActionBits(self.my_mask.0 & !new_mask.0);
             // L2 is the aim button and must stay readable while held: a disabled input vanishes from the game's
@@ -848,6 +882,72 @@ impl Bridge {
             }
         }
         self.tick_statuses(wcm, now, player_handle);
+    }
+
+    /// Two-handing by default: Kratos holds his right-hand weapon in both hands, and while the guard button is held
+    /// (and `SHIELD_LINGER_S` after) in the right hand alone, so the Guardian Shield comes up on his left arm. The
+    /// stance is written into both copies of the player's ChrAsm (the game data's and the character's) before the
+    /// behaviour graph reads it, so the guard on that frame is the shield's. An empty-handed stance, an unarmed right
+    /// hand and the left weapon in both hands (the player's own choice) are left alone. If the game undoes the stance
+    /// for `ARM_STYLE_GIVE_UP` frames in a row, it stops for the session.
+    fn steer_arm_style(&mut self, p: &mut PlayerIns, guard: bool, now: f64) {
+        const ONE: u32 = ChrAsmArmStyle::OneHanded as u32;
+        const BOTH: u32 = ChrAsmArmStyle::RightBothHands as u32;
+        let pgd = unsafe { p.player_game_data.as_mut() };
+        // read as numbers: the game may hold a value the enum does not name
+        let game = &mut pgd.equipment.chr_asm.equipment.arm_style as *mut ChrAsmArmStyle as *mut u32;
+        let chr = &mut p.chr_asm.equipment.arm_style as *mut ChrAsmArmStyle as *mut u32;
+        let (style, chr_style) = unsafe { (game.read(), chr.read()) };
+        if let Some(w) = self.arm_written.take() {
+            if style != w {
+                self.arm_counts.1 += 1;
+                self.arm_undone_run += 1;
+                if self.arm_counts.1 <= 10 || self.arm_counts.1 % 100 == 0 {
+                    crate::glog!("two_hand", "{now:.2}s the game changed the stance written last frame ({}) to {} ({} undone of {} writes)", arm_style_name(w), arm_style_name(style), self.arm_counts.1, self.arm_counts.0);
+                }
+                if self.arm_undone_run >= ARM_STYLE_GIVE_UP {
+                    self.arm_stopped = true;
+                    crate::glog!("two_hand", "the game undid the stance {ARM_STYLE_GIVE_UP} frames in a row: two-handing by default is off for this session");
+                    return;
+                }
+            } else {
+                self.arm_undone_run = 0;
+            }
+        }
+        if guard {
+            self.shield_until = now + SHIELD_LINGER_S;
+        }
+        if !(ONE..=BOTH).contains(&style) || style == ChrAsmArmStyle::LeftBothHands as u32 {
+            return;
+        }
+        let asm = &pgd.equipment.chr_asm;
+        let right = asm.equipment_param_ids[asm.equipment.selected_slots.right_weapon_slot.min(2) as usize * 2 + 1];
+        if right <= 0 || right == UNARMED {
+            return;
+        }
+        let want = if now < self.shield_until { ONE } else { BOTH };
+        if style == want && chr_style == want {
+            return;
+        }
+        unsafe {
+            game.write(want);
+            chr.write(want);
+        }
+        self.arm_written = Some(want);
+        self.arm_counts.0 += 1;
+        if self.arm_counts.0 <= 10 || self.arm_counts.0 % 200 == 0 {
+            let same = std::ptr::eq(game, chr);
+            crate::glog!(
+                "two_hand",
+                "{now:.2}s stance {} (character's copy {}{}) -> {} ({}); write {}",
+                arm_style_name(style),
+                arm_style_name(chr_style),
+                if same { ", the same memory" } else { "" },
+                arm_style_name(want),
+                if want == ONE { "guard held: the shield comes up" } else { "two-handed" },
+                self.arm_counts.0
+            );
+        }
     }
 
     /// Put `skill` on every row carrying `weapon` and start pressing the skill button for up to `wait` seconds (see

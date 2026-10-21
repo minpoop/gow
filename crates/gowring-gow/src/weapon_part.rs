@@ -1,8 +1,9 @@
 //! Kratos's weapons as Elden Ring weapon parts, built on the player's PC from their Ragnarök install: the Leviathan
-//! Axe (`axe00`), the Draupnir Spear (`kratosspear00`) and the Guardian Shield (`kratosshield00`), read from
-//! `r_heroa00.wad` and the level-of-detail packs beside it, written as `wp_a_<id>.partsbnd.dcx` and its `_l` twin with
-//! [`crate::erpart`] (see [`build_weapon`]). The Blades of Chaos stay Elden Ring's whip for now: a rigid model would
-//! lose the whip's reach. [`BLADES_MODEL_ID`] is kept for them.
+//! Axe (`axe00`), the Blades of Chaos (`explosive00`), the Draupnir Spear (`kratosspear00`) and the Guardian Shield
+//! (`kratosshield00`), read from `r_heroa00.wad` and the level-of-detail packs beside it, written as
+//! `wp_a_<id>.partsbnd.dcx` and its `_l` twin with [`crate::erpart`] (see [`build_weapon`]). The Blades are one rigid
+//! blade on the whip's carrier, in the right hand: the whip's moves keep their timing but lose their reach until the
+//! animation work.
 //!
 //! No weapon's mesh bytes have been seen away from a player's PC, so every step is a heuristic that says what it did.
 //! Each model holds every variant the game swaps in (upgrade levels, handles and pommels, every shield type), and the
@@ -30,7 +31,7 @@ use crate::kratos_part::{self, LookCounts, Naming};
 use crate::lodpack::LodPacks;
 use crate::wtoc::Entry;
 
-/// The weapon model id reserved for the Blades of Chaos (`wp_a_9711`), not built this round.
+/// The weapon model of the Blades of Chaos (`wp_a_9711`).
 pub const BLADES_MODEL_ID: u16 = 9711;
 
 /// What a weapon's model is shaped like, which decides how it is turned and where its hit points go.
@@ -107,6 +108,26 @@ pub const WEAPONS: &[WeaponSpec] = &[
             reject: &["gold", "anniver", "frost", "ice", "glow", "runic"],
             prefer: &["axe02", "axe00"],
             over: &["axe04"],
+        },
+    },
+    WeaponSpec {
+        weapon: "blades_of_chaos",
+        name: "Blades of Chaos",
+        model: "explosive00",
+        er_model: BLADES_MODEL_ID,
+        // a blade with its handle: the flat of the blade across X, as a spear's
+        shape: ShapeKind::Spear,
+        // the model holds five blade looks (`bladea` to `bladee`), as many handles and eight pommels, the damaged
+        // Blades and the anniversary look; the base look is the first of each (not yet checked against a probe of
+        // this model, which this build writes: when none matches, the other rules choose)
+        rules: PartRules {
+            parts: None,
+            only: &["kratosblades00_bladea_", "kratosblades00_handlea_", "kratosblades00_pommela_"],
+            leave_out: &[],
+            require: &[],
+            reject: &["anniver", "damaged", "frost", "ice", "glow", "runic"],
+            prefer: &[],
+            over: &[],
         },
     },
     WeaponSpec {
@@ -1481,10 +1502,10 @@ mod tests {
         assert_eq!(file_names(9710), ["wp_a_9710.partsbnd.dcx".to_string(), "wp_a_9710_l.partsbnd.dcx".to_string()]);
         assert_eq!(stem(9713), "WP_A_9713");
         let ids: Vec<(&str, &str, u16)> = WEAPONS.iter().map(|w| (w.weapon, w.model, w.er_model)).collect();
-        assert_eq!(ids, [("leviathan_axe", "axe00", 9710), ("draupnir_spear", "kratosspear00", 9712), ("guardian_shield", "kratosshield00", 9713)]);
-        assert!(WEAPONS.iter().all(|w| w.er_model != BLADES_MODEL_ID && w.er_model != kratos_part::MODEL_ID));
+        assert_eq!(ids, [("leviathan_axe", "axe00", 9710), ("blades_of_chaos", "explosive00", BLADES_MODEL_ID), ("draupnir_spear", "kratosspear00", 9712), ("guardian_shield", "kratosshield00", 9713)]);
+        assert!(WEAPONS.iter().all(|w| w.er_model != kratos_part::MODEL_ID));
         assert_eq!(weapon_spec("guardian_shield").map(|w| w.shape), Some(ShapeKind::Shield));
-        assert!(weapon_spec("blades_of_chaos").is_none());
+        assert_eq!(weapon_spec("blades_of_chaos").map(|w| w.shape), Some(ShapeKind::Spear));
         // the part file holds the model and its textures under the model's own name, as the armour does
         let bnd = erpart::partsbnd(&stem(9710), vec![1, 2, 3], vec![4, 5]);
         let names = bnd_names(&dcx_data(&bnd));
@@ -1551,7 +1572,7 @@ mod tests {
 
     #[test]
     fn the_axe_keeps_its_base_parts_and_drops_variants_stand_ins_and_overlays() {
-        let rules = &WEAPONS[0].rules;
+        let rules = &weapon_spec("leviathan_axe").unwrap().rules;
         let b = Some(([0.0; 3], [0.1; 3]));
         let parts = vec![
             view(0, &[(10, 0), (11, 5)], b),
@@ -1617,8 +1638,28 @@ mod tests {
     }
 
     #[test]
+    fn the_blades_keep_the_first_blade_handle_and_pommel() {
+        let rules = &weapon_spec("blades_of_chaos").unwrap().rules;
+        let b = Some(([0.0; 3], [0.1; 3]));
+        let parts = vec![view(0, &[(10, 0)], b), view(1, &[(11, 1)], b), view(2, &[(12, 2)], b), view(3, &[(13, 3)], b), view(4, &[(14, 4)], b), view(5, &[(15, 5)], b), view(6, &[(16, 6)], b)];
+        let refs = refs_of(&[
+            (0, &["TX_kratosblades00_bladea_m_gen_0d_0123456789ABCDEF", "TX_kratosblades00_bladea_m_gen_0n_0123456789ABCDEF"]),
+            (1, &["TX_kratosblades00_handlea_m_gen_0d_0123456789ABCDEF"]),
+            (2, &["TX_kratosblades00_pommela_m_gen_0d_0123456789ABCDEF"]),
+            (3, &["TX_kratosblades00_bladeb_m_gen_0d_0123456789ABCDEF"]),
+            // the second handle of the first look is another handle, not the first
+            (4, &["TX_kratosblades00_handlea2_m_gen_0d_0123456789ABCDEF"]),
+            (5, &["TX_kratosblades00_damaged_d_0123456789ABCDEF"]),
+            (6, &["TX_kratosblades00_pommelh_m_gen_0d_0123456789ABCDEF"]),
+        ]);
+        let c = choose_parts(rules, ShapeKind::Spear, &parts, &refs);
+        assert_eq!(c.kept, vec![0, 1, 2], "{}", c.note);
+        assert!(c.dropped.iter().any(|d| d.0 == 5 && d.1.contains("damaged")), "{:?}", c.dropped);
+    }
+
+    #[test]
     fn the_shield_keeps_the_guardian_parts_or_else_one_disc_at_the_origin() {
-        let rules = &WEAPONS[2].rules;
+        let rules = &weapon_spec("guardian_shield").unwrap().rules;
         let disc_box = |y: f32| Some(([-0.25, y, -0.25], [0.25, y + 0.04, 0.25]));
         let boss = Some(([-0.04, 0.05, -0.04], [0.04, 0.09, 0.04]));
         let far = Some(([0.5, 0.0, 0.0], [0.55, 0.05, 0.05]));
@@ -1993,7 +2034,7 @@ mod tests {
     fn sample_weapon() {
         let Ok(out) = std::env::var("GOWRING_ERPART_OUT") else { return };
         let w = axe_wad();
-        let (files, note, probe) = build_weapon(&WEAPONS[0], &w.buf, &w.es, Path::new(&out), None, &mut |l| println!("{l}")).unwrap();
+        let (files, note, probe) = build_weapon(weapon_spec("leviathan_axe").unwrap(), &w.buf, &w.es, Path::new(&out), None, &mut |l| println!("{l}")).unwrap();
         println!("{note}");
         for (name, bytes) in files.iter().chain(probe.files.iter().filter(|f| f.0.ends_with(".obj") || f.0.ends_with(".tsv"))) {
             std::fs::write(Path::new(&out).join(name), bytes).unwrap();
@@ -2084,7 +2125,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gowring-weapon-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let mut log = Vec::new();
-        let (files, note, probe) = build_weapon(&WEAPONS[0], &w.buf, &w.es, &dir, None, &mut |l| log.push(l.to_string())).unwrap();
+        let (files, note, probe) = build_weapon(weapon_spec("leviathan_axe").unwrap(), &w.buf, &w.es, &dir, None, &mut |l| log.push(l.to_string())).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>(), ["wp_a_9710.partsbnd.dcx", "wp_a_9710_l.partsbnd.dcx"], "{note}\n{}", log.join("\n"));
         assert_eq!(files[0].1, files[1].1);
@@ -2119,7 +2160,7 @@ mod tests {
         assert_eq!(text("ragnarok_raw.obj").matches("\ng part_").count(), 5);
         assert!(text("eldenring_final.obj").contains("# dummy 122"));
         // a model that is not in the WAD: not built, with the reason, and the probe still says what was found
-        let missing = WeaponSpec { model: "kratosspear00", ..WEAPONS[1] };
+        let missing = WeaponSpec { model: "kratosspear00", ..*weapon_spec("draupnir_spear").unwrap() };
         let (files, note, probe) = build_weapon(&missing, &w.buf, &w.es, Path::new("."), None, &mut |_| {}).unwrap();
         assert!(files.is_empty() && note.contains("not built: MESH_kratosspear00_0 (id 1) is not in the bytes read"), "{note}");
         assert!(probe.files.iter().any(|f| f.0 == "build.txt"));
