@@ -42,6 +42,9 @@ pub struct Settings {
     pub debug_enemy_damage_multiplier: f32,
     /// The runic (id) in each weapon's light and heavy slot, in the order of `RUNIC_SLOTS`.
     pub runics: [&'static str; 6],
+    /// Kratos wears the Black Bear Set (the fur cloak, black leggings, boots and belt) instead of the Survival Set.
+    /// Read by the launcher when it builds his body part, so it applies from the next Play.
+    pub black_bear_outfit: bool,
 }
 
 /// The six runic slots: (settings key, weapon, heavy?, the weapon's own pick).
@@ -94,6 +97,7 @@ impl Default for Settings {
             debug_enemy_health: 20000.0,
             debug_enemy_damage_multiplier: 3.5,
             runics: OWN_RUNICS,
+            black_bear_outfit: true,
         }
     }
 }
@@ -122,6 +126,9 @@ fn render(s: &Settings) -> String {
 
   "health_stones": {stones},
   "_health_stones": "Enemies drop green health stones, as in Ragnarok: walk over one to heal (only when hurt). Your flask still works with the use-item button. false = no stones.",
+
+  "black_bear_outfit": {bear},
+  "_black_bear_outfit": "Kratos wears the Black Bear Set: the bear fur cloak, with his leggings, boots and belt in black. false = the Survival Set with the leather cloak. Applies the next time you press Play.",
 {runic_lines}
   "hud_scale": {scale:?},
   "_hud_scale": "HUD size. 1.0 = normal, 1.3 = bigger, 0.8 = smaller (0.4 to 3.0).",
@@ -186,6 +193,7 @@ fn render(s: &Settings) -> String {
         stones = s.health_stones,
         dhp = s.debug_enemy_health,
         ddm = s.debug_enemy_damage_multiplier,
+        bear = s.black_bear_outfit,
         runic_lines = runic_lines(s),
     )
 }
@@ -246,6 +254,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     debug_enemy_health: 20000.0,
     debug_enemy_damage_multiplier: 3.5,
     runics: OWN_RUNICS,
+    black_bear_outfit: true,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -301,6 +310,7 @@ pub fn parse(text: &str) -> Result<Settings, String> {
         s.debug_rage_key = k;
     }
     flag(&v, "health_stones", &mut s.health_stones);
+    flag(&v, "black_bear_outfit", &mut s.black_bear_outfit);
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
     num(&v, "debug_enemy_damage_multiplier", 1.0, 10.0, &mut s.debug_enemy_damage_multiplier);
     for (i, (key, ..)) in RUNIC_SLOTS.iter().enumerate() {
@@ -458,6 +468,7 @@ mod tests {
             debug_enemy_health: 5000.0,
             debug_enemy_damage_multiplier: 4.0,
             runics: ["axe_ice_lance", "axe_frostfall", "blades_runic_light", "blades_scorched_arc", "spear_thunder_step", "spear_runic_heavy"],
+            black_bear_outfit: false,
         };
         assert_eq!(parse(&render(&s)).unwrap(), s);
     }

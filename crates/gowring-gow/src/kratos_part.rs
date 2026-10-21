@@ -1,5 +1,5 @@
 //! Kratos as an Elden Ring armour part, built on the player's PC from their Ragnarök install: his default outfit
-//! ([`crate::kratos::DEFAULT_OUTFIT`], most detailed level) read from `r_heroa00.wad` and `root.lodpack`, written as
+//! ([`crate::kratos::DEFAULT_OUTFIT`] or [`crate::kratos::BLACK_BEAR_OUTFIT`], most detailed level) read from `r_heroa00.wad` and `root.lodpack`, written as
 //! armour parts with [`crate::erpart`] (see [`build_parts`]).
 //!
 //! Scaled to the player's height, with placeholder colours. When the game has given us its player skeleton
@@ -15,7 +15,7 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 
 use crate::erpart::{self, Material, Mesh, Node, Vertex};
-use crate::kratos::{draw_vertices, mesh_records, mg_parts, DEFAULT_OUTFIT};
+use crate::kratos::{draw_vertices, mesh_records, mg_parts, BLACK_BEAR_OUTFIT, DEFAULT_OUTFIT};
 
 /// The armour model id the part replaces (`bd_m_9701`, `bd_f_9701`): unused by the game.
 pub const MODEL_ID: u16 = 9701;
@@ -27,10 +27,11 @@ pub const SCALE: f32 = 0.92;
 /// and the eyes' outer shell (78).
 pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
 /// Materials made of strands on cards: the eyebrows (4), eyelashes (7), the cloak's fur (29; drawn solid it showed as
-/// grey blocks by the claw on the upper back) and the long beard (86, 87). They are drawn
+/// grey blocks by the claw on the upper back), the fur under the bear cloak (69) and the long beard (86, 87). They are
+/// drawn
 /// with Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and
 /// left out otherwise.
-pub const CUT_OUT: [u16; 5] = [4, 7, 29, 86, 87];
+pub const CUT_OUT: [u16; 6] = [4, 7, 29, 69, 86, 87];
 /// The short goatee under the long beard (86, 87): left out when the long beard is drawn, which covers its place (it
 /// showed under it).
 pub const GOATEE: u16 = 89;
@@ -41,11 +42,47 @@ const CUT_OUT_SAMPLERS: [&str; 3] = ["C_AMSN_PixelKill__snp_Texture2D_2_AlbedoMa
 
 /// Cloth simulated in Ragnarök, with how much of the legs' pull it takes: its own weights go to physics joints, which
 /// land on torso bones here, so it would hang still while the arms and legs move through it. It takes the arms' share
-/// of the weights of the body underneath (see [`transfer_cloth_weights`]): the cloak (75) and the shoulder fur (29)
-/// none of the legs' (a cloak that followed each leg would tear down the middle), the skirt (60) a little over half.
-pub const CLOTH: [(u16, f32); 3] = [(75, 0.0), (29, 0.0), (60, 0.6)];
+/// of the weights of the body underneath (see [`transfer_cloth_weights`]): the cloaks (leather 75, bear fur 24) and the
+/// fur at the shoulders (29, 69) none of the legs' (a cloak that followed each leg would tear down the middle), the
+/// skirt (60) a little over half.
+pub const CLOTH: [(u16, f32); 5] = [(75, 0.0), (24, 0.0), (29, 0.0), (69, 0.0), (60, 0.6)];
 /// The body surfaces cloth takes its weights from: the torso and arm skin (72, 74), the trousers (88) and boots (62).
 pub const BODY: [u16; 4] = [72, 74, 88, 62];
+
+/// Which of Kratos's armour sets he wears.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outfit {
+    /// The Survival Set, Ragnarök's default look, with the leather cloak.
+    Survival,
+    /// The Black Bear Set: the bear-fur cloak, and the leggings, boots and belt black.
+    BlackBear,
+}
+
+impl Outfit {
+    /// Its parts of `MG_heroa00_0`.
+    pub fn parts(self) -> &'static [u16] {
+        match self {
+            Outfit::Survival => DEFAULT_OUTFIT,
+            Outfit::BlackBear => BLACK_BEAR_OUTFIT,
+        }
+    }
+
+    /// The materials it dyes black (see [`crate::kratos_look::blacken`]): for the Black Bear Set the cloak's fur (24),
+    /// the fur under it (69), the leggings (88), boots (62) and the belt with its leather tassels (61).
+    pub fn dyed(self) -> &'static [u16] {
+        match self {
+            Outfit::Survival => &[],
+            Outfit::BlackBear => &[24, 69, 88, 62, 61],
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Outfit::Survival => "the Survival Set",
+            Outfit::BlackBear => "the Black Bear Set",
+        }
+    }
+}
 
 /// Kratos's eyes, the landmark [`fit_proportions`] puts on the character's.
 pub const EYES: u16 = 77;
@@ -59,12 +96,13 @@ pub const MAX_TEXTURE: u32 = 1024;
 /// The largest side of a surface (normal and roughness) map.
 pub const MAX_SURFACE: u32 = 512;
 
-/// The Kratos materials the body part draws: every material of the default outfit's most detailed level, less the
-/// see-through ones.
-pub fn outfit_materials(mesh: &[u8], mg: &[u8]) -> Vec<u16> {
+/// The Kratos materials the body part draws: every material of the outfit's most detailed level, less the see-through
+/// ones.
+pub fn outfit_materials(mesh: &[u8], mg: &[u8], outfit: Outfit) -> Vec<u16> {
     let rs = mesh_records(mesh);
     let parts = mg_parts(mg);
-    let mut m: Vec<u16> = DEFAULT_OUTFIT
+    let mut m: Vec<u16> = outfit
+        .parts()
         .iter()
         .filter_map(|p| parts.get(*p as usize))
         .filter_map(|l| l.first())
@@ -115,7 +153,8 @@ pub fn skeleton_nodes(json: &str) -> Result<Vec<Node>> {
 /// One part's model as meshes: Kratos's draws from `records`, skinned to `skeleton` when `skin` re-posed him onto
 /// it, else rigid on its root bone; shifted by `offset` (metres).
 /// Each mesh's `material` is the position of its draw's Kratos material in `materials`.
-fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8], toc: &crate::lodpack::Toc, file: &mut std::fs::File, offset: [f32; 3], skeleton: &[Node], skin: Option<&crate::retarget::Retarget>, materials: &[u16]) -> Result<(Vec<Node>, Vec<Mesh>, Vec<usize>)> {
+#[allow(clippy::too_many_arguments)]
+fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8], toc: &crate::lodpack::Toc, file: &mut std::fs::File, more: &mut Option<crate::lodpack::LodPacks>, offset: [f32; 3], skeleton: &[Node], skin: Option<&crate::retarget::Retarget>, materials: &[u16]) -> Result<(Vec<Node>, Vec<Mesh>, Vec<usize>)> {
     let mut cache: std::collections::HashMap<u64, Vec<u8>> = Default::default();
     let mut nodes = skeleton.to_vec();
     let master = nodes.iter().position(|n| n.name == "Master").context("no Master bone")? as u8;
@@ -128,7 +167,11 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
             gpu
         } else {
             if !cache.contains_key(&r.hash) {
-                match toc.read(file, r.hash)? {
+                let found = match toc.read(file, r.hash)? {
+                    Some(b) => Some(b),
+                    None => more.as_mut().and_then(|l| l.get(r.hash).ok().flatten().map(<[u8]>::to_vec)),
+                };
+                match found {
                     Some(b) => {
                         cache.insert(r.hash, b);
                     }
@@ -324,8 +367,8 @@ pub fn transfer_cloth_weights(meshes: &mut [Mesh], used: &[u16], skeleton: &[Nod
 
 /// Kratos's skin (torso and arms), his cloak, and the fur on it.
 const SKIN: [u16; 2] = [72, 74];
-const CLOAK: u16 = 75;
-const FUR: u16 = 29;
+const CLOAKS: [u16; 2] = [75, 24];
+const FURS: [u16; 2] = [29, 69];
 
 /// Closest point on triangle `abc` to `p`, with its barycentric weights (Ericson, Real-Time Collision Detection 5.1.5).
 fn closest_on_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> ([f32; 3], [f32; 3]) {
@@ -454,7 +497,7 @@ fn cloak_inside(meshes: &[Mesh], used: &[u16], skin: &SkinGrid, depth: f32) -> u
     let (mut seen, mut stamp) = (Vec::new(), 0);
     meshes
         .iter()
-        .filter(|m| used.get(m.material as usize) == Some(&CLOAK))
+        .filter(|m| used.get(m.material as usize).is_some_and(|k| CLOAKS.contains(k)))
         .flat_map(|m| m.vertices.iter())
         .filter(|v| v.position[1] > CLOAK_FROM && skin.outside(v.position, 0.05, &mut seen, &mut stamp).is_some_and(|(s, _)| s < -depth))
         .count()
@@ -484,7 +527,7 @@ pub fn push_cloak_out(meshes: &mut [Mesh], used: &[u16]) -> (usize, usize, usize
     for _ in 0..3 {
         // where the cloak is inside or too near the skin, and the push that takes it out to the margin
         let mut pushes: Vec<([f32; 3], [f32; 3], f32)> = Vec::new();
-        for m in meshes.iter().filter(|m| kratos(m) == CLOAK) {
+        for m in meshes.iter().filter(|m| CLOAKS.contains(&kratos(m))) {
             for v in m.vertices.iter().filter(|v| v.position[1] > CLOAK_FROM) {
                 if let Some((s, n)) = skin.outside(v.position, 0.05, &mut seen, &mut stamp) {
                     if s < MARGIN {
@@ -503,7 +546,7 @@ pub fn push_cloak_out(meshes: &mut [Mesh], used: &[u16]) -> (usize, usize, usize
             grid.entry(cell(p.0)).or_default().push(i);
         }
         for (k, m) in meshes.iter_mut().enumerate() {
-            if ![CLOAK, FUR].contains(&kratos(m)) {
+            if !CLOAKS.contains(&kratos(m)) && !FURS.contains(&kratos(m)) {
                 continue;
             }
             for (i, v) in m.vertices.iter_mut().enumerate() {
@@ -774,13 +817,13 @@ fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
 /// that hide the character's own. Each comes as the normal and the low-detail (`_l`) file, male and female.
 /// `looks` holds a colour map and surface per Kratos material (a missing colour is a neutral grey, a missing surface
 /// flat and rough).
-pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>) -> Result<(Vec<(String, Vec<u8>)>, String)> {
+pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>, outfit: Outfit) -> Result<(Vec<(String, Vec<u8>)>, String)> {
     let rs = mesh_records(mesh);
     let parts = mg_parts(mg);
     let level0 = |list: &[u16]| -> Vec<usize> { list.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect() };
-    let outfit = level0(DEFAULT_OUTFIT);
-    if outfit.is_empty() {
-        bail!("no default outfit draws in the mesh tables");
+    let records = level0(outfit.parts());
+    if records.is_empty() {
+        bail!("no draws of {} in the mesh tables", outfit.name());
     }
     let toc = crate::lodpack::Toc::read_from_pack(pack)?;
     let mut file = std::fs::File::open(pack)?;
@@ -799,7 +842,7 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     };
     let fallback = master_only();
     let skeleton = skeleton.unwrap_or(&fallback);
-    note.push_str(&format!("{} bones; ", skeleton.len()));
+    note.push_str(&format!("{}, {} bones; ", outfit.name(), skeleton.len()));
     let retargeted = match kratos {
         Some(k) if skeleton.len() > 1 => match crate::retarget::retarget(k, SCALE, skeleton) {
             Ok(r) => {
@@ -819,8 +862,10 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     // his materials (the see-through ones left out, and the strands too when they have no coverage), each with its
     // colour map or a neutral grey
     let long_beard = [86, 87].iter().any(|m| looks.get(m).is_some_and(|l| l.cut_out));
-    let used: Vec<u16> = outfit_materials(mesh, mg).into_iter().filter(|m| !CUT_OUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).filter(|m| !(long_beard && *m == GOATEE)).collect();
-    let (nodes, mut meshes, failed) = kratos_meshes(&rs, &outfit, gpu, &toc, &mut file, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;
+    let used: Vec<u16> = outfit_materials(mesh, mg, outfit).into_iter().filter(|m| !CUT_OUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).filter(|m| !(long_beard && *m == GOATEE)).collect();
+    // a draw not in root.lodpack is looked for in the other packs (the outfits' other parts are not all in it)
+    let mut more = crate::lodpack::LodPacks::open(pack).ok();
+    let (nodes, mut meshes, failed) = kratos_meshes(&rs, &records, gpu, &toc, &mut file, &mut more, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;
     if retargeted.is_some() {
         let shoulder_step = retargeted.as_ref().map_or(0.0, |r| r.shoulder_step);
         match fit_proportions(&mut meshes, &used, skeleton, shoulder_step) {
@@ -902,6 +947,18 @@ mod tests {
         assert!((f[0].position[2] - 0.011 * (1.0 - d2 / 0.0016).powi(2)).abs() < 1e-5, "{:?}", f[0].position);
         assert_eq!(f[1].position, [0.0, 1.0, 0.0]);
         assert_eq!(moved, 2);
+    }
+
+    #[test]
+    fn the_black_bear_set_swaps_the_leather_cloak_for_the_bear_fur_one() {
+        let leather: Vec<u16> = [213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 231, 236].to_vec();
+        let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !leather.contains(p)).chain([224, 235]).collect();
+        expected.sort_unstable();
+        assert_eq!(Outfit::BlackBear.parts(), expected.as_slice());
+        assert!(Outfit::Survival.dyed().is_empty());
+        // the bear cloak and its fur take the body's weights and are pushed out of the skin like the leather ones
+        assert!(Outfit::BlackBear.dyed().iter().all(|m| [24, 69, 88, 62, 61].contains(m)));
+        assert!(CLOTH.iter().any(|c| c.0 == 24) && CLOTH.iter().any(|c| c.0 == 69) && CLOAKS.contains(&24) && FURS.contains(&69));
     }
 
     #[test]
@@ -1155,7 +1212,7 @@ mod tests {
                 colours.insert(m, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: info.width, h: info.height, rgba, format: crate::dds::Format::Bc1 }), surface: None, cut_out });
             }
         }
-        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours).unwrap();
+        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours, Outfit::Survival).unwrap();
         println!("{real} real resources; {note}");
         for (name, bytes) in files {
             std::fs::write(dir.join(name), bytes).unwrap();

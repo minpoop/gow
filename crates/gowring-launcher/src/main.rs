@@ -287,7 +287,7 @@ impl HeroWad {
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 15;
+    const BUILD: u32 = 16;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -302,7 +302,14 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     };
     // a cheap fingerprint of the skeleton, so a new one rebuilds the parts
     let fingerprint = skeleton_json.as_deref().map_or(0u64, |j| j.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3)));
-    let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x}\n", size(&wad), size(&pack));
+    // the armour set: settings.json's "black_bear_outfit" (gowring.dll keeps the key; on unless it says false)
+    let black_bear = std::fs::read_to_string(ctx.local.join("settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("black_bear_outfit").and_then(|b| b.as_bool()))
+        .unwrap_or(true);
+    let outfit = if black_bear { gowring_gow::kratos_part::Outfit::BlackBear } else { gowring_gow::kratos_part::Outfit::Survival };
+    let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x} outfit {outfit:?}\n", size(&wad), size(&pack));
     let cache = ctx.cache.join("kratos_part");
     let names: Vec<String> = ["bd", "am", "lg", "hd"]
         .iter()
@@ -323,11 +330,11 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
             let kratos = chunk("goProtoheroa00", 1).and_then(gowring_gow::kratos::Skeleton::parse);
             // his colours: each material's colour map from the texture packs next to root.lodpack
             let t1 = std::time::Instant::now();
-            let materials = gowring_gow::kratos_part::outfit_materials(mesh, mg);
+            let materials = gowring_gow::kratos_part::outfit_materials(mesh, mg, outfit);
             let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
-            let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, &gowring_gow::kratos_part::CUT_OUT, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE);
+            let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, &gowring_gow::kratos_part::CUT_OUT, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE, outfit.dyed());
             ctx.log(&format!("play: Kratos's look in {:.1}s for {} materials: {look_note}", t1.elapsed().as_secs_f32(), materials.len()));
-            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks)?;
+            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks, outfit)?;
             std::fs::create_dir_all(&cache)?;
             // the male, female and low-detail copies are the same bytes: write each once, link the others
             for (i, (name, bytes)) in files.iter().enumerate() {

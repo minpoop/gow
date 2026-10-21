@@ -49,6 +49,45 @@ fn stem(t: &str) -> &str {
     }
 }
 
+/// A material's own metal mask among its references, the region map its metal is painted with
+/// (`kratos00_int9_legs_m2_metals`, `youngkratos_boots_m1_metal`: `_m<digits>_metal...`), not a shared tiling map
+/// (`metal01_n`).
+pub fn metal_mask(refs: &[String]) -> Option<&String> {
+    refs.iter().filter(|r| r.starts_with("TX_")).find(|t| {
+        let words: Vec<&str> = stem(t).split('_').collect();
+        words.windows(2).any(|w| w[0].len() >= 2 && w[0].starts_with('m') && w[0][1..].bytes().all(|c| c.is_ascii_digit()) && w[1].starts_with("metal"))
+    })
+}
+
+/// Ragnarök's black dye as far as a colour map shows it: the leather, cloth and fur (everything outside `metal`, the
+/// material's own metal mask: its red, stretched over the colour map, the side that covers less of it counting as
+/// metal) go to a near-black grey that keeps their shading; the metal keeps its colour. Returns the share counted as
+/// metal.
+pub fn blacken(img: &mut Image, metal: Option<&Image>) -> f32 {
+    let mask = metal.filter(|m| m.w > 0 && m.h > 0).map(|m| {
+        let lit = m.rgba.chunks_exact(4).filter(|p| p[0] >= 128).count() as f32 / (m.w * m.h) as f32;
+        (m, lit > 0.5)
+    });
+    let mut kept = 0usize;
+    for y in 0..img.h {
+        for x in 0..img.w {
+            let i = ((y * img.w + x) * 4) as usize;
+            let w = mask.map_or(0.0, |(m, flip)| {
+                let (mx, my) = ((x as u64 * m.w as u64 / img.w as u64) as u32, (y as u64 * m.h as u64 / img.h as u64) as u32);
+                let v = m.rgba.get(((my * m.w + mx) * 4) as usize).copied().unwrap_or(0) as f32 / 255.0;
+                if flip { 1.0 - v } else { v }
+            });
+            kept += (w >= 0.5) as usize;
+            let (r, g, b) = (img.rgba[i] as f32, img.rgba[i + 1] as f32, img.rgba[i + 2] as f32);
+            let dark = 6.0 + 0.28 * (0.299 * r + 0.587 * g + 0.114 * b);
+            for (k, c) in [r, g, b].into_iter().enumerate() {
+                img.rgba[i + k] = (dark + (c - dark) * w).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+    kept as f32 / (img.w * img.h).max(1) as f32
+}
+
 /// The coverage map among a cut-out material's references (hair cards, brows, lashes): an opacity map, named
 /// `*_o`, `*_op`, `*_gen_<digit>o`, or with `opacity` or `alpha` in it (Ragnarök's own, e.g. `son00_eyelash_o`).
 pub fn coverage_map(refs: &[String]) -> Option<&String> {
@@ -237,10 +276,11 @@ pub struct Look {
 /// For each of `materials` (indices into the mesh's material table), its colour map scaled to at most `max_side` and
 /// its surface scaled to at most `max_surface`, and a line per material saying what was found. Those in `cut_out`
 /// (hair cards and the like) get their coverage in the colour map's alpha ([`cut_out_image`]) and list their textures
-/// in the line. `buf` holds the start of r_heroa00.wad (its chunk table `es`), `wad_dir` the folder with the texture
-/// packs.
-pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32) -> (BTreeMap<u16, Look>, String) {
-    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, max_side, max_surface, &[])
+/// in the line. Those in `dye` are dyed black ([`blacken`]). `buf` holds the start of r_heroa00.wad (its chunk table
+/// `es`), `wad_dir` the folder with the texture packs.
+#[allow(clippy::too_many_arguments)]
+pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32, dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
+    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, max_side, max_surface, &[], dye)
 }
 
 /// [`outfit_looks`] for any model: the materials are indices into the table after its `mesh_chunk` (`MESH_<m>_0`).
@@ -248,7 +288,8 @@ pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16],
 /// [`crate::weapon_part::PartRules::reject`]) are passed over when a map is chosen, so a material layered with a
 /// variant's maps draws with its own.
 #[allow(clippy::too_many_arguments)]
-pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32, skip: &[&str]) -> (BTreeMap<u16, Look>, String) {
+#[allow(clippy::too_many_arguments)]
+pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32, skip: &[&str], dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
     let mut out = BTreeMap::new();
     let mut note = String::new();
     let bytes = |e: &Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
@@ -280,10 +321,25 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
             decoded
         };
         let mut look = Look::default();
+        // the black dye, sparing what the material's own metal mask marks
+        let mask: Option<(String, Image)> = if dye.contains(&m) { metal_mask(&ref_names).and_then(|t| get(t).ok().map(|i| (stem(t).to_string(), crate::dds::downscale(&i, max_side)))) } else { None };
+        let dyed = |img: &mut Image, note: &mut String| {
+            let kept = blacken(img, mask.as_ref().map(|m| &m.1));
+            match &mask {
+                Some((name, _)) => note.push_str(&format!(", dyed black (metal from {name}: {:.0} % kept)", 100.0 * kept)),
+                None => note.push_str(", dyed black"),
+            }
+        };
         if cut_out.contains(&m) {
             let stems: Vec<&str> = all_names.iter().filter(|r| r.starts_with("TX_")).map(|r| stem(r)).collect();
             note.push_str(&format!("{m} (cut-out; textures {stems:?}): "));
-            let colour = colour_map(&ref_names).and_then(|t| get(t).ok().map(|img| (img, stem(t).contains("uv2"))));
+            let mut colour = colour_map(&ref_names).and_then(|t| get(t).ok().map(|img| (img, stem(t).contains("uv2"))));
+            if dye.contains(&m) {
+                if let Some((img, _)) = colour.as_mut() {
+                    dyed(img, &mut note);
+                    note.push_str(": ");
+                }
+            }
             let coverage = match coverage_map(&ref_names) {
                 Some(t) => get(t).ok(),
                 None => {
@@ -315,7 +371,11 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                 Some(tex) => match get(tex) {
                     Ok(img) => {
                         note.push_str(&format!("{m}: {} {}x{}", stem(tex), img.w, img.h));
-                        look.colour = Some(crate::dds::downscale(&img, max_side));
+                        let mut img = crate::dds::downscale(&img, max_side);
+                        if dye.contains(&m) {
+                            dyed(&mut img, &mut note);
+                        }
+                        look.colour = Some(img);
                     }
                     Err(e) => note.push_str(&format!("{m}: {} failed ({e:#})", stem(tex))),
                 },
@@ -422,11 +482,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gowring-looks-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // no texture pack and no texture in the WAD: the note names the map that was chosen
-        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &[]);
+        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &[], &[]);
         assert!(plain.contains("0: axe02_base_ice_gen_0d failed"), "{plain}");
-        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &["ice"]);
+        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &["ice"], &[]);
         assert!(skipped.contains("0: axe02_base_metal_gen_0d failed"), "{skipped}");
-        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], 64, 64, &[]).1, "no MESH_kratosspear00_0");
+        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], 64, 64, &[], &[]).1, "no MESH_kratosspear00_0");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -437,6 +497,11 @@ mod tests {
         assert_eq!(colour_map(&acc).unwrap(), "TX_kratos00_int9_acc_m_gen_0d_111E00F602CC3843");
         let head = v(&["TX_kratos00_wrinklemap_maxregions_1", "TX_kratos00_int9_head_m_paint_cine_", "TX_kratos00_int9_head_sand_m_gen_0n_ABCDEF0123456789", "TX_kratosashsmall_d_0123456789ABCDEF"]);
         assert_eq!(colour_map(&head).unwrap(), "TX_kratos00_int9_head_m_paint_cine_");
+        // a material's own metal mask, not the shared tiling maps
+        let legs = v(&["TX_metal01_ao_5947030F9951E009", "TX_metal01_n_4198919D2DD536E2", "TX_kratos00_int9_legs_m2_metals_0123456789ABCDEF", "TX_kratos00_int9_legs_m3_cloth_0123456789ABCDEF"]);
+        assert_eq!(metal_mask(&legs).unwrap(), "TX_kratos00_int9_legs_m2_metals_0123456789ABCDEF");
+        assert_eq!(metal_mask(&v(&["TX_youngkratos_boots_m1_metal_0123456789ABCDEF"])).unwrap(), "TX_youngkratos_boots_m1_metal_0123456789ABCDEF");
+        assert!(metal_mask(&v(&["TX_metal01b_flt_0g_63C0E0D7082B66F2", "TX_kratos00_int9_cloakfur_m_gen_0d_B5F3A2AB7A2F0D04"])).is_none());
         let crystal = v(&["TX_bifrost00_m_gen_2n_0123456789ABCDEF", "TX_bifrost00_m_gen_2d_0123456789ABCDEF"]);
         assert_eq!(colour_map(&crystal).unwrap(), "TX_bifrost00_m_gen_2d_0123456789ABCDEF");
         // names the game cut short: the first of the set, not the tiling wood listed after it
@@ -445,5 +510,27 @@ mod tests {
         let eye = v(&["TX_death01_112E6D2408347E77", "TX_kratos00_int9_eye_d_0123456789ABCDEF"]);
         assert_eq!(colour_map(&eye).unwrap(), "TX_kratos00_int9_eye_d_0123456789ABCDEF");
         assert!(colour_map(&v(&["TX_death01_112E6D2408347E77", "TX_standardeye00_int9_tearline_n_0123456789ABCDEF"])).is_none());
+    }
+
+    #[test]
+    fn the_black_dye_darkens_leather_and_keeps_the_metal_its_mask_marks() {
+        let img = |px: &[[u8; 4]]| Image { w: px.len() as u32, h: 1, rgba: px.concat(), format: crate::dds::Format::Rgba8 };
+        // four pixels of brown leather; the mask marks the last as metal
+        let mut leather = img(&[[120, 80, 40, 255]; 4]);
+        let mask = img(&[[0, 0, 0, 255], [0, 0, 0, 255], [0, 0, 0, 255], [255, 255, 255, 255]]);
+        let kept = blacken(&mut leather, Some(&mask));
+        assert_eq!(kept, 0.25);
+        let dark = (6.0f32 + 0.28 * (0.299 * 120.0 + 0.587 * 80.0 + 0.114 * 40.0)).round() as u8;
+        assert_eq!(&leather.rgba[..4], &[dark, dark, dark, 255]);
+        assert_eq!(&leather.rgba[12..], &[120, 80, 40, 255]);
+        // a mask lit over most of the map marks its unlit side as the metal
+        let mut flipped = img(&[[120, 80, 40, 255]; 4]);
+        let wide = img(&[[255, 0, 0, 255], [255, 0, 0, 255], [255, 0, 0, 255], [0, 0, 0, 255]]);
+        assert_eq!(blacken(&mut flipped, Some(&wide)), 0.25);
+        assert_eq!(&flipped.rgba[12..], &[120, 80, 40, 255]);
+        // no mask: all of it
+        let mut fur = img(&[[90, 70, 50, 255]]);
+        assert_eq!(blacken(&mut fur, None), 0.0);
+        assert!(fur.rgba[0] < 40 && fur.rgba[0] == fur.rgba[1]);
     }
 }

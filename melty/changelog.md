@@ -1,6 +1,8 @@
-Sixtieth alpha: Gjallarhorn is back.
+Sixty-first alpha: Kratos in the Black Bear Set.
 
 0.1.58 passed its test on the new Elden Ring update: Kratos, his axe, spear and shield all showed, and it ran the whole ten minutes.
+
+- **Black Bear Set.** Kratos now wears the Black Bear Set from Ragnarök's New Game+ update: the heavy bear-fur cloak from the start of the game instead of the leather one, with his leggings, boots and belt in black (the metal stays as it is). The black is a dye on Ragnarök's own textures, so it may not match the game exactly yet. To go back to the Survival Set with the leather cloak, set "black_bear_outfit" to false in `%LOCALAPPDATA%\GowRing\settings.json`; it applies the next time you press Play.
 
 - **Elden Ring 2.7.2 (patch 1.17.2).** Steam updated Elden Ring, and the mod now needs this version: it finds the game's data through a table of addresses that changes with every patch. Older versions of the game are no longer supported. 0.1.57 crashed on entering the world because the patch also moved the game's list of nearby characters; this version reads it where it now is.
 
