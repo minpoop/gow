@@ -84,6 +84,11 @@ def main():
     for p in (launcher, dll):
         if not os.path.exists(p):
             sys.exit(f"missing build output: {p}")
+    # the recipe waits for this token from `GowRing.exe --prepare`; an exe built at another version never writes it, and
+    # Melty reports the setup as closed before it finished (0.1.45, 0.1.61)
+    token = f"gowring-{VERSION}-prep-1".encode()
+    if token not in open(launcher, "rb").read():
+        sys.exit(f"{launcher} does not carry {token.decode()}: bump the crate versions in Cargo.toml and crates/gowring-dll/Cargo.toml, then build with build.sh")
     stage_root = tempfile.mkdtemp(prefix="gowring-stage-")
     # Everything lives in GowRing/ so it cannot collide with other Elden Ring mashups that share {managed}.
     stage = os.path.join(stage_root, "GowRing")
