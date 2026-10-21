@@ -7,7 +7,7 @@ import hashlib, json, os, shutil, subprocess, sys, tempfile, urllib.request, zip
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGET = "x86_64-pc-windows-msvc"
-VERSION = "0.1.56"
+VERSION = "0.1.57"
 ME2_URL = "https://github.com/soulsmods/ModEngine2/releases/download/release-2.1.0/ModEngine-2.1.0.0-win64.zip"
 ME2_LICENSE_URL = "https://raw.githubusercontent.com/soulsmods/ModEngine2/main/LICENSE-MIT"
 VGM_URL = "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-win64.zip"
@@ -108,6 +108,7 @@ def main():
     put(os.path.join(me2, "modengine2_launcher.exe"), "modengine2/modengine2_launcher.exe")
     put(os.path.join(me2, "README.txt"), "modengine2/README.txt")
     put(me2_lic, "modengine2/LICENSE-MIT.txt")
+    put(os.path.join(ROOT, "packaging", "licenses", "eldenring-rs-LICENSE-MIT-NON-AI.txt"), "licenses/eldenring-rs-LICENSE-MIT-NON-AI.txt")
     for sub in ("bin", "crashpad"):
         for name in sorted(os.listdir(os.path.join(me2, "modengine2", sub))):
             put(os.path.join(me2, "modengine2", sub, name), f"modengine2/modengine2/{sub}/{name}")
@@ -124,7 +125,7 @@ def main():
 * vgmstream (tools/) - ISC licence, see tools/vgmstream-COPYING.txt. Converts Wwise audio from your own God of War Ragnarok install. https://github.com/vgmstream/vgmstream
 * ModEngine2 (modengine2/) - MIT licence, see modengine2/LICENSE-MIT.txt. Loads gowring.dll into Elden Ring offline. https://github.com/soulsmods/ModEngine2
 * Microsoft Visual C++ runtime (modengine2/*.dll) - redistributable DLLs from Microsoft's vc_redist.x64.exe (sha256 %s), shipped app-local because ModEngine2 needs them and not every PC has the current version. https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files
-* eldenring / fromsoftware-rs (compiled into gowring.dll) - MIT OR Apache-2.0. https://github.com/vswarte/eldenring-rs
+* eldenring / fromsoftware-rs (compiled into gowring.dll) - MIT NON-AI licence (or Apache NON-AI), see licenses/eldenring-rs-LICENSE-MIT-NON-AI.txt: MIT terms plus no use of it to train or improve machine-learning models and no inclusion in such training data. https://github.com/vswarte/eldenring-rs
 * hudhook, imgui-rs, retour, rodio, png, serde - MIT/Apache-2.0 (compiled into gowring.dll / GowRing.exe)
 * The Ragnarok audio-pack layout follows gowr_soundtool by iArtorias (MIT). https://github.com/iArtorias/gowr_soundtool
 

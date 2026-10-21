@@ -7,7 +7,7 @@ world, with the Ragnarök HUD. Solo, offline, on its own save.
 > **Status: alpha, untested in the games.** See [docs/STATUS.md](docs/STATUS.md) for exactly what has and has not been proven.
 
 ## What you need
-* **Elden Ring** (Steam, PC, version 2.7.1.0–2.7.1.1) — the game you play in. Started offline through ModEngine2 by
+* **Elden Ring** (Steam, PC, version 2.7.2.0–2.7.2.1) — the game you play in. Started offline through ModEngine2 by
   [Melty](https://melty.gg), which installs ModEngine2 for you.
 * **God of War Ragnarök** (Steam, PC) — read from your own copy at *Play*; nothing from it is shipped or uploaded.
 

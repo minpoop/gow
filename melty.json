@@ -5,7 +5,7 @@
   {
    "role": "primary",
    "slug": "elden-ring",
-   "version": ">=2.7.1.0 <=2.7.1.1"
+   "version": ">=2.7.2.0 <=2.7.2.1"
   },
   {
    "role": "companion",
@@ -17,7 +17,7 @@
    "id": "main",
    "kind": "main",
    "label": "Kratos in the Lands Between",
-   "fileName": "GowRing-0.1.56.zip",
+   "fileName": "GowRing-0.1.57.zip",
    "required": true
   }
  ],
@@ -55,7 +55,7 @@
   },
   "done": {
    "file": "{managed}/GowRing/.melty-ready",
-   "contains": "gowring-0.1.56-prep-1"
+   "contains": "gowring-0.1.57-prep-1"
   },
   "failure": {
    "file": "{managed}/GowRing/.melty-failure.txt"
@@ -65,7 +65,7 @@
   "{localappdata}/GowRing"
  ],
  "notes": {
-  "beforeInstall": "Needs Elden Ring (Steam, PC, 2.7.1.0-2.7.1.1) and your own God of War Ragnarök (Steam, PC) installed. Runs offline through ModEngine2 with Easy Anti-Cheat off (Melty starts it): do not go online with this mod. Plays on its own save file, so your Elden Ring saves are not used; a backup of them is kept anyway. Alpha: untested in-game, see STATUS.md. Nothing from either game is shipped; art and sound are read from your own God of War Ragnarök when you press Play."
+  "beforeInstall": "Needs Elden Ring (Steam, PC, 2.7.2.0-2.7.2.1) and your own God of War Ragnarök (Steam, PC) installed. Runs offline through ModEngine2 with Easy Anti-Cheat off (Melty starts it): do not go online with this mod. Plays on its own save file, so your Elden Ring saves are not used; a backup of them is kept anyway. Alpha: untested in-game, see STATUS.md. Nothing from either game is shipped; art and sound are read from your own God of War Ragnarök when you press Play."
  },
  "test": {
   "checks": [

@@ -25,7 +25,7 @@ Step into the Lands Between as post-game Kratos. A new character on this mashup'
 - **Tweakable while you play.** The first launch writes `%LOCALAPPDATA%\GowRing\settings.json`; edit and save it with the game running to change Rage speed, damage the mod deals, HUD size and opacity, volume, Mimir's chattiness and the screen shake. A controls card is shown for the first 25 seconds in the world.
 
 ## What you need
-- **Elden Ring** on Steam (PC), version 2.7.1.0–2.7.1.1. Melty starts it through ModEngine2 with Easy Anti-Cheat off — stay offline.
+- **Elden Ring** on Steam (PC), version 2.7.2.0–2.7.2.1. Melty starts it through ModEngine2 with Easy Anti-Cheat off — stay offline.
 - **God of War Ragnarök** on Steam (PC). Its art and sound are read from *your own copy* when you press Play; nothing from either game is included in this download.
 
 ## Good to know (alpha)
