@@ -1,6 +1,6 @@
-Fifty-ninth alpha: Kratos's weapons on the new Elden Ring update, without the crash.
+Sixtieth alpha: Gjallarhorn is back.
 
-0.1.55 passed its test. The weapons loaded, but each one drew every version of itself at once.
+0.1.58 passed its test on the new Elden Ring update: Kratos, his axe, spear and shield all showed, and it ran the whole ten minutes.
 
 - **Elden Ring 2.7.2 (patch 1.17.2).** Steam updated Elden Ring, and the mod now needs this version: it finds the game's data through a table of addresses that changes with every patch. Older versions of the game are no longer supported. 0.1.57 crashed on entering the world because the patch also moved the game's list of nearby characters; this version reads it where it now is.
 
@@ -9,6 +9,6 @@ Fifty-ninth alpha: Kratos's weapons on the new Elden Ring update, without the cr
 - **Draupnir Spear.** One look instead of three, with its own butt instead of a stand-in wood, and no flag. Elden Ring has no cloth physics for it, so it would hang stiff.
 - **Hands on the handles.** The hand now closes on a plain part of each handle. The axe's handle is slimmed to an Elden Ring grip where the hand covers it, so the fingers no longer sink into it.
 - **Shield bash.** The shield has the hit point Elden Ring's shield attacks use.
-- **Gjallarhorn removed.** The black horn that hung on the pelt over the axe holster is gone.
+- **Gjallarhorn is back.** Heimdall's horn hangs on the pelt over the axe holster again. The spot there that looked wrong was the fur, not the horn.
 - **Fur on the cloak.** The fur by the claw on the upper back showed as grey blocks: it is made of strands on cards, and is now drawn see-through where the strands aren't, like the beard.
 - The first start after updating rebuilds Kratos's body and weapons.

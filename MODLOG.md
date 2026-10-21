@@ -460,3 +460,7 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - Shield: Ragnarök's face normal (away from the arm) now becomes -Z (it was +Z; side to -X, a turn), and the hand sits `SHIELD_HAND_DEPTH` (3 cm) behind the middle of its back instead of in the middle of its thickness: on the probe the shield spans z -0.105 to -0.028. Dummy 130 on the front face (-Z). WEAPON_BUILD 3.
 - Test 32c592ca of 0.1.58 (1 run, Elden Ring 2.7.2.0, Melty 1.0.132, first recorded run): **passed**, all 8 checks, ran the full 10:00, no crash on entering the world. Footage review (pass, kept by Melty): the creator shows Kratos with the plain metal Leviathan Axe (01:50) and the Guardian Shield; in the world at 04:16 with the HUD and the shield on his back; the spear forward with no flag (04:34, 07:10); the shield's front (hub and plate ring) facing out when raised (06:46), its inside seen from behind (02:20). The fur by the claw is too small in the footage to judge.
 
+## 0.1.58 tested; 0.1.59 — Gjallarhorn back (2026-10-21)
+- The player: "the fur by the claw is fur now so you can return the horn. the hands look about right for now." launcher.log: the fur (29) is cut out with `kratos_fur_sand_m_gen_1h`'s red as its coverage (84 % empty, 5 % solid; 13 % of the card drawn).
+- Heimdall's horn (94) is drawn again (`LEFT_OUT` removed): the "spot by the holster" was the fur drawn solid, not the horn. Body BUILD 15.
+
