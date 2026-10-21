@@ -26,8 +26,10 @@ a Linux container that has neither game. This page says exactly what was checked
 | Over-the-shoulder camera, HUD hide, stamina/HP upkeep | needs the game |
 | The D3D12 HUD overlay (hudhook) | cannot create a device here (Wine has no GPU/display); HUD *layout* is tested, rendering is not |
 | Audio playback | no sound device here |
-| Two-handing by default (0.1.61): the stance is written into the player's ChrAsm every frame, one-handed while L1 or guard is held so the shield comes up | needs the game; the DLL logs each switch and whether the game undoes it (`two_hand`), and stops for the session if it keeps undoing it |
-| The Blades of Chaos model (0.1.61, `explosive00` → `wp_a_9711` on the whip's carrier) | its base look (`bladea`, `handlea`, `pommela`) is chosen from texture names never yet seen on a player's PC; the build writes its probe to `weapon_probe/explosive00/` |
+| Two-handing by default (0.1.61): the stance is written into the player's ChrAsm every frame, one-handed while L1 or guard is held so the shield comes up | seen working in 0.1.61 (the log shows each switch, none undone; the shield came up on L1) |
+| The shield put away while two-handing (0.1.62): the left hand's selected slot switches to an empty left slot, and back to the shield's on guard | needs the game; logged under `two_hand`, stops for the session if the game keeps undoing it |
+| The second Blade (0.1.62): the Blades' part file holds the blade as model 0 and model 1, and the whip row of WepAbsorpPosParam puts model 1 in the left hand while two-handing | needs the game: whether Elden Ring draws a whip's model 1 |
+| The Blades of Chaos model (0.1.61, `explosive00` → `wp_a_9711` on the whip's carrier) | seen in 0.1.61: the first blade with its handle and pommel, in the right hand |
 | **Every God of War asset mapping** | the reader follows the community formats, but no real install was available. HUD textures are located by name in GoW WADs; Wwise media have numeric ids only, so Mimir's lines and the sound effects need `assets_map.json` filled from a `--diagnose` report of a real install |
 
 ## Not in this version at all

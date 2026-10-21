@@ -26,12 +26,14 @@ pub const SCALE: f32 = 0.92;
 /// shells and slabs, left out: the eye shadow border (3), a face layer (5), tear line (6), the snow flakes decal (76)
 /// and the eyes' outer shell (78).
 pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
-/// Materials made of strands on cards: the eyebrows (4), eyelashes (7), the cloak's fur (29; drawn solid it showed as
-/// grey blocks by the claw on the upper back), the fur under the bear cloak (69) and the long beard (86, 87). They are
-/// drawn
-/// with Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and
-/// left out otherwise.
-pub const CUT_OUT: [u16; 6] = [4, 7, 29, 69, 86, 87];
+/// Materials made of strands on cards: the eyebrows (4), eyelashes (7), the bear cloak (24; drawn solid its fur cards
+/// showed as black and white blocks in 0.1.61), the leather cloak's fur (29; drawn solid it showed as grey blocks by
+/// the claw on the upper back), the fur under the bear cloak (69) and the long beard (86, 87). They are drawn with
+/// Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and left
+/// out otherwise, except those in [`SOLID_IF_UNCUT`].
+pub const CUT_OUT: [u16; 7] = [4, 7, 24, 29, 69, 86, 87];
+/// Strand materials drawn solid when no coverage is found: the bear cloak (24) is the whole cloak, not a trim.
+pub const SOLID_IF_UNCUT: [u16; 1] = [24];
 /// The short goatee under the long beard (86, 87): left out when the long beard is drawn, which covers its place (it
 /// showed under it).
 pub const GOATEE: u16 = 89;
@@ -862,7 +864,7 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     // his materials (the see-through ones left out, and the strands too when they have no coverage), each with its
     // colour map or a neutral grey
     let long_beard = [86, 87].iter().any(|m| looks.get(m).is_some_and(|l| l.cut_out));
-    let used: Vec<u16> = outfit_materials(mesh, mg, outfit).into_iter().filter(|m| !CUT_OUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).filter(|m| !(long_beard && *m == GOATEE)).collect();
+    let used: Vec<u16> = outfit_materials(mesh, mg, outfit).into_iter().filter(|m| !CUT_OUT.contains(m) || SOLID_IF_UNCUT.contains(m) || looks.get(m).is_some_and(|l| l.cut_out)).filter(|m| !(long_beard && *m == GOATEE)).collect();
     // a draw not in root.lodpack is looked for in the other packs (the outfits' other parts are not all in it)
     let mut more = crate::lodpack::LodPacks::open(pack).ok();
     let (nodes, mut meshes, failed) = kratos_meshes(&rs, &records, gpu, &toc, &mut file, &mut more, [0.0; 3], skeleton, retargeted.as_ref(), &used)?;

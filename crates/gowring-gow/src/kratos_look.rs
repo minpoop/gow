@@ -276,11 +276,12 @@ pub struct Look {
 /// For each of `materials` (indices into the mesh's material table), its colour map scaled to at most `max_side` and
 /// its surface scaled to at most `max_surface`, and a line per material saying what was found. Those in `cut_out`
 /// (hair cards and the like) get their coverage in the colour map's alpha ([`cut_out_image`]) and list their textures
-/// in the line. Those in `dye` are dyed black ([`blacken`]). `buf` holds the start of r_heroa00.wad (its chunk table
-/// `es`), `wad_dir` the folder with the texture packs.
+/// in the line; those of them also in `solid` keep their plain colour map when no coverage is found (a whole cloak
+/// rather than none). Those in `dye` are dyed black ([`blacken`]). `buf` holds the start of r_heroa00.wad (its chunk
+/// table `es`), `wad_dir` the folder with the texture packs.
 #[allow(clippy::too_many_arguments)]
-pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32, dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
-    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, max_side, max_surface, &[], dye)
+pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], cut_out: &[u16], solid: &[u16], max_side: u32, max_surface: u32, dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
+    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, solid, max_side, max_surface, &[], dye)
 }
 
 /// [`outfit_looks`] for any model: the materials are indices into the table after its `mesh_chunk` (`MESH_<m>_0`).
@@ -288,8 +289,7 @@ pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16],
 /// [`crate::weapon_part::PartRules::reject`]) are passed over when a map is chosen, so a material layered with a
 /// variant's maps draws with its own.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
-pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], max_side: u32, max_surface: u32, skip: &[&str], dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
+pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], solid: &[u16], max_side: u32, max_surface: u32, skip: &[&str], dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
     let mut out = BTreeMap::new();
     let mut note = String::new();
     let bytes = |e: &Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
@@ -364,7 +364,14 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                     look.colour = Some(img);
                     look.cut_out = true;
                 }
-                None => note.push_str("no coverage found, left out"),
+                None => match colour.as_ref().filter(|_| solid.contains(&m)) {
+                    Some((img, _)) => {
+                        let img = crate::dds::downscale(img, max_side);
+                        note.push_str(&format!("no coverage found, drawn solid ({}x{})", img.w, img.h));
+                        look.colour = Some(img);
+                    }
+                    None => note.push_str("no coverage found, left out"),
+                },
             }
         } else {
             match colour_map(&ref_names) {
@@ -482,11 +489,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gowring-looks-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // no texture pack and no texture in the WAD: the note names the map that was chosen
-        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &[], &[]);
+        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, &[], &[]);
         assert!(plain.contains("0: axe02_base_ice_gen_0d failed"), "{plain}");
-        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], 64, 64, &["ice"], &[]);
+        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, &["ice"], &[]);
         assert!(skipped.contains("0: axe02_base_metal_gen_0d failed"), "{skipped}");
-        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], 64, 64, &[], &[]).1, "no MESH_kratosspear00_0");
+        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], &[], 64, 64, &[], &[]).1, "no MESH_kratosspear00_0");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

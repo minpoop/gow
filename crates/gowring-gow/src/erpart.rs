@@ -1113,8 +1113,20 @@ pub fn dcx_dflt(data: &[u8]) -> Vec<u8> {
 
 /// A whole armour part file (`<stem>.partsbnd.dcx`): the model and its textures under the paths the game expects.
 pub fn partsbnd(stem: &str, flver: Vec<u8>, tpf: Vec<u8>) -> Vec<u8> {
+    partsbnd_models(stem, vec![flver], tpf)
+}
+
+/// A part file with several models (at most four), as a weapon's: model `k` is file id 200 + k, named `<stem>.flver`,
+/// `<stem>_1.flver` and so on, each placed by its own dummies in the weapon's WepAbsorpPosParam row (the second of a
+/// pair, a scabbard).
+pub fn partsbnd_models(stem: &str, flvers: Vec<Vec<u8>>, tpf: Vec<u8>) -> Vec<u8> {
     let base = format!("N:\\GR\\data\\INTERROOT_win64\\parts\\{stem}\\{stem}");
-    dcx_dflt(&bnd4(&[(100, format!("{base}.tpf"), tpf), (200, format!("{base}.flver"), flver)]))
+    let mut files = vec![(100, format!("{base}.tpf"), tpf)];
+    for (k, f) in flvers.into_iter().take(4).enumerate() {
+        let suffix = if k == 0 { String::new() } else { format!("_{k}") };
+        files.push((200 + k as i32, format!("{base}{suffix}.flver"), f));
+    }
+    dcx_dflt(&bnd4(&files))
 }
 
 #[cfg(test)]

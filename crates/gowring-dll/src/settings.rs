@@ -48,6 +48,9 @@ pub struct Settings {
     /// Kratos holds his right-hand weapon in both hands, and the shield comes out (one-handed) only while the guard
     /// button is held.
     pub two_hand_by_default: bool,
+    /// While Kratos two-hands, the Guardian Shield is put away (his left hand switched to an empty weapon slot) instead
+    /// of hanging on his back; it comes out with the guard.
+    pub hide_stowed_shield: bool,
 }
 
 /// The six runic slots: (settings key, weapon, heavy?, the weapon's own pick).
@@ -102,12 +105,13 @@ impl Default for Settings {
             runics: OWN_RUNICS,
             black_bear_outfit: true,
             two_hand_by_default: true,
+            hide_stowed_shield: true,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 9;
+const FILE_VERSION: u32 = 10;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -136,6 +140,9 @@ fn render(s: &Settings) -> String {
 
   "two_hand_by_default": {two_hand},
   "_two_hand_by_default": "Kratos holds his weapon in both hands, and the Guardian Shield comes up only while you hold the guard button (L1); let go and he two-hands again. false = Elden Ring's own one-handed stance and two-hand toggle.",
+
+  "hide_stowed_shield": {hide_shield},
+  "_hide_stowed_shield": "While Kratos two-hands, the Guardian Shield is put away instead of hanging on his back, and comes out when you hold L1. It works by switching his left hand to an empty weapon slot, so keep one left slot empty. false = the shield hangs on his back.",
 {runic_lines}
   "hud_scale": {scale:?},
   "_hud_scale": "HUD size. 1.0 = normal, 1.3 = bigger, 0.8 = smaller (0.4 to 3.0).",
@@ -202,6 +209,7 @@ fn render(s: &Settings) -> String {
         ddm = s.debug_enemy_damage_multiplier,
         bear = s.black_bear_outfit,
         two_hand = s.two_hand_by_default,
+        hide_shield = s.hide_stowed_shield,
         runic_lines = runic_lines(s),
     )
 }
@@ -264,6 +272,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     runics: OWN_RUNICS,
     black_bear_outfit: true,
     two_hand_by_default: true,
+    hide_stowed_shield: true,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -321,6 +330,7 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     flag(&v, "health_stones", &mut s.health_stones);
     flag(&v, "black_bear_outfit", &mut s.black_bear_outfit);
     flag(&v, "two_hand_by_default", &mut s.two_hand_by_default);
+    flag(&v, "hide_stowed_shield", &mut s.hide_stowed_shield);
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
     num(&v, "debug_enemy_damage_multiplier", 1.0, 10.0, &mut s.debug_enemy_damage_multiplier);
     for (i, (key, ..)) in RUNIC_SLOTS.iter().enumerate() {
@@ -384,8 +394,8 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
         s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
-    // versions 3, 7, 8 and 9 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
-    // two-handing): re-rendering the file shows them with their notes
+    // versions 3 and 7-10 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
+    // two-handing; 10: the stowed shield): re-rendering the file shows them with their notes
     Some(render(&s))
 }
 
@@ -480,6 +490,7 @@ mod tests {
             runics: ["axe_ice_lance", "axe_frostfall", "blades_runic_light", "blades_scorched_arc", "spear_thunder_step", "spear_runic_heavy"],
             black_bear_outfit: false,
             two_hand_by_default: false,
+            hide_stowed_shield: false,
         };
         assert_eq!(parse(&render(&s)).unwrap(), s);
     }

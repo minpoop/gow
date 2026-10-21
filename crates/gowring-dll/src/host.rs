@@ -156,6 +156,15 @@ pub struct Bridge {
     arm_counts: (u32, u32),
     arm_stopped: bool,
     shield_until: f64,
+    /// The shield only while it guards (see `steer_left_hand`): whether the left hand was switched to an empty slot, the
+    /// slot last written, frames in a row the game undid it, writes and undos, whether it stopped for the session, and
+    /// the Guardian Shield's carrier rows.
+    shield_hidden: bool,
+    left_written: Option<u32>,
+    left_undone_run: u32,
+    left_counts: (u32, u32),
+    left_stopped: bool,
+    shield_rows: Vec<i32>,
     prev_player_hp: Option<i32>,
     prev_enemy_hp: HashMap<u64, i32>,
     prev_player_last_hit: u64,
@@ -225,6 +234,12 @@ impl Bridge {
             arm_counts: (0, 0),
             arm_stopped: false,
             shield_until: f64::NEG_INFINITY,
+            shield_hidden: false,
+            left_written: None,
+            left_undone_run: 0,
+            left_counts: (0, 0),
+            left_stopped: false,
+            shield_rows: Vec::new(),
             prev_player_hp: None,
             prev_enemy_hp: HashMap::new(),
             prev_player_last_hit: u64::MAX,
@@ -780,8 +795,12 @@ impl Bridge {
         if let Some(p) = wcm.main_player.as_mut() {
             // the guard button as the player holds it, before the masks below take anything out
             let held = bits_from_er(&p.chr_ins.modules.action_request.action_requests);
-            if !self.arm_stopped && crate::settings::get().two_hand_by_default {
-                self.steer_arm_style(p, held.has(ErAction::Guard) || held.has(ErAction::L1), now);
+            let st = crate::settings::get();
+            if !self.arm_stopped && st.two_hand_by_default {
+                self.steer_arm_style(p, held.has(ErAction::Guard) || held.has(ErAction::L1), st.hide_stowed_shield, now);
+            } else if self.shield_hidden {
+                // two-handing by default was turned off (or stopped): the shield comes back
+                self.steer_left_hand(p, true, now);
             }
             let ar = &mut p.chr_ins.modules.action_request;
             let stale = ActionBits(self.my_mask.0 & !new_mask.0);
@@ -889,8 +908,9 @@ impl Bridge {
     /// stance is written into both copies of the player's ChrAsm (the game data's and the character's) before the
     /// behaviour graph reads it, so the guard on that frame is the shield's. An empty-handed stance, an unarmed right
     /// hand and the left weapon in both hands (the player's own choice) are left alone. If the game undoes the stance
-    /// for `ARM_STYLE_GIVE_UP` frames in a row, it stops for the session.
-    fn steer_arm_style(&mut self, p: &mut PlayerIns, guard: bool, now: f64) {
+    /// for `ARM_STYLE_GIVE_UP` frames in a row, it stops for the session. With `hide_shield`, the shield is put away
+    /// while Kratos two-hands (`steer_left_hand`).
+    fn steer_arm_style(&mut self, p: &mut PlayerIns, guard: bool, hide_shield: bool, now: f64) {
         const ONE: u32 = ChrAsmArmStyle::OneHanded as u32;
         const BOTH: u32 = ChrAsmArmStyle::RightBothHands as u32;
         let pgd = unsafe { p.player_game_data.as_mut() };
@@ -917,15 +937,21 @@ impl Bridge {
         if guard {
             self.shield_until = now + SHIELD_LINGER_S;
         }
-        if !(ONE..=BOTH).contains(&style) || style == ChrAsmArmStyle::LeftBothHands as u32 {
-            return;
-        }
         let asm = &pgd.equipment.chr_asm;
         let right = asm.equipment_param_ids[asm.equipment.selected_slots.right_weapon_slot.min(2) as usize * 2 + 1];
-        if right <= 0 || right == UNARMED {
+        if !(ONE..=BOTH).contains(&style) || style == ChrAsmArmStyle::LeftBothHands as u32 || right <= 0 || right == UNARMED {
+            // a stance this leaves alone: the shield is out
+            if self.shield_hidden {
+                self.steer_left_hand(p, true, now);
+            }
             return;
         }
         let want = if now < self.shield_until { ONE } else { BOTH };
+        if hide_shield && !self.left_stopped {
+            self.steer_left_hand(p, want == ONE, now);
+        } else if self.shield_hidden {
+            self.steer_left_hand(p, true, now);
+        }
         if style == want && chr_style == want {
             return;
         }
@@ -946,6 +972,70 @@ impl Bridge {
                 arm_style_name(want),
                 if want == ONE { "guard held: the shield comes up" } else { "two-handed" },
                 self.arm_counts.0
+            );
+        }
+    }
+
+    /// The shield only while it guards: while Kratos two-hands, his left hand is switched to an empty weapon slot (a
+    /// left weapon not in use hangs on the back, and the Guardian Shield folds into his bracer in Ragnarök), and back
+    /// to the shield's slot when the guard comes up (`show`), in both copies of the ChrAsm as the stance is. Only
+    /// between those two slots: a left weapon the player picked is left alone, and nothing happens without an empty
+    /// left slot. If the game undoes the switch for `ARM_STYLE_GIVE_UP` frames in a row, the shield stays out for the
+    /// session.
+    fn steer_left_hand(&mut self, p: &mut PlayerIns, show: bool, now: f64) {
+        if self.shield_rows.is_empty() {
+            self.shield_rows = crate::params::carrier_rows("guardian_shield").into_iter().map(|r| r as i32).collect();
+        }
+        let pgd = unsafe { p.player_game_data.as_mut() };
+        let game = &mut pgd.equipment.chr_asm.equipment.selected_slots.left_weapon_slot as *mut u32;
+        let chr = &mut p.chr_asm.equipment.selected_slots.left_weapon_slot as *mut u32;
+        let (slot, chr_slot) = unsafe { (game.read(), chr.read()) };
+        if let Some(w) = self.left_written.take() {
+            if slot != w {
+                self.left_counts.1 += 1;
+                self.left_undone_run += 1;
+                if self.left_counts.1 <= 10 || self.left_counts.1 % 100 == 0 {
+                    crate::glog!("two_hand", "{now:.2}s the game changed the left hand's slot written last frame ({w}) to {slot} ({} undone of {} writes)", self.left_counts.1, self.left_counts.0);
+                }
+                if self.left_undone_run >= ARM_STYLE_GIVE_UP {
+                    self.left_stopped = true;
+                    self.shield_hidden = false;
+                    crate::glog!("two_hand", "the game undid the left hand's slot {ARM_STYLE_GIVE_UP} frames in a row: the shield stays out for this session");
+                    return;
+                }
+            } else {
+                self.left_undone_run = 0;
+            }
+        }
+        // left slots are ChrAsm slots 0, 2 and 4
+        let ids = pgd.equipment.chr_asm.equipment_param_ids;
+        let left = |s: u32| ids[(s.min(2) * 2) as usize];
+        let is_empty = |s: u32| left(s) <= 0 || left(s) == UNARMED;
+        let shield = (0..3u32).find(|s| left(*s) > 0 && self.shield_rows.contains(&left(*s)));
+        let empty = (0..3u32).find(|s| is_empty(*s));
+        let (Some(shield), Some(empty)) = (shield, empty) else { return };
+        // any empty slot counts as put away (the player may have cycled to another)
+        if slot != shield && !is_empty(slot) {
+            self.shield_hidden = false;
+            return;
+        }
+        let target = if show { shield } else if is_empty(slot) { slot } else { empty };
+        self.shield_hidden = target != shield;
+        if slot == target && chr_slot == target {
+            return;
+        }
+        unsafe {
+            game.write(target);
+            chr.write(target);
+        }
+        self.left_written = Some(target);
+        self.left_counts.0 += 1;
+        if self.left_counts.0 <= 10 || self.left_counts.0 % 200 == 0 {
+            crate::glog!(
+                "two_hand",
+                "{now:.2}s left hand slot {slot} (character's copy {chr_slot}) -> {target} ({}); write {}",
+                if show { "the shield comes out" } else { "the shield is put away" },
+                self.left_counts.0
             );
         }
     }

@@ -87,6 +87,9 @@ pub struct WeaponSpec {
     pub er_model: u16,
     pub shape: ShapeKind,
     pub rules: PartRules,
+    /// A pair, as the Blades: the part file holds the weapon twice, as model 0 and model 1 (`WP_A_<id>_1.flver`), and
+    /// gowring.dll places model 1 in the other hand.
+    pub paired: bool,
 }
 
 /// The weapons this version builds, each into its own Elden Ring model id.
@@ -97,6 +100,7 @@ pub const WEAPONS: &[WeaponSpec] = &[
         model: "axe00",
         er_model: 9710,
         shape: ShapeKind::Axe,
+        paired: false,
         // the first upgrade look's head and body (v1; the frost shell over each look's head is `blade02`), the plain
         // wrapped pommel (`axe02_down_01`), and the blue of each runic gem under the head; not the gold pommels, the
         // anniversary look, or the frost, ice, glow and runic layers
@@ -117,6 +121,8 @@ pub const WEAPONS: &[WeaponSpec] = &[
         er_model: BLADES_MODEL_ID,
         // a blade with its handle: the flat of the blade across X, as a spear's
         shape: ShapeKind::Spear,
+        // one blade per hand: Ragnarök draws the one model twice
+        paired: true,
         // the model holds five blade looks (`bladea` to `bladee`), as many handles and eight pommels, the damaged
         // Blades and the anniversary look; the base look is the first of each (not yet checked against a probe of
         // this model, which this build writes: when none matches, the other rules choose)
@@ -136,6 +142,7 @@ pub const WEAPONS: &[WeaponSpec] = &[
         model: "kratosspear00",
         er_model: 9712,
         shape: ShapeKind::Spear,
+        paired: false,
         // the base look (`set_body` and its head, `head_b`), the first butt (`handle_a`) and the runic gems; not the
         // other two looks, the other butts, the charged state (`tempcharge`) or the cloth flag (`fabric02`), which
         // would hang stiff without the cloth physics Elden Ring gives its own
@@ -155,6 +162,7 @@ pub const WEAPONS: &[WeaponSpec] = &[
         model: "kratosshield00",
         er_model: 9713,
         shape: ShapeKind::Shield,
+        paired: false,
         // the one model holds the guardian, blitz, megaBuster, parry, siege and spartan shields and their
         // anniversary versions; the Guardian Shield is the pieces drawn with `kratosshield00_base2` (125 pieces:
         // hub, spine and clasps, rim, and a ring of 32 wedge plates, each on its own joint), less four solid discs
@@ -1376,7 +1384,7 @@ pub fn build_weapon(spec: &WeaponSpec, buf: &[u8], es: &[Entry], wad_dir: &Path,
     // its materials' looks
     let used: Vec<u16> = draws.iter().map(|d| d.1).collect::<BTreeSet<u16>>().into_iter().collect();
     let t0 = std::time::Instant::now();
-    let (looks, look_note) = kratos_look::model_looks(buf, es, wad_dir, &mesh_name, &used, &[], kratos_part::MAX_TEXTURE, kratos_part::MAX_SURFACE, spec.rules.reject, &[]);
+    let (looks, look_note) = kratos_look::model_looks(buf, es, wad_dir, &mesh_name, &used, &[], &[], kratos_part::MAX_TEXTURE, kratos_part::MAX_SURFACE, spec.rules.reject, &[]);
     say(&mut lines, format!("looks in {:.1}s for materials {used:?}: {look_note}", t0.elapsed().as_secs_f32()));
     // the meshes, rigid on the root node
     let mut meshes: Vec<Mesh> = Vec::new();
@@ -1409,7 +1417,17 @@ pub fn build_weapon(spec: &WeaponSpec, buf: &[u8], es: &[Entry], wad_dir: &Path,
     say(&mut lines, format!("hit points: {}", dummy_lines.join(", ")));
     let flver = erpart::flver2_with(&nodes, &mats, &meshes, &dummies);
     let tpf = erpart::tpf(&textures);
-    let bnd = erpart::partsbnd(&er, flver.clone(), tpf);
+    let mut models = vec![flver.clone()];
+    if spec.paired {
+        // the other of the pair: the same model under its own root name
+        let mut second = nodes.clone();
+        if let Some(root) = second.first_mut() {
+            root.name = format!("{er}_1");
+        }
+        models.push(erpart::flver2_with(&second, &mats, &meshes, &dummies));
+        say(&mut lines, format!("a pair: model 1 ({er}_1) is the same blade, for the other hand"));
+    }
+    let bnd = erpart::partsbnd_models(&er, models, tpf);
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let files: Vec<(String, Vec<u8>)> = file_names(spec.er_model).into_iter().map(|n| (n, bnd.clone())).collect();
     let note = format!(
@@ -1510,6 +1528,11 @@ mod tests {
         let bnd = erpart::partsbnd(&stem(9710), vec![1, 2, 3], vec![4, 5]);
         let names = bnd_names(&dcx_data(&bnd));
         assert_eq!(names, ["N:\\GR\\data\\INTERROOT_win64\\parts\\WP_A_9710\\WP_A_9710.tpf", "N:\\GR\\data\\INTERROOT_win64\\parts\\WP_A_9710\\WP_A_9710.flver"]);
+        // a pair's second model is model 1, `_1`
+        assert!(weapon_spec("blades_of_chaos").unwrap().paired && WEAPONS.iter().filter(|w| w.paired).count() == 1);
+        let bnd = erpart::partsbnd_models(&stem(9711), vec![vec![1], vec![2]], vec![4, 5]);
+        let names = bnd_names(&dcx_data(&bnd));
+        assert_eq!(names[1..], ["N:\\GR\\data\\INTERROOT_win64\\parts\\WP_A_9711\\WP_A_9711.flver".to_string(), "N:\\GR\\data\\INTERROOT_win64\\parts\\WP_A_9711\\WP_A_9711_1.flver".to_string()]);
     }
 
     /// The data inside a DCX of stored zlib blocks (as [`erpart::dcx_dflt`] writes).

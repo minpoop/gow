@@ -31,6 +31,30 @@ const UNDER_KRATOS: [usize; 34] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
 /// the blade) but lose the reach the whip's animated chain gave, until the animation work.
 const WEAPON_MODELS: [(&str, u16); 4] = [("leviathan_axe", 9710), ("blades_of_chaos", 9711), ("draupnir_spear", 9712), ("guardian_shield", 9713)];
 
+/// Ported weapons whose part file holds a pair (the Blades of Chaos: the blade as model 0 and again as model 1).
+const PAIRED: [&str; 1] = ["blades_of_chaos"];
+
+/// Place model 1 of a paired weapon (its second blade) through the carrier's WepAbsorpPosParam row: in the other hand
+/// while the weapon is held in both hands (two-handing by default is Kratos's stance, so he holds one blade in each
+/// hand), and on the back at the other hang spot when one-handed (the left hand then holds the shield) or sheathed.
+/// The row is shared with the game's other weapons of the type (every whip), whose second models, if any, move with it.
+fn place_second_model(repo: &mut SoloParamRepository, weapon: &str, row: Option<u32>) -> String {
+    let Some(absorp) = row.and_then(|r| repo.get::<EquipParamWeapon>(r)).map(|r| r.absorp_param_id()) else { return format!("{weapon}: no carrier row for its second model") };
+    if absorp < 0 {
+        return format!("{weapon}: absorpParamId {absorp}, no row to place its second model with");
+    }
+    let Some(a) = repo.get_mut::<WepAbsorpPosParam>(absorp as u32) else { return format!("{weapon}: no WepAbsorpPosParam row {absorp}") };
+    let was = [a.right_1(), a.left_1(), a.both_1(), a.left_both_1(), a.right_hang_1(), a.left_hang_1()];
+    let (right, left, right_hang, left_hang) = (a.right_0(), a.left_0(), a.right_hang_0(), a.left_hang_0());
+    a.set_both_1(left);
+    a.set_left_both_1(right);
+    a.set_right_1(left_hang);
+    a.set_left_1(right_hang);
+    a.set_right_hang_1(left_hang);
+    a.set_left_hang_1(right_hang);
+    format!("{weapon}: second model placed by WepAbsorpPosParam {absorp}: both hands -> left hand {left}, one hand or sheathed -> the other hang spot {left_hang} (model 1 was right, left, both, leftBoth, rightHang, leftHang {was:?})")
+}
+
 /// The one-time weapon report reads BehaviorParam_PC once and AtkParam_Pc per attack; these caps keep it short even on
 /// a regulation far larger than the vanilla one (about 13,000 behaviours), since it runs inside the param patch.
 const REPORT_MAX_BEHAVIOURS: usize = 200_000;
@@ -459,6 +483,9 @@ pub fn apply() -> Result<Carriers, String> {
         } else {
             notes.push(format!("{weapon} now shows wp_a_{model:04} (was: {})", was.join(", ")));
         }
+        if PAIRED.contains(&weapon) {
+            notes.push(place_second_model(repo, weapon, carriers.get(weapon).and_then(|r| r.first().copied())));
+        }
     }
     // ---- the ten starting classes become Kratos ----------------------------------------------------------------------------
     let (axe, blades, spear, shield) = (rows["leviathan_axe"] as i32, rows["blades_of_chaos"] as i32, rows["draupnir_spear"] as i32, rows["guardian_shield"] as i32);
@@ -507,6 +534,7 @@ mod tests {
         // every weapon has its own model, the Blades included
         assert!(WEAPON_MODELS.iter().all(|(_, m)| (9710..=9713).contains(m)));
         assert!(WEAPON_MODELS.contains(&("blades_of_chaos", 9711)));
+        assert!(PAIRED.iter().all(|p| WEAPON_MODELS.iter().any(|(w, _)| w == p)));
         let mut models: Vec<u16> = WEAPON_MODELS.iter().map(|(_, m)| *m).collect();
         models.sort_unstable();
         models.dedup();
