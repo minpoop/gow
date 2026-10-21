@@ -53,6 +53,14 @@ pub struct PartRules {
     /// The parts to use, once picked from a probe the way the body's outfit was; None until then (the rules below
     /// choose).
     pub parts: Option<&'static [u16]>,
+    /// The base look's colour maps: a model holds every upgrade look, attachment and imbued state of its weapon on top
+    /// of each other (the axe five whole axes, each in a frost shell, 27 pommel knobs and seven colours of each runic
+    /// gem), so a part is kept only when the colour map of every material it draws names one of these (anywhere in
+    /// the name). When none does (another game version's names), the rules below choose alone.
+    pub only: &'static [&'static str],
+    /// Parts drawn with the base look's maps that are not part of it, by their index in the model (checked against a
+    /// player's probe): the Guardian Shield's four solid centre discs, which would cover its own hub.
+    pub leave_out: &'static [u16],
     /// Keep only the parts whose materials name one of these (none: no such need).
     pub require: &'static [&'static str],
     /// Variant markers: a material whose every colour map carries one draws a variant (a part drawn mostly so is
@@ -88,9 +96,18 @@ pub const WEAPONS: &[WeaponSpec] = &[
         model: "axe00",
         er_model: 9710,
         shape: ShapeKind::Axe,
-        // the base handle and pommel (axe02_, kratosaxe00_) over the swappable ones (axe04_); not the gold pommels,
-        // the anniversary look, or the frost, ice, glow and runic layers drawn over the head
-        rules: PartRules { parts: None, require: &[], reject: &["gold", "anniver", "frost", "ice", "glow", "runic"], prefer: &["axe02", "axe00"], over: &["axe04"] },
+        // the first upgrade look's head and body (v1; the frost shell over each look's head is `blade02`), the plain
+        // wrapped pommel (`axe02_down_01`), and the blue of each runic gem under the head; not the gold pommels, the
+        // anniversary look, or the frost, ice, glow and runic layers
+        rules: PartRules {
+            parts: None,
+            only: &["kratosaxe_head_v1_", "kratosaxe_body_v1_", "axe02_down_01_gen", "blue_07_gen", "blue_14_gen"],
+            leave_out: &[],
+            require: &[],
+            reject: &["gold", "anniver", "frost", "ice", "glow", "runic"],
+            prefer: &["axe02", "axe00"],
+            over: &["axe04"],
+        },
     },
     WeaponSpec {
         weapon: "draupnir_spear",
@@ -98,7 +115,18 @@ pub const WEAPONS: &[WeaponSpec] = &[
         model: "kratosspear00",
         er_model: 9712,
         shape: ShapeKind::Spear,
-        rules: PartRules { parts: None, require: &[], reject: &["thrown", "anniver"], prefer: &[], over: &[] },
+        // the base look (`set_body` and its head, `head_b`), the first butt (`handle_a`) and the runic gems; not the
+        // other two looks, the other butts, the charged state (`tempcharge`) or the cloth flag (`fabric02`), which
+        // would hang stiff without the cloth physics Elden Ring gives its own
+        rules: PartRules {
+            parts: None,
+            only: &["kratosspear00_set_body_gen", "kratosspear00_set_head_b_", "kratosspear00_set_handle_a_", "red_09_gen", "snow_gen"],
+            leave_out: &[],
+            require: &[],
+            reject: &["thrown", "anniver"],
+            prefer: &[],
+            over: &[],
+        },
     },
     WeaponSpec {
         weapon: "guardian_shield",
@@ -107,8 +135,10 @@ pub const WEAPONS: &[WeaponSpec] = &[
         er_model: 9713,
         shape: ShapeKind::Shield,
         // the one model holds the guardian, blitz, megaBuster, parry, siege and spartan shields and their
-        // anniversary versions
-        rules: PartRules { parts: None, require: &["guardian"], reject: &["anniver"], prefer: &[], over: &[] },
+        // anniversary versions; the Guardian Shield is the pieces drawn with `kratosshield00_base2` (125 pieces:
+        // hub, spine and clasps, rim, and a ring of 32 wedge plates, each on its own joint), less four solid discs
+        // (247-250) as wide as its hub that would cover it
+        rules: PartRules { parts: None, only: &["kratosshield00_base2"], leave_out: &[247, 248, 249, 250], require: &["guardian"], reject: &["anniver"], prefer: &[], over: &[] },
     },
 ];
 
@@ -301,7 +331,40 @@ pub fn choose_parts(rules: &PartRules, shape: ShapeKind, parts: &[PartView], ref
         }
         cands.push(p);
     }
-    if rules.parts.is_none() && !rules.require.is_empty() && !cands.is_empty() {
+    let colour = |m: u16| refs.get(&m).and_then(|r| crate::kratos_look::colour_map(r)).map(|t| t.to_ascii_lowercase()).unwrap_or_default();
+    let mut base_look = false;
+    if rules.parts.is_none() && !rules.only.is_empty() {
+        let base = |p: &PartView| p.draws.iter().filter(|d| drawn(d.1)).all(|d| rules.only.iter().any(|o| colour(d.1).contains(&o.to_ascii_lowercase())));
+        let (keep, drop): (Vec<&PartView>, Vec<&PartView>) = cands.iter().partition(|p| base(p) && !rules.leave_out.contains(&p.index));
+        if keep.is_empty() {
+            notes.push(format!("no part draws only the base look's maps {:?}: the other rules choose", rules.only));
+        } else {
+            for p in drop {
+                c.dropped.push((p.index, "not the base look (another upgrade look, attachment or state)".into()));
+            }
+            // the same piece drawn again with another material carrying the same maps (another state of a gem)
+            let mut seen: Vec<(&PartView, Vec<String>)> = Vec::new();
+            cands.clear();
+            for p in keep {
+                let maps: Vec<String> = p.draws.iter().filter(|d| drawn(d.1)).map(|d| colour(d.1)).collect();
+                let same = seen.iter().find(|(q, m)| {
+                    *m == maps
+                        && q.draws.iter().map(|d| d.1).filter(|m| drawn(*m)).ne(p.draws.iter().map(|d| d.1).filter(|m| drawn(*m)))
+                        && q.bounds.zip(p.bounds).is_some_and(|(a, b)| (0..3).all(|k| (a.0[k] - b.0[k]).abs() < 1e-3 && (a.1[k] - b.1[k]).abs() < 1e-3))
+                });
+                match same {
+                    Some((q, _)) => c.dropped.push((p.index, format!("the same piece as part {} (another state of it)", q.index))),
+                    None => {
+                        seen.push((p, maps));
+                        cands.push(p);
+                    }
+                }
+            }
+            notes.push(format!("the base look {:?}: {} part(s)", rules.only, cands.len()));
+            base_look = true;
+        }
+    }
+    if rules.parts.is_none() && !base_look && !rules.require.is_empty() && !cands.is_empty() {
         let named = |p: &PartView| names(p).iter().any(|t| rules.require.iter().any(|m| names_marker(t, m)));
         let matching: Vec<&PartView> = cands.iter().copied().filter(|p| named(p)).collect();
         let discs = cands.iter().filter(|p| p.bounds.as_ref().is_some_and(disc_shaped)).count();
@@ -331,7 +394,7 @@ pub fn choose_parts(rules: &PartRules, shape: ShapeKind, parts: &[PartView], ref
             }
         }
     }
-    if rules.parts.is_none() && !rules.prefer.is_empty() {
+    if rules.parts.is_none() && !base_look && !rules.prefer.is_empty() {
         let any = |p: &PartView, ms: &[&str]| names(p).iter().any(|t| ms.iter().any(|m| names_marker(t, m)));
         if cands.iter().any(|p| any(p, rules.prefer)) {
             let (drop, keep): (Vec<&PartView>, Vec<&PartView>) = cands.iter().partition(|p| any(p, rules.over) && !any(p, rules.prefer));
@@ -572,6 +635,44 @@ fn section_centre(g: &Geometry, u: V3, t: f64) -> Option<V3> {
     }
 }
 
+/// How wide the model is where the plane square to `u` at `t` cuts it: the larger side of the cut's box across `u`
+/// (None when the plane misses it).
+fn section_span(g: &Geometry, u: V3, t: f64) -> Option<f64> {
+    let (a, b) = (across(if u[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }, u), cross(u, across(if u[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }, u)));
+    let p = |i: u32| g.positions.get(i as usize).map(|p| p.map(|x| x as f64));
+    let mut box2 = [f64::MAX, f64::MIN, f64::MAX, f64::MIN];
+    for tri in &g.triangles {
+        let (Some(x0), Some(x1), Some(x2)) = (p(tri[0]), p(tri[1]), p(tri[2])) else { continue };
+        for (x, y) in [(x0, x1), (x1, x2), (x2, x0)] {
+            let (tx, ty) = (dot(x, u) - t, dot(y, u) - t);
+            if tx * ty <= 0.0 && tx != ty {
+                let f = tx / (tx - ty);
+                let c: V3 = std::array::from_fn(|k| x[k] + f * (y[k] - x[k]));
+                let (pa, pb) = (dot(c, a), dot(c, b));
+                box2 = [box2[0].min(pa), box2[1].max(pa), box2[2].min(pb), box2[3].max(pb)];
+            }
+        }
+    }
+    (box2[0] <= box2[1]).then(|| (box2[1] - box2[0]).max(box2[3] - box2[2]))
+}
+
+/// How wide a handle Elden Ring's closed hand holds: its fist closes to its own weapons' grips, so a thicker handle
+/// (the Leviathan Axe's is 5.8 cm where the hand goes) has the fingers sink into it.
+pub const GRIP_WIDTH: f32 = 0.034;
+
+/// A position in Elden Ring's weapon space with the handle slimmed where the hand covers it: within 6 cm of the grip
+/// along the length, fading out by 10 cm, points within 6 cm of the handle's line move toward it by `k` (the grip's
+/// width over [`GRIP_WIDTH`], at most 1).
+pub fn thin_grip(p: [f32; 3], k: f32) -> [f32; 3] {
+    let along = p[1].abs();
+    if k >= 1.0 || along >= 0.10 || p[0].hypot(p[2]) > 0.06 {
+        return p;
+    }
+    let w = if along <= 0.06 { 1.0 } else { let t = (0.10 - along) / 0.04; t * t * (3.0 - 2.0 * t) };
+    let f = 1.0 - (1.0 - k) * w;
+    [p[0] * f, p[1], p[2] * f]
+}
+
 /// The lowest and highest of the positions along `ax`.
 fn extent(g: &Geometry, ax: V3) -> (f64, f64) {
     g.positions.iter().map(|p| dot(p.map(|x| x as f64), ax)).fold((f64::MAX, f64::MIN), |(lo, hi), t| (lo.min(t), hi.max(t)))
@@ -660,8 +761,10 @@ impl Pose {
 
 /// How near an end of its length the origin must be to count as the grip: within a third of it.
 pub const NEAR_END: f64 = 1.0 / 3.0;
-/// Where the grip goes when the origin is not one: this share of the length in from the end opposite the head.
+/// Where the grip goes when the origin is not one: this share of the length in from the end opposite the head, or
+/// the thinnest section within `GRIP_RANGE` of it.
 pub const GRIP_IN: f64 = 0.15;
+pub const GRIP_RANGE: (f64, f64) = (0.08, 0.25);
 
 fn v3s(v: V3) -> String {
     format!("({:.3}, {:.3}, {:.3})", v[0], v[1], v[2])
@@ -729,7 +832,10 @@ pub fn orient(shape: ShapeKind, g: &Geometry, scale_by: f32) -> Result<Pose, Str
             let s = g.surface();
             let low_area: f64 = s.iter().filter(|(c, _)| dot(*c, u0) < mid).map(|x| x.1).sum();
             let high_area: f64 = s.iter().filter(|(c, _)| dot(*c, u0) >= mid).map(|x| x.1).sum();
-            let head_high = high_area >= low_area;
+            // the head: the end farther from the origin, where Ragnarök puts it (axe00 and kratosspear00 both have
+            // their origin nearer the butt, about where Kratos holds them); for a model without one inside it, the
+            // end with more surface (a spear's slim blade can have less than its butt)
+            let head_high = if inside && (hi + lo).abs() > 0.02 * len { hi + lo > 0.0 } else { high_area >= low_area };
             note.push(format!("length {len:.3} m along {}{}", v3s(u0), if snapped { " (a coordinate axis)" } else { "" }));
             let (from_lo, from_hi) = (-lo, hi);
             let u: V3;
@@ -746,7 +852,20 @@ pub fn orient(shape: ShapeKind, g: &Geometry, scale_by: f32) -> Result<Pose, Str
                 // the grip a little in from the end without the head, in the middle of the cross-section there
                 u = if head_high { u0 } else { scale(u0, -1.0) };
                 let start = if head_high { lo } else { hi };
-                let t = start + if head_high { GRIP_IN * len } else { -GRIP_IN * len };
+                // where the hand closes: the thinnest section within GRIP_RANGE of the end without the head (a hand on
+                // a band or a flare sinks into it), the nearest to GRIP_IN among equals
+                let at = |share: f64| start + if head_high { share * len } else { -share * len };
+                let steps = ((GRIP_RANGE.1 - GRIP_RANGE.0) * len / 0.005).ceil().max(1.0) as usize;
+                let best = (0..=steps)
+                    .map(|k| GRIP_RANGE.0 + (GRIP_RANGE.1 - GRIP_RANGE.0) * k as f64 / steps as f64)
+                    .chain(std::iter::once(GRIP_IN))
+                    .filter_map(|share| section_span(g, u0, at(share)).map(|w| (share, w)))
+                    .min_by(|a, b| (a.1 + 0.05 * (a.0 - GRIP_IN).abs()).total_cmp(&(b.1 + 0.05 * (b.0 - GRIP_IN).abs())));
+                let share = best.map_or(GRIP_IN, |b| b.0);
+                if let Some((s, w)) = best {
+                    note.push(format!("the handle is thinnest {:.0} % in ({:.1} cm across)", 100.0 * s, 100.0 * w));
+                }
+                let t = at(share);
                 let centre = section_centre(g, u0, t).unwrap_or_else(|| {
                     let mean: V3 = std::array::from_fn(|k| g.positions.iter().map(|p| p[k] as f64).sum::<f64>() / g.positions.len().max(1) as f64);
                     mean
@@ -755,7 +874,7 @@ pub fn orient(shape: ShapeKind, g: &Geometry, scale_by: f32) -> Result<Pose, Str
                 grip = sub(centre, scale(u0, dot(centre, u0) - t));
                 note.push(format!(
                     "grip: {:.0} % in from the end without the head (the origin is {}), at {}",
-                    GRIP_IN * 100.0,
+                    share * 100.0,
                     if inside { format!("{:.0} % of the length from the nearer end", 100.0 * from_lo.min(from_hi) / len) } else { "outside the model".into() },
                     v3s(grip)
                 ));
@@ -1219,6 +1338,14 @@ pub fn build_weapon(spec: &WeaponSpec, buf: &[u8], es: &[Entry], wad_dir: &Path,
         Err(e) => return Ok(refuse(&mut lines, &mut probe, format!("it does not look like the weapon: {e}"))),
     };
     say(&mut lines, format!("Elden Ring shape: {size}"));
+    // the handle slimmed where the hand closes (not the shield, held by its own strap)
+    let grip_k = match spec.shape {
+        ShapeKind::Shield => 1.0,
+        _ => section_span(&placed, [0.0, 1.0, 0.0], 0.0).map_or(1.0, |w| (GRIP_WIDTH as f64 / w).min(1.0) as f32),
+    };
+    if grip_k < 1.0 {
+        say(&mut lines, format!("grip: the handle slimmed to {:.1} cm where the hand closes (x{grip_k:.2}, fading out 6 to 10 cm from it)", 100.0 * GRIP_WIDTH));
+    }
     // its materials' looks
     let used: Vec<u16> = draws.iter().map(|d| d.1).collect::<BTreeSet<u16>>().into_iter().collect();
     let t0 = std::time::Instant::now();
@@ -1228,7 +1355,7 @@ pub fn build_weapon(spec: &WeaponSpec, buf: &[u8], es: &[Entry], wad_dir: &Path,
     let mut meshes: Vec<Mesh> = Vec::new();
     for (k, m) in &draws {
         let Some(material) = used.iter().position(|u| u == m) else { continue };
-        meshes.push(kratos_part::draw_mesh(&decoded[k], material as u32, 0, |_, p, n| (pose.place(p), pose.turn(n), [0; 4], [1.0, 0.0, 0.0, 0.0])));
+        meshes.push(kratos_part::draw_mesh(&decoded[k], material as u32, 0, |_, p, n| (thin_grip(pose.place(p), grip_k), pose.turn(n), [0; 4], [1.0, 0.0, 0.0, 0.0])));
     }
     let root = Node { name: er.clone(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 | 2 };
     let (nodes, meshes) = kratos_part::merge_by_material_named(vec![root], meshes, 1, &format!("{er}_mesh"));
@@ -1436,7 +1563,7 @@ mod tests {
         ];
         let refs = refs_of(&[
             (0, &["TX_death01_112E6D2408347E77", "TX_kratosaxe_body_v1_gen_0d_0123456789ABCDEF", "TX_axe_frost_basiclvl1_alt_0123456789ABCDEF"]),
-            (1, &["TX_axe02_handle01_gen_0d_0123456789ABCDEF"]),
+            (1, &["TX_axe02_down_01_gen_0d_0123456789ABCDEF"]),
             (2, &["TX_axe04_down_blade_gen_0d_0123456789ABCDEF"]),
             (3, &["TX_axe02_down_01_gold_gen_0d_0123456789ABCDEF"]),
             (4, &["height_mesh_ps_00002206"]),
@@ -1451,7 +1578,7 @@ mod tests {
         assert_eq!(c.skipped_draws.iter().map(|d| (d.0, d.1)).collect::<Vec<_>>(), [(11, 5), (18, 7)]);
         assert!(c.skipped_draws[1].2.contains("ice"), "{:?}", c.skipped_draws);
         let why = |p: u16| c.dropped.iter().find(|d| d.0 == p).map(|d| d.1.clone()).unwrap_or_default();
-        assert!(why(2).contains("axe04"), "{}", why(2));
+        assert!(why(2).contains("not the base look"), "{}", why(2));
         assert!(why(3).contains("gold"), "{}", why(3));
         assert!(why(4).contains("no textures"), "{}", why(4));
         assert!(why(5).contains("anniver"), "{}", why(5));
@@ -1459,6 +1586,23 @@ mod tests {
         assert!(why(7).contains("decoded"), "{}", why(7));
         assert!(why(9).contains("gold") && why(9).contains("40 of its 44 triangles"), "{}", why(9));
         assert!(c.note.starts_with("3 of 10 parts kept [0, 1, 8]"), "{}", c.note);
+        // another upgrade look, its frost shell, and a runic gem drawn again in another colour state: dropped
+        let more = vec![view(0, &[(10, 0)], b), view(10, &[(30, 8)], b), view(11, &[(31, 9)], b), view(12, &[(32, 10)], Some(([0.0; 3], [0.02; 3]))), view(13, &[(33, 11)], Some(([0.0; 3], [0.02; 3])))];
+        let more_refs = refs_of(&[
+            (0, &["TX_kratosaxe_body_v1_gen_0d_0123456789ABCDEF"]),
+            (8, &["TX_kratosaxe_body_v2_gen_0d_0123456789ABCDEF"]),
+            (9, &["TX_blade02_d_CE99FF98BE11CD9F"]),
+            (10, &["TX_blue_07_gen_6d_15C6937243D9FD28"]),
+            (11, &["TX_blue_07_gen_6d_15C6937243D9FD28"]),
+        ]);
+        let c = choose_parts(rules, ShapeKind::Axe, &more, &more_refs);
+        assert_eq!(c.kept, vec![0, 12], "{}", c.note);
+        assert!(c.dropped.iter().any(|d| d.0 == 13 && d.1.contains("same piece as part 12")), "{:?}", c.dropped);
+        // names of another game version: the other rules choose
+        let elsewhere = PartRules { only: &["no_such_map"], ..*rules };
+        let c = choose_parts(&elsewhere, ShapeKind::Axe, &parts, &refs);
+        assert_eq!(c.kept, vec![0, 1, 8], "{}", c.note);
+        assert!(c.note.contains("the other rules choose") && c.dropped.iter().any(|d| d.0 == 2 && d.1.contains("axe04")), "{}", c.note);
         // a part list in the rules is taken as it is
         let listed = PartRules { parts: Some(&[1, 2]), ..*rules };
         assert_eq!(choose_parts(&listed, ShapeKind::Axe, &parts, &refs).kept, vec![1, 2]);
@@ -1545,6 +1689,13 @@ mod tests {
         assert!(close(pose.place([0.0, -0.35, 0.0]), [0.0, 0.108, 0.0], 1e-4));
         assert!(close(pose.place([0.26, 0.37, 0.0]), [-0.26, -(0.72 - 0.108), 0.0], 1e-4), "{}", pose.note);
         assert!(pose.note.contains("15 % in from the end without the head"), "{}", pose.note);
+        // a 5 cm band where the hand would go: the grip moves off it, onto the plain handle
+        let mut banded = g.clone();
+        cuboid(&mut banded, [-0.025, -0.255, -0.025], [0.025, -0.225, 0.025]);
+        let pose = orient(ShapeKind::Axe, &banded, 1.0).unwrap();
+        let up = pose.grip[1] + 0.35;
+        assert!(!(0.12..=0.13).contains(&up) && (0.05..=0.18).contains(&up), "{up}: {}", pose.note);
+        assert!(pose.note.contains("thinnest") && pose.note.contains("3.0 cm across"), "{}", pose.note);
     }
 
     #[test]
@@ -1674,6 +1825,18 @@ mod tests {
     }
 
     #[test]
+    fn the_handle_is_slimmed_only_where_the_hand_closes() {
+        // at the grip fully, fading out from 6 to 10 cm along it, and not away from the handle's line
+        assert_eq!(thin_grip([0.03, 0.0, -0.02], 0.5), [0.015, 0.0, -0.01]);
+        assert_eq!(thin_grip([0.03, 0.06, 0.0], 0.5), [0.015, 0.06, 0.0]);
+        let mid = thin_grip([0.03, -0.08, 0.0], 0.5);
+        assert!((mid[0] - 0.0225).abs() < 1e-6, "{mid:?}");
+        assert_eq!(thin_grip([0.03, 0.1, 0.0], 0.5), [0.03, 0.1, 0.0]);
+        assert_eq!(thin_grip([0.2, 0.0, 0.0], 0.5), [0.2, 0.0, 0.0]);
+        assert_eq!(thin_grip([0.03, 0.0, 0.0], 1.0), [0.03, 0.0, 0.0]);
+    }
+
+    #[test]
     fn principal_axes_of_a_symmetric_matrix_come_out_largest_first() {
         let e = eigen_sym3([[2.0, 1.0, 0.0], [1.0, 2.0, 0.0], [0.0, 0.0, 0.5]]);
         assert!((e[0].0 - 3.0).abs() < 1e-9 && (e[1].0 - 1.0).abs() < 1e-9 && (e[2].0 - 0.5).abs() < 1e-9, "{e:?}");
@@ -1800,7 +1963,7 @@ mod tests {
         // handle, head, a gold pommel, a shadow shape, and a draw in a pack that is not there
         let (mesh, mg, gpu) = model(&[(0, &handle, 0), (1, &head, 0), (2, &pommel, 0), (3, &handle, 0), (1, &head, 0xABCD)]);
         let mats = ["MAT_AAAA000000000001", "MAT_AAAA000000000002", "MAT_AAAA000000000003", "MAT_AAAA000000000004"];
-        let refs: [&[&str]; 4] = [&["TX_death01_112E6D2408347E77", "TX_kratosaxe00_int9_handlea_gen_0d_0123456789ABCDEF"], &["TX_kratosaxe_body_v1_gen_0d_0123456789ABCDEF", "TX_kratosaxe_body_v1_gen_0n_0123456789ABCDEF"], &["TX_axe02_down_01_gold_gen_0d_0123456789ABCDEF"], &["height_mesh_ps_00002206"]];
+        let refs: [&[&str]; 4] = [&["TX_death01_112E6D2408347E77", "TX_kratosaxe_head_v1_gen_0d_0123456789ABCDEF"], &["TX_kratosaxe_body_v1_gen_0d_0123456789ABCDEF", "TX_kratosaxe_body_v1_gen_0n_0123456789ABCDEF"], &["TX_axe02_down_01_gold_gen_0d_0123456789ABCDEF"], &["height_mesh_ps_00002206"]];
         let mut w = Wad { buf: Vec::new(), es: Vec::new() };
         w.add("MG_axe00_0_gpu", 29, gpu);
         w.add("MESH_axe00_0", 1, mesh);
@@ -1827,6 +1990,84 @@ mod tests {
         println!("{note}");
         for (name, bytes) in files.iter().chain(probe.files.iter().filter(|f| f.0.ends_with(".obj") || f.0.ends_with(".tsv"))) {
             std::fs::write(Path::new(&out).join(name), bytes).unwrap();
+        }
+    }
+
+    /// Chooses, turns and checks each weapon from a player's weapon probe (its `parts.tsv`, `refs/` and
+    /// `ragnarok_raw.obj`), and writes `<model>_final.obj` (Elden Ring's weapon space, the hit points as comments) for
+    /// looking at: `GOWRING_WEAPON_PROBE=dir GOWRING_ERPART_OUT=out cargo test -p gowring-gow weapons_from_a_probe --
+    /// --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn weapons_from_a_probe() {
+        let Ok(dir) = std::env::var("GOWRING_WEAPON_PROBE") else { return };
+        let out = std::env::var("GOWRING_ERPART_OUT").ok();
+        for spec in WEAPONS {
+            let root = Path::new(&dir).join(spec.model);
+            let Ok(tsv) = std::fs::read_to_string(root.join("parts.tsv")) else { continue };
+            let num = |t: &str| -> [f32; 3] {
+                let v: Vec<f32> = t.split(',').filter_map(|x| x.parse().ok()).collect();
+                [v.first().copied().unwrap_or(0.0), v.get(1).copied().unwrap_or(0.0), v.get(2).copied().unwrap_or(0.0)]
+            };
+            let views: Vec<PartView> = tsv
+                .lines()
+                .skip(1)
+                .filter_map(|l| {
+                    let c: Vec<&str> = l.split('\t').collect();
+                    let (first, n, tris): (usize, usize, u32) = (c.get(4)?.parse().ok()?, c.get(5)?.parse().ok()?, c.get(9)?.parse().ok()?);
+                    let mats: Vec<u16> = c.get(12)?.split(',').filter_map(|m| m.parse().ok()).collect();
+                    let draws = (0..n).map(|k| (first + k, mats.get(k).or(mats.last()).copied().unwrap_or(0), tris / n.max(1) as u32)).collect();
+                    let decoded = !c.get(7)?.starts_with('0');
+                    Some(PartView { index: c[0].parse().ok()?, draws, bounds: decoded.then(|| (num(c[10]), num(c[11]))) })
+                })
+                .collect();
+            let mut refs: BTreeMap<u16, Vec<String>> = BTreeMap::new();
+            for e in std::fs::read_dir(root.join("refs")).unwrap().flatten() {
+                let name = e.file_name().to_string_lossy().to_string();
+                let Some(k) = name.split('_').next().and_then(|k| k.parse::<u16>().ok()) else { continue };
+                refs.insert(k, crate::kratos::references(&std::fs::read(e.path()).unwrap()).into_iter().map(|r| r.1).collect());
+            }
+            let c = choose_parts(&spec.rules, spec.shape, &views, &refs);
+            println!("== {}: {}", spec.name, c.note.chars().take(600).collect::<String>());
+            // the kept parts' geometry from the raw OBJ (one group per part)
+            let obj = std::fs::read_to_string(root.join("ragnarok_raw.obj")).unwrap();
+            let (mut all, mut group, mut chosen) = (Vec::<[f32; 3]>::new(), String::new(), Geometry::default());
+            let mut map: BTreeMap<u32, u32> = BTreeMap::new();
+            for l in obj.lines() {
+                if let Some(v) = l.strip_prefix("v ") {
+                    all.push(num(&v.replace(' ', ",")));
+                } else if let Some(g) = l.strip_prefix("g ") {
+                    group = g.to_string();
+                } else if let Some(f) = l.strip_prefix("f ") {
+                    let keep = group.strip_prefix("part_").and_then(|i| i.parse::<u16>().ok()).is_some_and(|i| c.kept.contains(&i));
+                    if keep {
+                        let t: Vec<u32> = f.split(' ').filter_map(|x| x.parse::<u32>().ok()).map(|x| x - 1).collect();
+                        let t: Vec<u32> = t.iter().map(|i| *map.entry(*i).or_insert_with(|| {
+                            chosen.positions.push(all[*i as usize]);
+                            chosen.positions.len() as u32 - 1
+                        })).collect();
+                        chosen.triangles.push([t[0], t[1], t[2]]);
+                    }
+                }
+            }
+            let pose = orient(spec.shape, &chosen, kratos_part::SCALE).unwrap();
+            println!("   orientation: {}", pose.note);
+            let mut placed = chosen.placed(&pose);
+            println!("   shape: {:?}", check_shape(spec.shape, &placed));
+            if spec.shape != ShapeKind::Shield {
+                let k = section_span(&placed, [0.0, 1.0, 0.0], 0.0).map_or(1.0, |w| (GRIP_WIDTH as f64 / w).min(1.0) as f32);
+                placed.positions.iter_mut().for_each(|p| *p = thin_grip(*p, k));
+                println!("   grip x{k:.2}: now {:?} m across", section_span(&placed, [0.0, 1.0, 0.0], 0.0));
+            }
+            let dummies = match spec.shape {
+                ShapeKind::Shield => shield_dummies(&placed, &[]),
+                _ => blade_dummies(&placed, &[]),
+            };
+            let lines: Vec<String> = dummies.iter().map(|d| format!("dummy {} {:.3} {:.3} {:.3}", d.reference_id, d.position[0], d.position[1], d.position[2])).collect();
+            println!("   {}", lines.join(", "));
+            if let Some(o) = &out {
+                std::fs::write(Path::new(o).join(format!("{}_final.obj", spec.model)), obj_text(&lines, &[(spec.model.to_string(), &placed)])).unwrap();
+            }
         }
     }
 

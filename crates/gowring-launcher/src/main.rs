@@ -368,7 +368,7 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
 /// probe of each model to `weapon_probe\<model>\` for the next round.
 fn install_weapon_parts(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::weapon_part::{build_weapon, file_names, WEAPONS};
-    const WEAPON_BUILD: u32 = 1;
+    const WEAPON_BUILD: u32 = 2;
     let parts = ctx.managed.join("mod").join("parts");
     // when nothing can be built, an earlier build's files leave too, so the carriers keep their own models
     let unplug = |why: String| -> String {

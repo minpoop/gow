@@ -32,9 +32,13 @@ pub fn colour_map(refs: &[String]) -> Option<&String> {
         s.split("_gen_").nth(1).is_some_and(|g| g.len() == 2 && g.ends_with('d') && g.as_bytes()[0].is_ascii_digit())
     };
     let painted = |t: &&String| stem(t).contains("_m_paint_cine");
+    // a baked set whose names the game itself cut short (`kratosspear00_set_handle_e_gen_0_<key>`, four in a row in the
+    // full names' order: colour, normal, gloss, ao): the first is the colour, and it wins over a tiling detail map
+    // (`wood01_d`) listed with it
+    let cut_short = |t: &&String| stem(t).split("_gen_").nth(1).is_some_and(|g| g.len() == 1 && g.as_bytes()[0].is_ascii_digit());
     let plain = |t: &&String| stem(t).ends_with("_d") || stem(t).ends_with("_color");
     let tx: Vec<&String> = refs.iter().filter(|r| r.starts_with("TX_")).collect();
-    tx.iter().copied().find(baked).or_else(|| tx.iter().copied().find(painted)).or_else(|| tx.iter().copied().find(plain))
+    tx.iter().copied().find(baked).or_else(|| tx.iter().copied().find(painted)).or_else(|| tx.iter().copied().find(cut_short)).or_else(|| tx.iter().copied().find(plain))
 }
 
 fn stem(t: &str) -> &str {
@@ -435,6 +439,9 @@ mod tests {
         assert_eq!(colour_map(&head).unwrap(), "TX_kratos00_int9_head_m_paint_cine_");
         let crystal = v(&["TX_bifrost00_m_gen_2n_0123456789ABCDEF", "TX_bifrost00_m_gen_2d_0123456789ABCDEF"]);
         assert_eq!(colour_map(&crystal).unwrap(), "TX_bifrost00_m_gen_2d_0123456789ABCDEF");
+        // names the game cut short: the first of the set, not the tiling wood listed after it
+        let handle = v(&["TX_death01_112E6D2408347E77", "TX_kratosspear00_set_handle_e_gen_0_749EB72789E3C418", "TX_kratosspear00_set_handle_e_gen_0_336A801EEA061E86", "TX_wood01_d_1205A98C557129F9"]);
+        assert_eq!(colour_map(&handle).unwrap(), "TX_kratosspear00_set_handle_e_gen_0_749EB72789E3C418");
         let eye = v(&["TX_death01_112E6D2408347E77", "TX_kratos00_int9_eye_d_0123456789ABCDEF"]);
         assert_eq!(colour_map(&eye).unwrap(), "TX_kratos00_int9_eye_d_0123456789ABCDEF");
         assert!(colour_map(&v(&["TX_death01_112E6D2408347E77", "TX_standardeye00_int9_tearline_n_0123456789ABCDEF"])).is_none());
