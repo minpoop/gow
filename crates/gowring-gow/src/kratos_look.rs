@@ -7,8 +7,9 @@
 //! result: `*_gen_0d` (or `_gen_2d`), and for Kratos's head and arms `*_m_paint_cine_*`. Those are taken first, then
 //! a plain `*_d` map. Its surface comes from the normal map (`*_gen_0n`) and the gloss map (`*_gen_0g`; for the head,
 //! whose list has no `_gen_0g`, the second `*_m_paint_cine_*`, which sits where the others list their gloss), joined
-//! the way Elden Ring's normal maps hold them: the normal's X and Y in red and green and the roughness (255 - gloss)
-//! in blue (the game's own stand-in `SYSTEX_Dummy_n` is 128, 128, 128, 255). A texture lives in a texture pack (`*.texpack`, found through the packs' tables, see
+//! the way Elden Ring's normal maps hold them: the normal's X and Y in red and green and the shininess (the gloss) in
+//! blue (the game's own stand-in `SYSTEX_Dummy_n` is 128, 128, 128, 255). Until 0.1.65 blue held 255 - gloss, which
+//! made the roughest parts the shiniest. A texture lives in a texture pack (`*.texpack`, found through the packs' tables, see
 //! [`crate::texpack`]) or, when small, in the WAD itself ([`crate::wadtex`]).
 
 use std::collections::BTreeMap;
@@ -213,22 +214,25 @@ pub fn surface_maps(refs: &[String]) -> (Option<&String>, Option<&String>) {
 }
 
 /// Elden Ring's normal map from Ragnarök's normal map (X, Y in red, green) and gloss map (red), at the normal map's
-/// size: red and green as they are, blue the roughness (255 - gloss x `gloss_scale`, nearest gloss pixel; 220 when
+/// size: red and green as they are, blue the shininess (gloss x `gloss_scale`, nearest gloss pixel; [`MATTE`] when
 /// there is none).
+/// The blue (shininess) of a surface with no gloss map: nearly matte.
+pub const MATTE: u8 = 40;
+
 pub fn surface_image(normal: &Image, gloss: Option<&Image>, gloss_scale: f32) -> Image {
     let (w, h) = (normal.w, normal.h);
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
         for x in 0..w {
             let at = ((y * w + x) * 4) as usize;
-            let rough = match gloss {
+            let shine = match gloss {
                 Some(g) => {
                     let (gx, gy) = ((x as u64 * g.w as u64 / w as u64) as u32, (y as u64 * g.h as u64 / h as u64) as u32);
-                    255 - (g.rgba[((gy * g.w + gx) * 4) as usize] as f32 * gloss_scale.clamp(0.0, 1.0)).round() as u8
+                    (g.rgba[((gy * g.w + gx) * 4) as usize] as f32 * gloss_scale.clamp(0.0, 1.0)).round() as u8
                 }
-                None => 220,
+                None => MATTE,
             };
-            rgba.extend_from_slice(&[normal.rgba[at], normal.rgba[at + 1], rough, 255]);
+            rgba.extend_from_slice(&[normal.rgba[at], normal.rgba[at + 1], shine, 255]);
         }
     }
     Image { w, h, rgba, format: normal.format }
@@ -332,9 +336,9 @@ pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16],
     model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, strands, max_side, max_surface, BODY_GLOSS, &[], dye)
 }
 
-/// How much of Ragnarök's gloss Kratos's body keeps: at its full gloss his skin and leather looked wet and very shiny
-/// under Elden Ring's lighting (0.1.62), and still shiny at half (0.1.63).
-pub const BODY_GLOSS: f32 = 0.3;
+/// How much of Ragnarök's gloss Kratos's body keeps. The 0.1.62 to 0.1.64 cuts made him shinier, not less, because
+/// blue was written as 255 - gloss; with blue the gloss itself, a little under full keeps skin and leather dry.
+pub const BODY_GLOSS: f32 = 0.6;
 
 /// [`outfit_looks`] for any model: the materials are indices into the table after its `mesh_chunk` (`MESH_<m>_0`).
 /// Textures whose names hold one of `skip` (lower case, e.g. a weapon's frost or gold variants, see
@@ -487,13 +491,13 @@ mod tests {
         let (n, g) = surface_maps(&head);
         assert!(n.unwrap().contains("gen_0n"));
         assert!(std::ptr::eq(g.unwrap(), &head[2]));
-        // red and green from the normal, blue = 255 - gloss
+        // red and green from the normal, blue = the gloss (Elden Ring's shininess)
         let normal = Image { w: 2, h: 1, rgba: vec![10, 20, 30, 40, 50, 60, 70, 80], format: crate::dds::Format::Bc5 };
         let gloss = Image { w: 1, h: 1, rgba: vec![200, 0, 0, 255], format: crate::dds::Format::Bc4 };
-        assert_eq!(surface_image(&normal, Some(&gloss), 1.0).rgba, vec![10, 20, 55, 255, 50, 60, 55, 255]);
-        assert_eq!(surface_image(&normal, None, 1.0).rgba[2], 220);
-        // half the gloss: rougher
-        assert_eq!(surface_image(&normal, Some(&gloss), 0.5).rgba[2], 155);
+        assert_eq!(surface_image(&normal, Some(&gloss), 1.0).rgba, vec![10, 20, 200, 255, 50, 60, 200, 255]);
+        assert_eq!(surface_image(&normal, None, 1.0).rgba[2], MATTE);
+        // half the gloss: less shiny
+        assert_eq!(surface_image(&normal, Some(&gloss), 0.5).rgba[2], 100);
     }
 
     #[test]

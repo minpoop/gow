@@ -16,6 +16,14 @@ use std::time::Instant;
 /// A short camera shake: (amplitude 0..1, when it started). Read by the camera task each frame.
 pub static SHAKE: Mutex<Option<(f32, Instant)>> = Mutex::new(None);
 
+/// The close-up camera's stage (an index into [`CLOSE_UPS`] + 1; 0 = the game's own camera), stepped by the debug
+/// camera key and read by the camera task each frame.
+pub static CLOSE_UP: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// The close-up camera's stops: (name, distance from the point it looks at in metres, that point's height above the
+/// player's feet in metres).
+const CLOSE_UPS: [(&str, f32, f32); 3] = [("chest", 1.2, 1.35), ("chest, nearer", 0.7, 1.35), ("waist", 0.9, 1.0)];
+
 pub struct Runtime {
     engine: Engine,
     bridge: Bridge,
@@ -39,6 +47,7 @@ pub struct Runtime {
     /// The summon key was down last tick (summon on the press, not while held).
     spawn_key_down: bool,
     rage_key_down: bool,
+    camera_key_down: bool,
 }
 
 #[derive(Default, Debug)]
@@ -77,6 +86,7 @@ impl Runtime {
             entered_at: None,
             spawn_key_down: false,
             rage_key_down: false,
+            camera_key_down: false,
         }
     }
 
@@ -198,6 +208,18 @@ impl Runtime {
                 crate::overlay::toast("Spartan Rage filled (debug)");
             }
             self.rage_key_down = down;
+            let down = function_key_down(st.debug_camera_key);
+            if down && !self.camera_key_down {
+                use std::sync::atomic::Ordering::Relaxed;
+                let stage = (CLOSE_UP.load(Relaxed) + 1) % (CLOSE_UPS.len() + 1);
+                CLOSE_UP.store(stage, Relaxed);
+                let what = stage.checked_sub(1).map(|i| CLOSE_UPS[i]).map_or("normal camera".to_string(), |(name, d, _)| format!("close-up camera: {name} ({d} m)"));
+                crate::glog!("debug", "F{} pressed: {what}", st.debug_camera_key);
+                crate::overlay::toast(&format!("{what} (debug)"));
+            }
+            self.camera_key_down = down;
+        } else {
+            CLOSE_UP.store(0, std::sync::atomic::Ordering::Relaxed);
         }
         self.engine.set_tuning(gowring_core::Tuning {
             rage_gain: st.rage_gain_multiplier,
@@ -332,6 +354,10 @@ pub fn apply_camera(req: &gowring_core::CameraRequest) {
         let t = t0.elapsed().as_secs_f32();
         (t < 1.0).then(|| (amp * (-t / 0.3).exp() * 0.05, t))
     });
+    if let Some(&(_, dist, height)) = CLOSE_UP.load(std::sync::atomic::Ordering::Relaxed).checked_sub(1).and_then(|i| CLOSE_UPS.get(i)) {
+        close_up(dist, height);
+        return;
+    }
     if req.fov_deg <= 1.0 && shake.is_none() {
         return;
     }
@@ -354,6 +380,22 @@ pub fn apply_camera(req: &gowring_core::CameraRequest) {
     if req.fov_deg > 1.0 {
         pc.fov = req.fov_deg.to_radians();
     }
+}
+
+/// The close-up camera: `dist` metres back along the game camera's own view from a point `height` metres above the
+/// player's feet, so the camera stick still turns it around him (no shoulder offset, zoom or shake).
+fn close_up(dist: f32, height: f32) {
+    use eldenring::position::HavokPosition;
+    let Ok(wcm) = (unsafe { WorldChrMan::instance() }) else { return };
+    let Some(player) = wcm.main_player.as_ref() else { return };
+    let HavokPosition(px, py, pz, _) = player.chr_ins.modules.physics.position;
+    let Ok(cam) = (unsafe { CSCamera::instance_mut() }) else { return };
+    let pc = &mut cam.pers_cam_1;
+    let f = pc.forward();
+    let m = &mut pc.matrix;
+    m.3 .0 = px - f.0 * dist;
+    m.3 .1 = py + height - f.1 * dist;
+    m.3 .2 = pz - f.2 * dist;
 }
 
 #[allow(dead_code)]

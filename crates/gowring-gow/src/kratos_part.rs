@@ -848,7 +848,8 @@ pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collect
     let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
     // not metal, as Elden Ring's own stand-in (`SYSTEX_Dummy_m`, all 0); 0.1.62 and before had green 160 in it
     textures.push((format!("{tex}_m"), solid([0, 0, 0]), 0));
-    textures.push((format!("{tex}_n"), solid([128, 128, 255]), 0));
+    // no gloss map: nearly matte (blue is the shininess); it was 255, the shiniest, until 0.1.65
+    textures.push((format!("{tex}_n"), solid([128, 128, crate::kratos_look::MATTE]), 0));
     (mats, textures, counts)
 }
 
@@ -858,7 +859,7 @@ fn material(id: u16) -> Material {
 
 fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
     let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
-    erpart::tpf(&[(format!("kratos_{id}_a"), solid(albedo), 0), (format!("kratos_{id}_m"), solid([0, 0, 0]), 0), (format!("kratos_{id}_n"), solid([128, 128, 255]), 0)])
+    erpart::tpf(&[(format!("kratos_{id}_a"), solid(albedo), 0), (format!("kratos_{id}_m"), solid([0, 0, 0]), 0), (format!("kratos_{id}_n"), solid([128, 128, crate::kratos_look::MATTE]), 0)])
 }
 
 /// Every part file this version installs, as (file name, bytes), and a line about them. The body (`bd_*_9701`) is

@@ -387,6 +387,7 @@ impl ImguiRenderLoop for Overlay {
             if st.debug_tools {
                 lines.push(format!("F{} (keyboard): summon a tough enemy", st.debug_spawn_key));
                 lines.push(format!("F{} (keyboard): fill Spartan Rage", st.debug_rage_key));
+                lines.push(format!("F{} (keyboard): close-up camera (press again to step, then off)", st.debug_camera_key));
             }
             let lines = &lines;
             let _f = self.big_font.as_ref().map(|f| ui.push_font(f.0));

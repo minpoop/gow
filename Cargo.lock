@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "gowring-core"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "fontdue",
  "gowring-sheets",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "gowring-gow"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "anyhow",
  "png",
@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "gowring-launcher"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "anyhow",
  "gowring-core",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "gowring-sheets"
-version = "0.1.64"
+version = "0.1.65"
 dependencies = [
  "anyhow",
  "indexmap",
