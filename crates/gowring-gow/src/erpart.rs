@@ -328,13 +328,17 @@ pub fn compute_tangents(m: &mut Mesh) {
     }
 }
 
-/// Room around each mesh's box, so a limb a little out of its rest place is not culled while still on screen.
-pub const BOX_MARGIN: f32 = 0.1;
+/// Room around the meshes' box: an arm's reach, so a mesh moved far from its rest place (an arm raised, the chest
+/// turned in the two-handed stance) is never culled while on screen.
+pub const BOX_MARGIN: f32 = 0.6;
 
-/// A mesh's box as Elden Ring stores it: half extents, rotation (Euler radians) and centre. Ours are axis-aligned, with
-/// [`BOX_MARGIN`] around the rest-pose vertices.
-pub fn mesh_box(m: &Mesh) -> ([f32; 3], [f32; 3], [f32; 3]) {
-    let (lo, hi) = bbox(m.vertices.iter().map(|v| v.position));
+/// The box every mesh of a model carries, as Elden Ring stores it: half extents, rotation (Euler radians) and centre;
+/// axis-aligned around all the model's rest-pose vertices with [`BOX_MARGIN`]. The game skips a mesh whose box is off
+/// screen, and the box stays where the mesh rests: 0.1.63's chest strap, a mesh of its own 30 cm across with 10 cm
+/// around it, drew in the character creator and was gone in the world once the stance turned the chest and the camera
+/// came close. Every mesh takes the whole model's box, so only the model as a whole can be culled.
+pub fn mesh_box(meshes: &[Mesh]) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let (lo, hi) = bbox(meshes.iter().flat_map(|m| m.vertices.iter().map(|v| v.position)));
     (std::array::from_fn(|k| (hi[k] - lo[k]) / 2.0 + BOX_MARGIN), [0.0; 3], std::array::from_fn(|k| (hi[k] + lo[k]) / 2.0))
 }
 
@@ -531,10 +535,10 @@ pub fn flver2_with(nodes: &[Node], materials: &[Material], meshes: &[Mesh], dumm
         w.i32(idx);
     }
     w.pad(16);
-    for (i, m) in meshes.iter().enumerate() {
+    let (half, rotation, centre) = mesh_box(meshes);
+    for i in 0..meshes.len() {
         let at = w.pos() as u32;
         w.fill(&format!("mesh_box{i}"), at);
-        let (half, rotation, centre) = mesh_box(m);
         w.v3(half);
         w.v3(rotation);
         w.v3(centre);
@@ -1208,7 +1212,7 @@ mod tests {
     #[test]
     fn a_meshs_box_is_half_extents_rotation_and_centre() {
         let (_, _, meshes) = one_triangle();
-        let (half, rotation, centre) = mesh_box(&meshes[0]);
+        let (half, rotation, centre) = mesh_box(&meshes);
         let (lo, hi) = bbox(meshes[0].vertices.iter().map(|v| v.position));
         for k in 0..3 {
             assert!(half[k] >= BOX_MARGIN);
@@ -1268,13 +1272,14 @@ mod tests {
 
     #[test]
     fn the_body_writers_output_is_unchanged() {
-        // fingerprints of the writer's output before hit points were added: the body part must stay byte for byte
+        // fingerprints of the writer's output (0.1.64: every mesh carries the whole model's box); hit points must leave
+        // the body part byte for byte
         let (nodes, mats, meshes) = body_like_sample();
         let f = flver2(&nodes, &mats, &meshes);
         let (n1, m1, s1) = one_triangle();
         let g = flver2(&n1, &m1, &s1);
-        assert_eq!((f.len(), fnv64(&f)), (4_249_888, 0x5e33_d74a_adf8_ef93));
-        assert_eq!((g.len(), fnv64(&g)), (1632, 0x4cc5_9876_8d2b_6c63));
+        assert_eq!((f.len(), fnv64(&f)), (4_249_888, 0x0ce9_260f_a205_0921));
+        assert_eq!((g.len(), fnv64(&g)), (1632, 0x2e04_d77f_bde1_b688));
         assert_eq!(flver2_with(&nodes, &mats, &meshes, &[]), f);
     }
 
@@ -1339,7 +1344,7 @@ mod tests {
         let mesh = 0x80 + 0x20 + 2 * 0x80;
         let at = u32::from_le_bytes(f[mesh + 24..mesh + 28].try_into().unwrap()) as usize;
         let b: Vec<f32> = f[at..at + 36].chunks(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-        assert_eq!(b, [0.6, 0.6, 0.1, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0]);
+        assert_eq!(b, [1.1, 1.1, 0.6, 0.0, 0.0, 0.0, 0.5, 0.5, 0.0]);
         // normal w is 0
         assert_eq!(f[data + u32::from_le_bytes(f[vb + 28..vb + 32].try_into().unwrap()) as usize + 15], 0);
     }

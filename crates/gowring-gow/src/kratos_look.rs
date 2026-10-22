@@ -333,8 +333,8 @@ pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16],
 }
 
 /// How much of Ragnarök's gloss Kratos's body keeps: at its full gloss his skin and leather looked wet and very shiny
-/// under Elden Ring's lighting (0.1.62).
-pub const BODY_GLOSS: f32 = 0.5;
+/// under Elden Ring's lighting (0.1.62), and still shiny at half (0.1.63).
+pub const BODY_GLOSS: f32 = 0.3;
 
 /// [`outfit_looks`] for any model: the materials are indices into the table after its `mesh_chunk` (`MESH_<m>_0`).
 /// Textures whose names hold one of `skip` (lower case, e.g. a weapon's frost or gold variants, see

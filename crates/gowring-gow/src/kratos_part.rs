@@ -593,6 +593,46 @@ pub fn push_cloak_out(meshes: &mut [Mesh], used: &[u16]) -> (usize, usize, usize
     (before, after, moved.sum())
 }
 
+/// The furs whose shading follows the skin under them ([`fur_normals_from_skin`]): the bear cloak (24), the leather
+/// cloak's fur (29) and the fur under the bear cloak (69).
+pub const FUR_NORMALS: [u16; 3] = [24, 29, 69];
+/// How much of a fur vertex's normal comes from the skin under it.
+const FUR_NORMAL_FROM_SKIN: f32 = 0.75;
+
+/// Shade the furs as one soft surface: each vertex of a `FUR_NORMALS` material within 15 cm of the torso or arm skin
+/// takes `FUR_NORMAL_FROM_SKIN` of its normal from the skin's at the closest point (all of it where its own faces the
+/// other way), and its tangents are worked out again. Ragnarök's fur is strands on cards, each card facing its own way;
+/// under Elden Ring's lighting the cards facing the light edge-on glinted, and the black bear fur looked shiny (0.1.63).
+/// Returns how many vertices changed.
+pub fn fur_normals_from_skin(meshes: &mut [Mesh], used: &[u16]) -> usize {
+    let skin = SkinGrid::new(meshes, used);
+    if skin.triangles.is_empty() {
+        return 0;
+    }
+    let (mut seen, mut stamp) = (Vec::new(), 0);
+    let mut changed = 0;
+    for m in meshes.iter_mut().filter(|m| used.get(m.material as usize).is_some_and(|k| FUR_NORMALS.contains(k))) {
+        let mut any = false;
+        for v in m.vertices.iter_mut() {
+            let Some((_, n)) = skin.outside(v.position, 0.15, &mut seen, &mut stamp) else { continue };
+            let own = v.normal;
+            let k = if own[0] * n[0] + own[1] * n[1] + own[2] * n[2] < 0.0 { 1.0 } else { FUR_NORMAL_FROM_SKIN };
+            let b: [f32; 3] = std::array::from_fn(|i| own[i] * (1.0 - k) + n[i] * k);
+            let len = (b[0] * b[0] + b[1] * b[1] + b[2] * b[2]).sqrt();
+            if !(len > 1e-6) {
+                continue;
+            }
+            v.normal = [b[0] / len, b[1] / len, b[2] / len];
+            changed += 1;
+            any = true;
+        }
+        if any {
+            erpart::compute_tangents(m);
+        }
+    }
+    changed
+}
+
 /// Fit Kratos's proportions to the character's skeleton. Elden Ring draws the character's face under every helmet
 /// (the face scale on helmets is 1.0 everywhere and changes nothing), and Kratos's torso and neck are longer: with his
 /// hips on the character's, his shoulders sat 5 cm above its shoulder joints (so his arms turned about points below his
@@ -886,6 +926,8 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
         note.push_str(&format!("{n} cloth vertices follow the body under them; "));
         let (before, after, moved) = push_cloak_out(&mut meshes, &used);
         note.push_str(&format!("cloak inside the skin at rest: {before} vertices, {after} after pushing it out ({moved} cloak and fur vertices moved); "));
+        let n = fur_normals_from_skin(&mut meshes, &used);
+        note.push_str(&format!("{n} fur vertices shaded by the skin under them; "));
     }
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let tex = format!("kratos_{MODEL_ID}");
@@ -929,6 +971,20 @@ mod tests {
         let half: Vec<(u8, f32)> = (0..2).map(|k| (c[2].bones[k], c[2].weights[k])).collect();
         assert!(half.iter().all(|(b, w)| [48, 50].contains(b) && (w - 0.5).abs() < 0.01), "{half:?}");
         assert!((c[0].weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn fur_takes_most_of_its_normal_from_the_skin_under_it() {
+        let v = |p: [f32; 3], n: [f32; 3]| Vertex { position: p, normal: n, tangent: [1.0, 0.0, 0.0, 1.0], bones: [0; 4], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[0.0; 2], [0.0; 2]] };
+        // skin facing +z; a fur card edge-on to it (normal +x), one facing into the body, and one far away
+        let skin = Mesh { material: 0, node: 0, vertices: vec![v([-0.1, 1.3, 0.0], [0.0, 0.0, 1.0]), v([0.1, 1.3, 0.0], [0.0, 0.0, 1.0]), v([0.1, 1.5, 0.0], [0.0, 0.0, 1.0]), v([-0.1, 1.5, 0.0], [0.0, 0.0, 1.0])], indices: vec![0, 1, 2, 0, 2, 3] };
+        let fur = Mesh { material: 1, node: 0, vertices: vec![v([0.0, 1.4, 0.03], [1.0, 0.0, 0.0]), v([0.02, 1.42, 0.03], [0.0, 0.0, -1.0]), v([0.0, 0.4, 0.03], [1.0, 0.0, 0.0])], indices: vec![0, 1, 2] };
+        let mut meshes = vec![skin, fur];
+        assert_eq!(fur_normals_from_skin(&mut meshes, &[72, 24]), 2);
+        let f = &meshes[1].vertices;
+        assert!(f[0].normal[2] > 0.9 && f[0].normal[0] > 0.2, "{:?}", f[0].normal);
+        assert_eq!(f[1].normal, [0.0, 0.0, 1.0]);
+        assert_eq!(f[2].normal, [1.0, 0.0, 0.0]);
     }
 
     #[test]
