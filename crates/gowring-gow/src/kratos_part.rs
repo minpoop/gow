@@ -28,16 +28,19 @@ pub const SCALE: f32 = 0.92;
 pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
 /// Materials made of strands on cards: the eyebrows (4), eyelashes (7), the bear cloak (24; drawn solid its fur cards
 /// showed as black and white blocks in 0.1.61), the leather cloak's fur (29; drawn solid it showed as grey blocks by
-/// the claw on the upper back), the fur under the bear cloak (69) and the long beard (86, 87). They are drawn with
+/// the claw on the upper back), the fur under the bear cloak (69) and the long beard (86, 87), and the Black Bear
+/// Set's apron (21), whose torn hide under the riveted panels has its ragged edge in its alpha. They are drawn with
 /// Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and left
 /// out otherwise, except those in [`SOLID_IF_UNCUT`].
-pub const CUT_OUT: [u16; 7] = [4, 7, 24, 29, 69, 86, 87];
-/// Strand materials drawn solid when no coverage is found: the bear cloak (24) is the whole cloak, not a trim.
-pub const SOLID_IF_UNCUT: [u16; 1] = [24];
+pub const CUT_OUT: [u16; 8] = [4, 7, 21, 24, 29, 69, 86, 87];
+/// Strand materials drawn solid when no coverage is found: the bear cloak (24) is the whole cloak, not a trim, and the
+/// apron (21) the front of the waist.
+pub const SOLID_IF_UNCUT: [u16; 2] = [21, 24];
 /// Strand materials whose coverage is their own colour map's alpha: the bear cloak (24; `kratos00_int9_cloakfur_m_gen_0d`
 /// carries a hair-card alpha, 83 % empty and 4 % solid on the player's PC, while 0.1.62 took a New Game+ map of its
-/// whose alpha is half solid, a region mask, and the cards still showed as blocks).
-pub const COLOUR_ALPHA: [u16; 1] = [24];
+/// whose alpha is half solid, a region mask, and the cards still showed as blocks), and the apron (21;
+/// `kratos00_int9_skirt_m_gen_0d`, 18 % clear: the torn hide's edge).
+pub const COLOUR_ALPHA: [u16; 2] = [21, 24];
 /// How Kratos's strand materials are cut out.
 pub const STRANDS: crate::kratos_look::Strands<'static> = crate::kratos_look::Strands { materials: &CUT_OUT, solid: &SOLID_IF_UNCUT, colour_alpha: &COLOUR_ALPHA };
 /// The short goatee under the long beard (86, 87): left out when the long beard is drawn, which covers its place (it
@@ -52,8 +55,8 @@ const CUT_OUT_SAMPLERS: [&str; 3] = ["C_AMSN_PixelKill__snp_Texture2D_2_AlbedoMa
 /// land on torso bones here, so it would hang still while the arms and legs move through it. It takes the arms' share
 /// of the weights of the body underneath (see [`transfer_cloth_weights`]): the cloaks (leather 75, bear fur 24) and the
 /// fur at the shoulders (29, 69) none of the legs' (a cloak that followed each leg would tear down the middle), the
-/// skirt (60) a little over half.
-pub const CLOTH: [(u16, f32); 5] = [(75, 0.0), (24, 0.0), (29, 0.0), (69, 0.0), (60, 0.6)];
+/// skirt (60) and the Black Bear Set's apron (21) a little over half.
+pub const CLOTH: [(u16, f32); 6] = [(75, 0.0), (24, 0.0), (29, 0.0), (69, 0.0), (60, 0.6), (21, 0.6)];
 /// The body surfaces cloth takes its weights from: the torso and arm skin (72, 74), the trousers (88) and boots (62).
 pub const BODY: [u16; 4] = [72, 74, 88, 62];
 
@@ -75,13 +78,13 @@ impl Outfit {
         }
     }
 
-    /// The materials it dyes black (see [`crate::kratos_look::blacken`]): for the Black Bear Set the cloak's fur (24),
-    /// the fur under it (69), the leggings (88), boots (62), the belt with its leather tassels (61) and the chest strap
-    /// (75, the leather cloak's material; the cloak itself is not worn).
+    /// The materials it dyes black (see [`crate::kratos_look::blacken_laced`]): for the Black Bear Set the cloak's fur
+    /// (24), the fur under it (69), the leggings (88), boots (62), the belt (66), the apron (21) and the harness with
+    /// its shoulder pad (71, 70), their metal kept and their lacing orange as in the set's art.
     pub fn dyed(self) -> &'static [u16] {
         match self {
             Outfit::Survival => &[],
-            Outfit::BlackBear => &[24, 69, 88, 62, 61, 75],
+            Outfit::BlackBear => &[24, 69, 88, 62, 66, 21, 70, 71],
         }
     }
 
@@ -1018,16 +1021,18 @@ mod tests {
 
     #[test]
     fn the_black_bear_set_swaps_the_leather_cloak_for_the_bear_fur_one() {
-        // the leather cloak and the fur along the strap leave; the strap (231) stays
-        let leather: Vec<u16> = [213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 236].to_vec();
-        let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !leather.contains(p)).chain([224, 235]).collect();
+        // the leather cloak with its strap and fur, and the youngkratos belt and cloth, leave; the int9 harness, belt
+        // and apron and the bear cloak come in
+        let out: Vec<u16> = [194, 195, 196, 197, 198, 213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 231, 236].to_vec();
+        let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !out.contains(p)).chain([205, 206, 207, 208, 209, 224, 228, 235]).collect();
         expected.sort_unstable();
         assert_eq!(Outfit::BlackBear.parts(), expected.as_slice());
         assert!(Outfit::Survival.dyed().is_empty());
-        // the bear cloak and its fur take the body's weights and are pushed out of the skin like the leather ones
-        assert!(Outfit::BlackBear.dyed().iter().all(|m| [24, 69, 88, 62, 61, 75].contains(m)));
-        assert!(Outfit::BlackBear.parts().contains(&231));
+        assert_eq!(Outfit::BlackBear.dyed(), &[24, 69, 88, 62, 66, 21, 70, 71]);
+        // the bear cloak and its fur take the body's weights and are pushed out of the skin like the leather ones; the
+        // apron follows the legs a little over half, as the cloth it replaces
         assert!(CLOTH.iter().any(|c| c.0 == 24) && CLOTH.iter().any(|c| c.0 == 69) && CLOAKS.contains(&24) && FURS.contains(&69));
+        assert!(CLOTH.contains(&(21, 0.6)));
     }
 
     #[test]

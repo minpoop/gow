@@ -14,8 +14,22 @@ use std::sync::OnceLock;
 const NO_SKILL: i32 = 10;
 
 /// Rows earlier versions used as carriers. A character made then still holds that weapon, so the row is turned
-/// into a copy of today's carrier: 0.1.0-0.1.32 gave the Blades the Caestus (fists, by a wrong weapon type).
-const LEGACY_CARRIERS: [(&str, u32); 1] = [("blades_of_chaos", 21000000)];
+/// into a copy of today's carrier: 0.1.0-0.1.32 gave the Blades the Caestus (fists, by a wrong weapon type),
+/// 0.1.33-0.1.65 the Whip (still today's carrier without Shadow of the Erdtree, see [`DLC_CARRIERS`]).
+const LEGACY_CARRIERS: [(&str, u32); 2] = [("blades_of_chaos", 21000000), ("blades_of_chaos", 20000000)];
+
+/// Carriers taken instead of their template's first weapon of its type when Shadow of the Erdtree is installed, as
+/// (sheet weapon id, EquipParamWeapon row): the Blades of Chaos take the Backhand Blade (64500000), a paired weapon,
+/// so Kratos, two-handing by default, swings a blade in each hand with moves made for two short blades (the whip's
+/// lashes were made for its chain). The regulation holds the row with or without the DLC, but its moves are in the
+/// DLC's archive, so [`dlc_installed`] decides.
+const DLC_CARRIERS: [(&str, u32); 1] = [("blades_of_chaos", 64500000)];
+
+/// Whether Shadow of the Erdtree is installed: `DLC.bdt` beside eldenring.exe (about 15 GB), larger than the empty
+/// stand-in some players make to play online without the DLC.
+fn dlc_installed() -> bool {
+    std::env::current_exe().ok().and_then(|exe| std::fs::metadata(exe.with_file_name("DLC.bdt")).ok()).is_some_and(|m| m.len() > 1 << 30)
+}
 
 /// The hide flags Kratos's helm and body set, so nothing of the character draws under him. Elden Ring hides a piece
 /// whose material name carries `#NN#`, and the game's own part files show which: 0-19 and 73 tag the character's skin
@@ -27,8 +41,8 @@ const UNDER_KRATOS: [usize; 34] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
 /// Kratos's weapons whose models the launcher builds from the player's own Ragnarök install, as sheet weapon id and
 /// Elden Ring weapon model id: the launcher writes `mod/parts/wp_a_<id>.partsbnd.dcx` and its `_l` twin, and every
 /// carrier row of the weapon is pointed at that model. The armour's ids (9700-9703) are in the armour step below. The
-/// Blades of Chaos are one rigid blade on the whip's carrier: its moves keep their timing and hit points (100-130 on
-/// the blade) but lose the reach the whip's animated chain gave, until the animation work.
+/// Blades of Chaos are two rigid blades on the Backhand Blade's carrier (the whip's without Shadow of the Erdtree,
+/// whose lashes lose the reach its animated chain gave), until the animation work.
 const WEAPON_MODELS: [(&str, u16); 4] = [("leviathan_axe", 9710), ("blades_of_chaos", 9711), ("draupnir_spear", 9712), ("guardian_shield", 9713)];
 
 /// Ported weapons whose part file holds a pair (the Blades of Chaos: the blade as model 0 and again as model 1).
@@ -37,7 +51,8 @@ const PAIRED: [&str; 1] = ["blades_of_chaos"];
 /// Place model 1 of a paired weapon (its second blade) through the carrier's WepAbsorpPosParam row: in the other hand
 /// while the weapon is held in both hands (two-handing by default is Kratos's stance, so he holds one blade in each
 /// hand), and on the back at the other hang spot when one-handed (the left hand then holds the shield) or sheathed.
-/// The row is shared with the game's other weapons of the type (every whip), whose second models, if any, move with it.
+/// The row is shared with the game's other weapons of the type (every whip, or every Backhand Blade), whose second
+/// models move with it.
 fn place_second_model(repo: &mut SoloParamRepository, weapon: &str, row: Option<u32>) -> String {
     let Some(absorp) = row.and_then(|r| repo.get::<EquipParamWeapon>(r)).map(|r| r.absorp_param_id()) else { return format!("{weapon}: no carrier row for its second model") };
     if absorp < 0 {
@@ -294,20 +309,25 @@ pub fn apply() -> Result<Carriers, String> {
     let mut notes = Vec::new();
     let mut rows: HashMap<&'static str, u32> = HashMap::new();
 
-    // ---- template_scan: first base row of each category ---------------------------------------------
+    // ---- template_scan: first base row of each category (or the DLC's own, see DLC_CARRIERS) -------------------------
+    let dlc = dlc_installed();
+    notes.push(format!("Shadow of the Erdtree: {}", if dlc { "installed (Game\\DLC.bdt)" } else { "not installed" }));
     let mut used: Vec<u32> = Vec::new();
     for w in WEAPONS.iter().filter(|w| w.template.is_some()) {
         let tpl = ER_TEMPLATES.iter().find(|t| Some(t.id) == w.template).ok_or("template row")?;
-        let found = repo
-            .rows::<EquipParamWeapon>()
-            .filter(|(id, r)| r.wep_type() == tpl.wep_type as u16 && id % 10000 == 0 && !used.contains(id))
-            .map(|(id, _)| id)
-            .next();
+        let from_dlc = DLC_CARRIERS.iter().find(|(id, row)| dlc && *id == w.id && !used.contains(row) && repo.get::<EquipParamWeapon>(*row).is_some()).map(|(_, row)| *row);
+        let found = from_dlc.or_else(|| {
+            repo.rows::<EquipParamWeapon>()
+                .filter(|(id, r)| r.wep_type() == tpl.wep_type as u16 && id % 10000 == 0 && !used.contains(id))
+                .map(|(id, _)| id)
+                .next()
+        });
         match found {
             Some(id) => {
                 used.push(id);
                 rows.insert(w.id, id);
-                notes.push(format!("{} <- EquipParamWeapon {id} (wep_type {})", w.name, tpl.wep_type));
+                let wep_type = repo.get::<EquipParamWeapon>(id).map(|r| r.wep_type()).unwrap_or_default();
+                notes.push(format!("{} <- EquipParamWeapon {id} (wep_type {wep_type}{})", w.name, if from_dlc.is_some() { ", Shadow of the Erdtree's" } else { "" }));
             }
             None => return Err(format!("no vanilla weapon with wep_type {} for {}", tpl.wep_type, w.name)),
         }
@@ -541,6 +561,9 @@ mod tests {
         assert_eq!(models.len(), WEAPON_MODELS.len());
         // every ported weapon is a sheet weapon with a carrier row
         assert!(WEAPON_MODELS.iter().all(|(w, _)| WEAPONS.iter().any(|s| s.id == *w && s.template.is_some())));
+        // the DLC's carriers stand in for sheet weapons, base rows; a character made on the whip gets the Backhand Blade
+        assert!(DLC_CARRIERS.iter().all(|(w, row)| WEAPONS.iter().any(|s| s.id == *w && s.template.is_some()) && row % 10000 == 0));
+        assert!(DLC_CARRIERS.iter().all(|(w, _)| LEGACY_CARRIERS.contains(&(*w, 20000000))));
     }
 
     #[test]

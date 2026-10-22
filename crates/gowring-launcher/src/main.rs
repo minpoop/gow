@@ -281,13 +281,14 @@ impl HeroWad {
     }
 }
 
-/// What the outfit probe keeps (see `install_kratos_part`): the bear cloak's fur (24), the fur under it (69), the
-/// leather of the strap and cloak (75), the leather cloak's fur (29), the belt (61) and the unused waist, chest and
-/// shoulder pieces' materials (66, 70, 71, 21); and the parts: skin (230), the bear cloak and its coarse shell (235,
-/// 237), the underfur (224), the strap and two pieces like it (231-233), the belt (196, 197), the unused waist, skirt,
-/// shoulder and chest pieces (199, 205-209, 225-229).
-const OUTFIT_PROBE_MATERIALS: [u16; 9] = [24, 69, 75, 29, 61, 66, 70, 71, 21];
-const OUTFIT_PROBE_PARTS: [u16; 22] = [230, 235, 237, 224, 231, 232, 233, 196, 197, 199, 205, 206, 207, 208, 209, 225, 226, 227, 228, 229, 194, 195];
+/// What the outfit probe keeps (see `install_kratos_part`): the Black Bear Set's apron, belt, shoulder pad and harness
+/// (21, 66, 70, 71) and bear cloak (24), the leather tassels and knee guard (0, `kratos00_int9_acc`, which head parts
+/// use too, so it is not dyed), the bracers (65) and two unused arm pieces (67, 68); and the parts: skin (230), the
+/// bear cloak and underfur (235, 224), the apron, belt and harness (205-209, 228), the bracers (203, 204), the unused
+/// elbow and upper-arm pieces (225, 226), the tassels and knee guard (214, 268), the trousers and boots (200, 201,
+/// 267) and the collar (234).
+const OUTFIT_PROBE_MATERIALS: [u16; 9] = [21, 66, 70, 71, 24, 0, 65, 67, 68];
+const OUTFIT_PROBE_PARTS: [u16; 19] = [230, 235, 224, 205, 206, 207, 208, 209, 228, 203, 204, 225, 226, 214, 268, 200, 201, 267, 234];
 
 /// Build Kratos's armour parts (see `kratos_part::build_parts`) from the player's Ragnarök install once per install,
 /// builder version and player skeleton, keep them in the cache, and copy them into the mod folder ModEngine2 serves
@@ -295,7 +296,7 @@ const OUTFIT_PROBE_PARTS: [u16; 22] = [230, 235, 237, 224, 231, 232, 233, 196, 1
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 20;
+    const BUILD: u32 = 21;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {

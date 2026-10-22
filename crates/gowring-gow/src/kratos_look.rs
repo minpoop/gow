@@ -60,33 +60,64 @@ pub fn metal_mask(refs: &[String]) -> Option<&String> {
     })
 }
 
+/// A material's own stitch mask among its references, the region map its lacing is painted with
+/// (`kratos00_int9_waist_m5_stitches`, `kratos00_int9_shoulder_m5_stitch`: `_m<digits>_stitch...`).
+pub fn stitch_mask(refs: &[String]) -> Option<&String> {
+    refs.iter().filter(|r| r.starts_with("TX_")).find(|t| {
+        let words: Vec<&str> = stem(t).split('_').collect();
+        words.windows(2).any(|w| w[0].len() >= 2 && w[0].starts_with('m') && w[0][1..].bytes().all(|c| c.is_ascii_digit()) && w[1].starts_with("stitch"))
+    })
+}
+
+/// The colour of the Black Bear Set's lacing (the zigzag stitching along the harness, shoulder and belt edges in the
+/// set's art) at the leather's full brightness.
+pub const LACING_ORANGE: [f32; 3] = [205.0, 105.0, 35.0];
+
 /// Ragnarök's black dye as far as a colour map shows it: the leather, cloth and fur (everything outside `metal`, the
 /// material's own metal mask: its red, stretched over the colour map, the side that covers less of it counting as
 /// metal) go to a near-black grey that keeps their shading; the metal keeps its colour. Returns the share counted as
 /// metal.
 pub fn blacken(img: &mut Image, metal: Option<&Image>) -> f32 {
+    blacken_laced(img, metal, None).0
+}
+
+/// [`blacken`], and where `lacing` (the material's own stitch mask, see [`stitch_mask`]; red, stretched over the
+/// colour map) marks the stitching, [`LACING_ORANGE`] at the brightness the stitch had before the dye. Returns the
+/// shares counted as metal and as lacing.
+pub fn blacken_laced(img: &mut Image, metal: Option<&Image>, lacing: Option<&Image>) -> (f32, f32) {
+    let at = |m: &Image, x: u32, y: u32, w: u32, h: u32| -> f32 {
+        let (mx, my) = ((x as u64 * m.w as u64 / w as u64) as u32, (y as u64 * m.h as u64 / h as u64) as u32);
+        m.rgba.get(((my * m.w + mx) * 4) as usize).copied().unwrap_or(0) as f32 / 255.0
+    };
     let mask = metal.filter(|m| m.w > 0 && m.h > 0).map(|m| {
         let lit = m.rgba.chunks_exact(4).filter(|p| p[0] >= 128).count() as f32 / (m.w * m.h) as f32;
         (m, lit > 0.5)
     });
-    let mut kept = 0usize;
+    let lacing = lacing.filter(|m| m.w > 0 && m.h > 0);
+    let (mut kept, mut laced) = (0usize, 0usize);
     for y in 0..img.h {
         for x in 0..img.w {
             let i = ((y * img.w + x) * 4) as usize;
             let w = mask.map_or(0.0, |(m, flip)| {
-                let (mx, my) = ((x as u64 * m.w as u64 / img.w as u64) as u32, (y as u64 * m.h as u64 / img.h as u64) as u32);
-                let v = m.rgba.get(((my * m.w + mx) * 4) as usize).copied().unwrap_or(0) as f32 / 255.0;
+                let v = at(m, x, y, img.w, img.h);
                 if flip { 1.0 - v } else { v }
             });
             kept += (w >= 0.5) as usize;
             let (r, g, b) = (img.rgba[i] as f32, img.rgba[i + 1] as f32, img.rgba[i + 2] as f32);
-            let dark = 6.0 + 0.28 * (0.299 * r + 0.587 * g + 0.114 * b);
+            let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            let dark = 6.0 + 0.28 * lum;
+            // the lacing goes orange where it is not metal
+            let s = lacing.map_or(0.0, |m| at(m, x, y, img.w, img.h)) * (1.0 - w);
+            laced += (s >= 0.5) as usize;
+            let shade = (lum / 170.0).clamp(0.35, 1.2);
             for (k, c) in [r, g, b].into_iter().enumerate() {
-                img.rgba[i + k] = (dark + (c - dark) * w).round().clamp(0.0, 255.0) as u8;
+                let dyed = dark + (c - dark) * w;
+                img.rgba[i + k] = (dyed + (LACING_ORANGE[k] * shade - dyed) * s).round().clamp(0.0, 255.0) as u8;
             }
         }
     }
-    kept as f32 / (img.w * img.h).max(1) as f32
+    let n = (img.w * img.h).max(1) as f32;
+    (kept as f32 / n, laced as f32 / n)
 }
 
 /// The coverage map among a cut-out material's references (hair cards, brows, lashes): an opacity map, named
@@ -377,13 +408,17 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
             decoded
         };
         let mut look = Look::default();
-        // the black dye, sparing what the material's own metal mask marks
-        let mask: Option<(String, Image)> = if dye.contains(&m) { metal_mask(&ref_names).and_then(|t| get(t).ok().map(|i| (stem(t).to_string(), crate::dds::downscale(&i, max_side)))) } else { None };
+        // the black dye, sparing what the material's own metal mask marks, with its lacing orange
+        let mut named_map = |find: fn(&[String]) -> Option<&String>| -> Option<(String, Image)> { find(&ref_names).and_then(|t| get(t).ok().map(|i| (stem(t).to_string(), crate::dds::downscale(&i, max_side)))) };
+        let (mask, lacing) = if dye.contains(&m) { (named_map(metal_mask), named_map(stitch_mask)) } else { (None, None) };
         let dyed = |img: &mut Image, note: &mut String| {
-            let kept = blacken(img, mask.as_ref().map(|m| &m.1));
+            let (kept, laced) = blacken_laced(img, mask.as_ref().map(|m| &m.1), lacing.as_ref().map(|m| &m.1));
             match &mask {
                 Some((name, _)) => note.push_str(&format!(", dyed black (metal from {name}: {:.0} % kept)", 100.0 * kept)),
                 None => note.push_str(", dyed black"),
+            }
+            if let Some((name, _)) = &lacing {
+                note.push_str(&format!(" (lacing orange from {name}: {:.0} %)", 100.0 * laced));
             }
         };
         if strands.materials.contains(&m) {
@@ -592,6 +627,7 @@ mod tests {
 
     #[test]
     fn the_black_dye_darkens_leather_and_keeps_the_metal_its_mask_marks() {
+        let v = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let img = |px: &[[u8; 4]]| Image { w: px.len() as u32, h: 1, rgba: px.concat(), format: crate::dds::Format::Rgba8 };
         // four pixels of brown leather; the mask marks the last as metal
         let mut leather = img(&[[120, 80, 40, 255]; 4]);
@@ -610,5 +646,17 @@ mod tests {
         let mut fur = img(&[[90, 70, 50, 255]]);
         assert_eq!(blacken(&mut fur, None), 0.0);
         assert!(fur.rgba[0] < 40 && fur.rgba[0] == fur.rgba[1]);
+        // the lacing goes orange at its own brightness, the metal stays, the rest goes black
+        let mut laced = img(&[[170, 170, 170, 255], [120, 80, 40, 255], [170, 170, 170, 255]]);
+        let stitches = img(&[[255, 0, 0, 255], [0, 0, 0, 255], [255, 0, 0, 255]]);
+        let metal = img(&[[0, 0, 0, 255], [0, 0, 0, 255], [255, 0, 0, 255]]);
+        assert_eq!(blacken_laced(&mut laced, Some(&metal), Some(&stitches)), (1.0 / 3.0, 1.0 / 3.0));
+        assert_eq!(&laced.rgba[..4], &[205, 105, 35, 255]);
+        assert_eq!(&laced.rgba[4..7], &[dark; 3]);
+        assert_eq!(&laced.rgba[8..12], &[170, 170, 170, 255]);
+        let refs = v(&["TX_kratos00_int9_waist_m2_metals_D95589B9CC7975E6", "TX_kratos00_int9_waist_m5_stitches_E520609B02B3CF1B"]);
+        assert_eq!(stitch_mask(&refs).unwrap(), "TX_kratos00_int9_waist_m5_stitches_E520609B02B3CF1B");
+        assert_eq!(stitch_mask(&v(&["TX_kratos00_int9_shoulder_m5_stitch_B75719B642551478"])).unwrap(), "TX_kratos00_int9_shoulder_m5_stitch_B75719B642551478");
+        assert!(stitch_mask(&v(&["TX_leathersm_nm_EB42D11A4169A615"])).is_none());
     }
 }
