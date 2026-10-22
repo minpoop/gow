@@ -281,13 +281,21 @@ impl HeroWad {
     }
 }
 
+/// What the outfit probe keeps (see `install_kratos_part`): the bear cloak's fur (24), the fur under it (69), the
+/// leather of the strap and cloak (75), the leather cloak's fur (29), the belt (61) and the unused waist, chest and
+/// shoulder pieces' materials (66, 70, 71, 21); and the parts: skin (230), the bear cloak and its coarse shell (235,
+/// 237), the underfur (224), the strap and two pieces like it (231-233), the belt (196, 197), the unused waist, skirt,
+/// shoulder and chest pieces (199, 205-209, 225-229).
+const OUTFIT_PROBE_MATERIALS: [u16; 9] = [24, 69, 75, 29, 61, 66, 70, 71, 21];
+const OUTFIT_PROBE_PARTS: [u16; 22] = [230, 235, 237, 224, 231, 232, 233, 196, 197, 199, 205, 206, 207, 208, 209, 225, 226, 227, 228, 229, 194, 195];
+
 /// Build Kratos's armour parts (see `kratos_part::build_parts`) from the player's Ragnarök install once per install,
 /// builder version and player skeleton, keep them in the cache, and copy them into the mod folder ModEngine2 serves
 /// (`mod/parts`). The skeleton is the one gowring.dll read from the game in an earlier session (`er_skeleton.json`);
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 17;
+    const BUILD: u32 = 18;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -335,6 +343,20 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
             let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, &gowring_gow::kratos_part::CUT_OUT, &gowring_gow::kratos_part::SOLID_IF_UNCUT, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE, outfit.dyed());
             ctx.log(&format!("play: Kratos's look in {:.1}s for {} materials: {look_note}", t1.elapsed().as_secs_f32(), materials.len()));
             let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks, outfit)?;
+            // for the next round: the fur's, strap's and waist pieces' maps, and the cloak, strap, waist and chest pieces
+            // with their UVs (`outfit_probe`)
+            let probe = ctx.local.join("outfit_probe");
+            let _ = std::fs::remove_dir_all(&probe);
+            if std::fs::create_dir_all(probe.join("maps")).is_ok() {
+                let (pngs, lines) = gowring_gow::kratos_look::material_textures_png(buf, es, &wad_dir, &OUTFIT_PROBE_MATERIALS, 512);
+                for (name, png) in &pngs {
+                    let _ = std::fs::write(probe.join("maps").join(name), png);
+                }
+                let _ = std::fs::write(probe.join("maps.txt"), &lines);
+                let obj = gowring_gow::kratos_part::parts_obj_from_packs(mesh, mg, gpu, &pack, &OUTFIT_PROBE_PARTS);
+                let _ = std::fs::write(probe.join("parts.obj"), &obj);
+                ctx.log(&format!("play: outfit probe: {} maps, {} part draws in {}", pngs.len(), obj.lines().filter(|l| l.starts_with("g ")).count(), probe.display()));
+            }
             std::fs::create_dir_all(&cache)?;
             // the male, female and low-detail copies are the same bytes: write each once, link the others
             for (i, (name, bytes)) in files.iter().enumerate() {

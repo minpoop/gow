@@ -1384,7 +1384,7 @@ pub fn build_weapon(spec: &WeaponSpec, buf: &[u8], es: &[Entry], wad_dir: &Path,
     // its materials' looks
     let used: Vec<u16> = draws.iter().map(|d| d.1).collect::<BTreeSet<u16>>().into_iter().collect();
     let t0 = std::time::Instant::now();
-    let (looks, look_note) = kratos_look::model_looks(buf, es, wad_dir, &mesh_name, &used, &[], &[], kratos_part::MAX_TEXTURE, kratos_part::MAX_SURFACE, spec.rules.reject, &[]);
+    let (looks, look_note) = kratos_look::model_looks(buf, es, wad_dir, &mesh_name, &used, &[], &[], kratos_part::MAX_TEXTURE, kratos_part::MAX_SURFACE, 1.0, spec.rules.reject, &[]);
     say(&mut lines, format!("looks in {:.1}s for materials {used:?}: {look_note}", t0.elapsed().as_secs_f32()));
     // the meshes, rigid on the root node
     let mut meshes: Vec<Mesh> = Vec::new();

@@ -213,8 +213,9 @@ pub fn surface_maps(refs: &[String]) -> (Option<&String>, Option<&String>) {
 }
 
 /// Elden Ring's normal map from Ragnarök's normal map (X, Y in red, green) and gloss map (red), at the normal map's
-/// size: red and green as they are, blue the roughness (255 - gloss, nearest gloss pixel; 220 when there is none).
-pub fn surface_image(normal: &Image, gloss: Option<&Image>) -> Image {
+/// size: red and green as they are, blue the roughness (255 - gloss x `gloss_scale`, nearest gloss pixel; 220 when
+/// there is none).
+pub fn surface_image(normal: &Image, gloss: Option<&Image>, gloss_scale: f32) -> Image {
     let (w, h) = (normal.w, normal.h);
     let mut rgba = Vec::with_capacity((w * h * 4) as usize);
     for y in 0..h {
@@ -223,7 +224,7 @@ pub fn surface_image(normal: &Image, gloss: Option<&Image>) -> Image {
             let rough = match gloss {
                 Some(g) => {
                     let (gx, gy) = ((x as u64 * g.w as u64 / w as u64) as u32, (y as u64 * g.h as u64 / h as u64) as u32);
-                    255 - g.rgba[((gy * g.w + gx) * 4) as usize]
+                    255 - (g.rgba[((gy * g.w + gx) * 4) as usize] as f32 * gloss_scale.clamp(0.0, 1.0)).round() as u8
                 }
                 None => 220,
             };
@@ -264,6 +265,40 @@ pub fn decode_texture(name: &str, id_key: u64, buf: &[u8], es: &[Entry], packs: 
     }
 }
 
+/// Every texture `materials` of `MESH_heroa00_0` reference, as PNG files (`<material>_<n>_<texture>.png`, at most
+/// `max_side`, alpha kept), with a line per texture: for looking at a material's maps away from the player's PC (which
+/// of them holds the strands of a fur, say).
+pub fn material_textures_png(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], max_side: u32) -> (Vec<(String, Vec<u8>)>, String) {
+    let mut files = Vec::new();
+    let mut lines = Vec::new();
+    let bytes = |e: &Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
+    let Some(mesh_at) = es.iter().position(|e| e.name == "MESH_heroa00_0" && e.id == 1) else { return (files, "no MESH_heroa00_0".into()) };
+    let Some(table) = es.get(mesh_at + 1).filter(|e| e.id == 60).and_then(bytes) else { return (files, "no material table".into()) };
+    let names = crate::kratos::material_names(table);
+    let mut packs = texture_packs(wad_dir, false);
+    packs.extend(texture_packs(wad_dir, true));
+    for &m in materials {
+        let Some(name) = names.get(m as usize) else { continue };
+        let at = es.iter().position(|e| &e.name == name && e.id == 1);
+        let refs = at.and_then(|a| es.get(a + 1)).filter(|e| e.id == 60).and_then(bytes).map(crate::kratos::references).unwrap_or_default();
+        for (n, (id, tex)) in refs.iter().enumerate().filter(|(_, r)| r.1.starts_with("TX_")) {
+            let key = u64::from_le_bytes(id[8..16].try_into().unwrap_or([0; 8]));
+            match decode_texture(tex, key, buf, es, &packs) {
+                Ok(img) => {
+                    let small = crate::dds::downscale(&img, max_side);
+                    let alpha = small.rgba.chunks_exact(4).filter(|p| p[3] < 128).count() as f32 / (small.w * small.h).max(1) as f32;
+                    lines.push(format!("{m} {n} {tex}: {}x{} {:?}, {:.0} % clear", img.w, img.h, img.format, 100.0 * alpha));
+                    if let Ok(png) = crate::dds::to_png(&small) {
+                        files.push((format!("{m:02}_{n:02}_{}.png", stem(tex)), png));
+                    }
+                }
+                Err(e) => lines.push(format!("{m} {n} {tex}: {e:#}")),
+            }
+        }
+    }
+    (files, lines.join("\n"))
+}
+
 /// A material's look for the part: its colour map, and its surface (an Elden Ring normal map, see [`surface_image`]).
 #[derive(Default)]
 pub struct Look {
@@ -278,18 +313,22 @@ pub struct Look {
 /// (hair cards and the like) get their coverage in the colour map's alpha ([`cut_out_image`]) and list their textures
 /// in the line; those of them also in `solid` keep their plain colour map when no coverage is found (a whole cloak
 /// rather than none). Those in `dye` are dyed black ([`blacken`]). `buf` holds the start of r_heroa00.wad (its chunk
-/// table `es`), `wad_dir` the folder with the texture packs.
+/// table `es`), `wad_dir` the folder with the texture packs. Gloss is scaled by [`BODY_GLOSS`].
 #[allow(clippy::too_many_arguments)]
 pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], cut_out: &[u16], solid: &[u16], max_side: u32, max_surface: u32, dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
-    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, solid, max_side, max_surface, &[], dye)
+    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, solid, max_side, max_surface, BODY_GLOSS, &[], dye)
 }
+
+/// How much of Ragnarök's gloss Kratos's body keeps: at its full gloss his skin and leather looked wet and very shiny
+/// under Elden Ring's lighting (0.1.62).
+pub const BODY_GLOSS: f32 = 0.5;
 
 /// [`outfit_looks`] for any model: the materials are indices into the table after its `mesh_chunk` (`MESH_<m>_0`).
 /// Textures whose names hold one of `skip` (lower case, e.g. a weapon's frost or gold variants, see
 /// [`crate::weapon_part::PartRules::reject`]) are passed over when a map is chosen, so a material layered with a
 /// variant's maps draws with its own.
 #[allow(clippy::too_many_arguments)]
-pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], solid: &[u16], max_side: u32, max_surface: u32, skip: &[&str], dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
+pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], solid: &[u16], max_side: u32, max_surface: u32, gloss_scale: f32, skip: &[&str], dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
     let mut out = BTreeMap::new();
     let mut note = String::new();
     let bytes = |e: &Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
@@ -396,7 +435,7 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                     let n_img = crate::dds::downscale(&img, max_surface);
                     let g_img = gloss.and_then(|g| get(g).ok()).map(|g| crate::dds::downscale(&g, max_surface));
                     note.push_str(&format!(", normal {}x{}{}", img.w, img.h, if g_img.is_some() { " and gloss" } else { "" }));
-                    look.surface = Some(surface_image(&n_img, g_img.as_ref()));
+                    look.surface = Some(surface_image(&n_img, g_img.as_ref(), gloss_scale));
                 }
                 Err(e) => note.push_str(&format!(", normal failed ({e:#})")),
             }
@@ -425,8 +464,10 @@ mod tests {
         // red and green from the normal, blue = 255 - gloss
         let normal = Image { w: 2, h: 1, rgba: vec![10, 20, 30, 40, 50, 60, 70, 80], format: crate::dds::Format::Bc5 };
         let gloss = Image { w: 1, h: 1, rgba: vec![200, 0, 0, 255], format: crate::dds::Format::Bc4 };
-        assert_eq!(surface_image(&normal, Some(&gloss)).rgba, vec![10, 20, 55, 255, 50, 60, 55, 255]);
-        assert_eq!(surface_image(&normal, None).rgba[2], 220);
+        assert_eq!(surface_image(&normal, Some(&gloss), 1.0).rgba, vec![10, 20, 55, 255, 50, 60, 55, 255]);
+        assert_eq!(surface_image(&normal, None, 1.0).rgba[2], 220);
+        // half the gloss: rougher
+        assert_eq!(surface_image(&normal, Some(&gloss), 0.5).rgba[2], 155);
     }
 
     #[test]
@@ -489,11 +530,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gowring-looks-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // no texture pack and no texture in the WAD: the note names the map that was chosen
-        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, &[], &[]);
+        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, 1.0, &[], &[]);
         assert!(plain.contains("0: axe02_base_ice_gen_0d failed"), "{plain}");
-        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, &["ice"], &[]);
+        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, 1.0, &["ice"], &[]);
         assert!(skipped.contains("0: axe02_base_metal_gen_0d failed"), "{skipped}");
-        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], &[], 64, 64, &[], &[]).1, "no MESH_kratosspear00_0");
+        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], &[], 64, 64, 1.0, &[], &[]).1, "no MESH_kratosspear00_0");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -70,11 +70,12 @@ impl Outfit {
     }
 
     /// The materials it dyes black (see [`crate::kratos_look::blacken`]): for the Black Bear Set the cloak's fur (24),
-    /// the fur under it (69), the leggings (88), boots (62) and the belt with its leather tassels (61).
+    /// the fur under it (69), the leggings (88), boots (62), the belt with its leather tassels (61) and the chest strap
+    /// (75, the leather cloak's material; the cloak itself is not worn).
     pub fn dyed(self) -> &'static [u16] {
         match self {
             Outfit::Survival => &[],
-            Outfit::BlackBear => &[24, 69, 88, 62, 61],
+            Outfit::BlackBear => &[24, 69, 88, 62, 61, 75],
         }
     }
 
@@ -953,13 +954,15 @@ mod tests {
 
     #[test]
     fn the_black_bear_set_swaps_the_leather_cloak_for_the_bear_fur_one() {
-        let leather: Vec<u16> = [213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 231, 236].to_vec();
+        // the leather cloak and the fur along the strap leave; the strap (231) stays
+        let leather: Vec<u16> = [213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 236].to_vec();
         let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !leather.contains(p)).chain([224, 235]).collect();
         expected.sort_unstable();
         assert_eq!(Outfit::BlackBear.parts(), expected.as_slice());
         assert!(Outfit::Survival.dyed().is_empty());
         // the bear cloak and its fur take the body's weights and are pushed out of the skin like the leather ones
-        assert!(Outfit::BlackBear.dyed().iter().all(|m| [24, 69, 88, 62, 61].contains(m)));
+        assert!(Outfit::BlackBear.dyed().iter().all(|m| [24, 69, 88, 62, 61, 75].contains(m)));
+        assert!(Outfit::BlackBear.parts().contains(&231));
         assert!(CLOTH.iter().any(|c| c.0 == 24) && CLOTH.iter().any(|c| c.0 == 69) && CLOAKS.contains(&24) && FURS.contains(&69));
     }
 
@@ -1220,5 +1223,81 @@ mod tests {
             std::fs::write(dir.join(name), bytes).unwrap();
         }
         let _ = std::fs::remove_file(dir.join("root.lodpack"));
+    }
+}
+
+/// An OBJ of `parts`' most detailed draws (one group per draw, `p<part>_d<k>_m<material>`, positions and the first UV
+/// set), each draw's vertices from `decode` (None: left out, with a comment): for looking at parts away from the
+/// player's PC.
+pub fn parts_obj(mesh: &[u8], mg: &[u8], parts: &[u16], mut decode: impl FnMut(&crate::kratos::MeshRecord) -> Option<crate::kratos::Vertices>) -> String {
+    use std::fmt::Write;
+    let rs = mesh_records(mesh);
+    let levels = mg_parts(mg);
+    let mut obj = String::new();
+    let mut base = 1usize;
+    for &p in parts {
+        let Some(l) = levels.get(p as usize).and_then(|l| l.first()) else { continue };
+        for (k, i) in (l.first as usize..l.first as usize + l.draws as usize).enumerate() {
+            let Some(r) = rs.get(i) else { continue };
+            let Some(v) = decode(r) else {
+                let _ = writeln!(obj, "# part {p} draw {k} (material {}): not decoded", r.material);
+                continue;
+            };
+            let _ = writeln!(obj, "g p{p}_d{k}_m{}", r.material);
+            for q in &v.position {
+                let _ = writeln!(obj, "v {:.4} {:.4} {:.4}", q[0], q[1], q[2]);
+            }
+            for t in v.uv[0].iter() {
+                let _ = writeln!(obj, "vt {:.4} {:.4}", t[0], t[1]);
+            }
+            let uv = !v.uv[0].is_empty();
+            for t in &v.triangles {
+                let [a, b, c] = t.map(|x| x as usize + base);
+                if uv {
+                    let _ = writeln!(obj, "f {a}/{a} {b}/{b} {c}/{c}");
+                } else {
+                    let _ = writeln!(obj, "f {a} {b} {c}");
+                }
+            }
+            base += v.position.len();
+        }
+    }
+    obj
+}
+
+/// [`parts_obj`] for the player's install: draws from `gpu` (resident) or the level-of-detail packs beside `pack`.
+pub fn parts_obj_from_packs(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, parts: &[u16]) -> String {
+    let mut lod = crate::lodpack::LodPacks::open(pack).ok();
+    parts_obj(mesh, mg, parts, |r| {
+        if r.hash == 0 {
+            return crate::kratos::draw_vertices(gpu, r);
+        }
+        let res = lod.as_mut()?.get(r.hash).ok()??;
+        crate::kratos::draw_vertices(res, r)
+    })
+}
+
+#[cfg(test)]
+mod part_obj {
+    use super::*;
+
+    /// Offline look at chosen parts ([`parts_obj`]) from a folder of resources: `GOWRING_MESH`, `GOWRING_MG`,
+    /// `GOWRING_SAMPLES_DIR` (`<hash>_*.bin`), `GOWRING_PARTS` (comma-separated), `GOWRING_OBJ_OUT`.
+    #[test]
+    #[ignore]
+    fn parts_as_obj() {
+        let (Ok(mesh), Ok(mg), Ok(samples), Ok(parts), Ok(out)) = (std::env::var("GOWRING_MESH"), std::env::var("GOWRING_MG"), std::env::var("GOWRING_SAMPLES_DIR"), std::env::var("GOWRING_PARTS"), std::env::var("GOWRING_OBJ_OUT")) else { return };
+        let (mesh, mg) = (std::fs::read(mesh).unwrap(), std::fs::read(mg).unwrap());
+        let mut res: std::collections::BTreeMap<u64, Vec<u8>> = Default::default();
+        for e in std::fs::read_dir(&samples).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if let Some(h) = name.split('_').next().and_then(|h| u64::from_str_radix(h, 16).ok()) {
+                res.insert(h, std::fs::read(e.path()).unwrap());
+            }
+        }
+        let parts: Vec<u16> = parts.split(',').filter_map(|p| p.trim().parse().ok()).collect();
+        let obj = parts_obj(&mesh, &mg, &parts, |r| res.get(&r.hash).and_then(|b| crate::kratos::draw_vertices(b, r)));
+        println!("{} groups", obj.lines().filter(|l| l.starts_with("g ")).count());
+        std::fs::write(out, obj).unwrap();
     }
 }

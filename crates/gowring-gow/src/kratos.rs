@@ -490,12 +490,13 @@ pub const DEFAULT_OUTFIT: &[u16] = &[
 
 /// The Black Bear Set (Ragnarök's New Game+ update): the default look (the Survival Set) with the bear-fur cloak Kratos
 /// wears at the start of the game (235, material 24 `kratos00_int9_cloakfur`, shoulders to knees) and the fur under it
-/// (224, material 69 `kratos_underfur`) in place of the leather cloak (236 and its strap 231, material 75) and that
-/// cloak's fur collar (213, 215-223, material 29). The set's black leggings, boots and belt are a dye
-/// ([`crate::kratos_part::Outfit::dyed`]), not other parts.
+/// (224, material 69 `kratos_underfur`) in place of the leather cloak (236, material 75) and the fur along the chest
+/// strap (213, 215-223, material 29). The chest strap itself (231, material 75: from the right shoulder across the
+/// chest; 0.1.60-0.1.62 left it out with the cloak) stays, as in the set's art. The set's black leggings, boots, belt
+/// and strap are a dye ([`crate::kratos_part::Outfit::dyed`]), not other parts.
 pub const BLACK_BEAR_OUTFIT: &[u16] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 194, 195, 196, 197, 198, 200, 201, 203, 204, 214, 224, 230, 234, 235, 238, 239, 240, 241, 243, 251, 263, 264, 265, 267, 268, 269, 270,
-    271, 272, 273, 274, 277, 279, 280,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 194, 195, 196, 197, 198, 200, 201, 203, 204, 214, 224, 230, 231, 234, 235, 238, 239, 240, 241, 243, 251, 263, 264, 265, 267, 268,
+    269, 270, 271, 272, 273, 274, 277, 279, 280,
 ];
 
 /// Parts that are not drawn as Kratos: a capsule and three ellipsoids per body region (244-258, likely shadow or
