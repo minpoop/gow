@@ -36,6 +36,9 @@ pub struct Settings {
     pub debug_rage_key: u8,
     /// The function key that steps the close-up camera (chest, nearer, waist, off) for looking at Kratos's model.
     pub debug_camera_key: u8,
+    /// The function key that runs the pose probe (see `bonepose`): his head lifted step by step through the game's
+    /// bone arrays, to find the one it draws him with.
+    pub debug_pose_key: u8,
     /// Enemies drop health stones that heal Kratos when he walks over them (Ragnarök's way of healing).
     pub health_stones: bool,
     /// Health given to a summoned enemy.
@@ -102,6 +105,7 @@ impl Default for Settings {
             debug_spawn_key: 9,
             debug_rage_key: 10,
             debug_camera_key: 11,
+            debug_pose_key: 8,
             health_stones: true,
             debug_enemy_health: 20000.0,
             debug_enemy_damage_multiplier: 3.5,
@@ -114,7 +118,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 11;
+const FILE_VERSION: u32 = 12;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -186,6 +190,9 @@ fn render(s: &Settings) -> String {
   "debug_camera_key": "F{ckey}",
   "_debug_camera_key": "Keyboard key (F1 to F12) that brings the camera close to Kratos, for looking at his model: each press steps chest, nearer, waist, then back to the normal camera. Turn it with the camera stick as usual.",
 
+  "debug_pose_key": "F{pkey}",
+  "_debug_pose_key": "Keyboard key (F1 to F12) that runs the pose probe, a test for making his cloak move: for a few seconds per step his head is lifted out of place through one of the game's bone arrays, with the step on screen. Say which step lifted it.",
+
   "debug_enemy_health": {dhp:?},
   "_debug_enemy_health": "Health of a summoned enemy (100 to 100000). Summons are treated as bosses: the big health bar, a boss stun bar, and finishers that take a slice instead of killing.",
 
@@ -211,6 +218,7 @@ fn render(s: &Settings) -> String {
         dkey = s.debug_spawn_key,
         rkey = s.debug_rage_key,
         ckey = s.debug_camera_key,
+        pkey = s.debug_pose_key,
         stones = s.health_stones,
         dhp = s.debug_enemy_health,
         ddm = s.debug_enemy_damage_multiplier,
@@ -274,6 +282,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     debug_spawn_key: 9,
     debug_rage_key: 10,
     debug_camera_key: 11,
+    debug_pose_key: 8,
     health_stones: true,
     debug_enemy_health: 20000.0,
     debug_enemy_damage_multiplier: 3.5,
@@ -337,6 +346,9 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     }
     if let Some(k) = v.get("debug_camera_key").and_then(|x| x.as_str()).and_then(fkey) {
         s.debug_camera_key = k;
+    }
+    if let Some(k) = v.get("debug_pose_key").and_then(|x| x.as_str()).and_then(fkey) {
+        s.debug_pose_key = k;
     }
     flag(&v, "health_stones", &mut s.health_stones);
     flag(&v, "black_bear_outfit", &mut s.black_bear_outfit);
@@ -405,8 +417,9 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
         s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
-    // versions 3 and 7-11 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
-    // two-handing; 10: the stowed shield; 11: the close-up camera key): re-rendering the file shows them with their notes
+    // versions 3 and 7-12 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
+    // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key): re-rendering the file
+    // shows them with their notes
     Some(render(&s))
 }
 
@@ -496,6 +509,7 @@ mod tests {
             debug_spawn_key: 11,
             debug_rage_key: 12,
             debug_camera_key: 8,
+            debug_pose_key: 7,
             health_stones: false,
             debug_enemy_health: 5000.0,
             debug_enemy_damage_multiplier: 4.0,

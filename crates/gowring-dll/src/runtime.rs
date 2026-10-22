@@ -48,6 +48,7 @@ pub struct Runtime {
     spawn_key_down: bool,
     rage_key_down: bool,
     camera_key_down: bool,
+    pose_key_down: bool,
 }
 
 #[derive(Default, Debug)]
@@ -87,6 +88,7 @@ impl Runtime {
             spawn_key_down: false,
             rage_key_down: false,
             camera_key_down: false,
+            pose_key_down: false,
         }
     }
 
@@ -218,6 +220,28 @@ impl Runtime {
                 crate::overlay::toast(&format!("{what} (debug)"));
             }
             self.camera_key_down = down;
+            let down = function_key_down(st.debug_pose_key);
+            if down && !self.pose_key_down {
+                // the roots the pose capture searches from: the model item's bone-matrix entity, the model item, the
+                // behaviour module
+                let mut roots: Vec<(&'static str, usize)> = Vec::new();
+                if let Some(m) = self.bridge.player_model_item() {
+                    if let Some(e) = crate::skeleton::read::<usize>(m + crate::pose::MTX43_ARRAY_ENTITY) {
+                        roots.push(("mtx43 array entity", e));
+                    }
+                    roots.push(("model item", m));
+                }
+                if let Some(b) = self.bridge.player_behavior_module() {
+                    roots.push(("behaviour", b));
+                }
+                crate::glog!("debug", "F{} pressed: pose probe from {} root(s)", st.debug_pose_key, roots.len());
+                if roots.is_empty() {
+                    crate::overlay::toast("Pose probe: no player model yet (debug)");
+                } else {
+                    crate::bonepose::start(roots);
+                }
+            }
+            self.pose_key_down = down;
         } else {
             CLOSE_UP.store(0, std::sync::atomic::Ordering::Relaxed);
         }

@@ -21,8 +21,8 @@ const ARRAY: usize = 176 * 64;
 const READ_BUDGET: u64 = 4000;
 
 /// The layouts tried: name, stride in floats, and where the 3x3 rotation's rows (or the quaternion) sit.
-#[derive(Clone, Copy)]
-enum Layout {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Layout {
     /// 16 floats; rotation in 0-2, 4-6, 8-10.
     M44,
     /// 12 floats, rotation in 0-2, 4-6, 8-10, translation in 3, 7, 11.
@@ -78,18 +78,28 @@ fn best_run(f: &[f32]) -> Option<(usize, Layout, usize)> {
         .max_by_key(|(_, _, n)| *n)
 }
 
-/// Search from `roots` (name, address) and write what is found as capture `label`. Returns a line for the log.
-pub fn capture(roots: &[(&str, usize)], label: &str) -> String {
-    let (t0, r0) = (std::time::Instant::now(), reads());
+/// An array of bone transforms found from a root: its path from the root (`root+0x30+0x508`: the pointer at +0x30,
+/// then the one at +0x508 in what that points to), address, layout and floats (as far as one read reaches).
+pub struct Found {
+    pub path: String,
+    pub address: usize,
+    pub layout: Layout,
+    pub floats: Vec<f32>,
+}
+
+/// The arrays of bone transforms within two pointers of `roots` (name, address), at most `max_found`, within `budget`
+/// reads; and how many objects were looked at.
+pub fn find(roots: &[(&str, usize)], budget: u64, max_found: usize) -> (Vec<Found>, usize) {
+    let r0 = reads();
     let mut seen: HashSet<usize> = HashSet::new();
-    let mut found: Vec<(String, usize, Layout, Vec<f32>)> = Vec::new();
+    let mut found: Vec<Found> = Vec::new();
     let looks_like_pointer = |w: usize| (0x10000..0x7fff_ffff_0000).contains(&w) && w % 8 == 0;
     // breadth first: (path, address of an object to look into), two levels
     let mut level: Vec<(String, usize)> = roots.iter().map(|(n, a)| (n.to_string(), *a)).collect();
     for depth in 0..3 {
         let mut next = Vec::new();
         for (path, at) in level {
-            if reads() - r0 > READ_BUDGET || found.len() >= 8 {
+            if reads() - r0 > budget || found.len() >= max_found {
                 break;
             }
             if !seen.insert(at) {
@@ -98,7 +108,7 @@ pub fn capture(roots: &[(&str, usize)], label: &str) -> String {
             // the object itself might be the array
             if let Some(f) = read_vec::<f32>(at, ARRAY / 4) {
                 if let Some((start, layout, n)) = best_run(&f) {
-                    found.push((path.clone(), at + start * 4, layout, f[start..start + n * layout.stride()].to_vec()));
+                    found.push(Found { path: path.clone(), address: at + start * 4, layout, floats: f[start..start + n * layout.stride()].to_vec() });
                     continue;
                 }
             }
@@ -114,6 +124,14 @@ pub fn capture(roots: &[(&str, usize)], label: &str) -> String {
         }
         level = next;
     }
+    (found, seen.len())
+}
+
+/// Search from `roots` (name, address) and write what is found as capture `label`. Returns a line for the log.
+pub fn capture(roots: &[(&str, usize)], label: &str) -> String {
+    let (t0, r0) = (std::time::Instant::now(), reads());
+    let (found, looked) = find(roots, READ_BUDGET, 8);
+    let found: Vec<(String, usize, Layout, Vec<f32>)> = found.into_iter().map(|f| (f.path, f.address, f.layout, f.floats)).collect();
     let mut j = format!("{{\n  \"capture\": {label:?},\n  \"arrays\": [\n");
     for (i, (path, at, layout, f)) in found.iter().enumerate() {
         let n = f.len() / layout.stride();
@@ -135,7 +153,7 @@ pub fn capture(roots: &[(&str, usize)], label: &str) -> String {
             Ok(()) => format!("written to {}", path.display()),
             Err(e) => format!("could not write it: {e}"),
         },
-        seen.len(),
+        looked,
         reads() - r0,
         t0.elapsed().as_millis()
     )

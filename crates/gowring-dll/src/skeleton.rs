@@ -22,6 +22,13 @@ use windows::Win32::System::Threading::GetCurrentProcess;
 
 static DONE: AtomicBool = AtomicBool::new(false);
 static READS: AtomicU64 = AtomicU64::new(0);
+/// The skeleton as read this session (for [`crate::bonepose`]).
+static BONES: std::sync::OnceLock<Vec<Bone>> = std::sync::OnceLock::new();
+
+/// The player skeleton read this session, once [`dump_once`] has found it.
+pub fn bones() -> Option<&'static [Bone]> {
+    BONES.get().map(|b| b.as_slice())
+}
 
 /// How many reads have been made so far (for the log).
 pub(crate) fn reads() -> u64 {
@@ -168,13 +175,16 @@ pub fn dump_once(behavior_module: usize) {
         );
     }
     j.push_str("  ]\n}\n");
+    let count = bones.len();
+    let first: Vec<String> = bones.iter().take(6).map(|b| b.name.clone()).collect();
+    let _ = BONES.set(bones);
     let path = crate::paths::get().local.join("er_skeleton.json");
     let wrote = std::fs::create_dir_all(&crate::paths::get().local).and_then(|_| std::fs::write(&path, j));
     crate::glog!(
         "skeleton",
         "player skeleton {name:?}: {} bones (first {:?}); {}{trail} ({} reads, {} ms)",
-        bones.len(),
-        bones.iter().take(6).map(|b| b.name.as_str()).collect::<Vec<_>>(),
+        count,
+        first,
         match wrote {
             Ok(()) => format!("written to {}", path.display()),
             Err(e) => format!("could not write it: {e}"),

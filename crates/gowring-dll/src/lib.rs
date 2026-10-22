@@ -6,6 +6,7 @@
 mod assets;
 mod audio;
 mod boot;
+mod bonepose;
 mod exithook;
 mod filecaps;
 mod host;

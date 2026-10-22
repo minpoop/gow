@@ -1,4 +1,6 @@
-Sixty-seventh alpha: the real Black Bear Set, the Blades on Backhand Blade moves, Kratos less shiny, and a close-up camera.
+Sixty-eighth alpha: a first step toward a cloak that flows, plus the real Black Bear Set, the Blades on Backhand Blade moves, Kratos less shiny, and a close-up camera.
+
+- **Pose probe (testing).** Elden Ring moves capes with cloth data built into each armour file, which the mod can't make, so Kratos's cloak and fur will need to be moved by the mod itself. This version tests whether that can work. Press F8 on the keyboard (F11 first for a close-up helps), then watch: step by step, for 3 seconds each, his head is lifted out of place through a different spot in the game's memory, with the step number on screen. Tell us which step, if any, made his head float. The cloak itself doesn't move yet.
 
 0.1.58 passed its test on the new Elden Ring update: Kratos, his axe, spear and shield all showed, and it ran the whole ten minutes.
 
