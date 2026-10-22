@@ -34,6 +34,12 @@ pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
 pub const CUT_OUT: [u16; 7] = [4, 7, 24, 29, 69, 86, 87];
 /// Strand materials drawn solid when no coverage is found: the bear cloak (24) is the whole cloak, not a trim.
 pub const SOLID_IF_UNCUT: [u16; 1] = [24];
+/// Strand materials whose coverage is their own colour map's alpha: the bear cloak (24; `kratos00_int9_cloakfur_m_gen_0d`
+/// carries a hair-card alpha, 83 % empty and 4 % solid on the player's PC, while 0.1.62 took a New Game+ map of its
+/// whose alpha is half solid, a region mask, and the cards still showed as blocks).
+pub const COLOUR_ALPHA: [u16; 1] = [24];
+/// How Kratos's strand materials are cut out.
+pub const STRANDS: crate::kratos_look::Strands<'static> = crate::kratos_look::Strands { materials: &CUT_OUT, solid: &SOLID_IF_UNCUT, colour_alpha: &COLOUR_ALPHA };
 /// The short goatee under the long beard (86, 87): left out when the long beard is drawn, which covers its place (it
 /// showed under it).
 pub const GOATEE: u16 = 89;
@@ -800,7 +806,8 @@ pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collect
         mats.push(mat);
     }
     let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
-    textures.push((format!("{tex}_m"), solid([0, 160, 0]), 0));
+    // not metal, as Elden Ring's own stand-in (`SYSTEX_Dummy_m`, all 0); 0.1.62 and before had green 160 in it
+    textures.push((format!("{tex}_m"), solid([0, 0, 0]), 0));
     textures.push((format!("{tex}_n"), solid([128, 128, 255]), 0));
     (mats, textures, counts)
 }
@@ -811,7 +818,7 @@ fn material(id: u16) -> Material {
 
 fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
     let solid = |c: [u8; 3]| erpart::dds_bc1(4, 4, &erpart::bc1_solid(c[0], c[1], c[2]));
-    erpart::tpf(&[(format!("kratos_{id}_a"), solid(albedo), 0), (format!("kratos_{id}_m"), solid([0, 160, 0]), 0), (format!("kratos_{id}_n"), solid([128, 128, 255]), 0)])
+    erpart::tpf(&[(format!("kratos_{id}_a"), solid(albedo), 0), (format!("kratos_{id}_m"), solid([0, 0, 0]), 0), (format!("kratos_{id}_n"), solid([128, 128, 255]), 0)])
 }
 
 /// Every part file this version installs, as (file name, bytes), and a line about them. The body (`bd_*_9701`) is

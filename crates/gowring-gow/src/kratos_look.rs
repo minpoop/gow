@@ -299,6 +299,20 @@ pub fn material_textures_png(buf: &[u8], es: &[Entry], wad_dir: &Path, materials
     (files, lines.join("\n"))
 }
 
+/// How strand materials are cut out (see [`cut_out_image`]): which materials are strands, which of them are drawn solid
+/// when no coverage is found (a whole cloak rather than none), and which take their coverage from their own colour
+/// map's alpha (strengthened by [`COLOUR_ALPHA_GAIN`]) instead of searching their other maps.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Strands<'a> {
+    pub materials: &'a [u16],
+    pub solid: &'a [u16],
+    pub colour_alpha: &'a [u16],
+}
+
+/// How much a colour map's own alpha is strengthened when it is the coverage: Ragnarök layers its fur cards and blends
+/// them, and Elden Ring's cut-out keeps only what is over half, so the thin strands would mostly vanish.
+pub const COLOUR_ALPHA_GAIN: f32 = 2.0;
+
 /// A material's look for the part: its colour map, and its surface (an Elden Ring normal map, see [`surface_image`]).
 #[derive(Default)]
 pub struct Look {
@@ -309,14 +323,13 @@ pub struct Look {
 }
 
 /// For each of `materials` (indices into the mesh's material table), its colour map scaled to at most `max_side` and
-/// its surface scaled to at most `max_surface`, and a line per material saying what was found. Those in `cut_out`
-/// (hair cards and the like) get their coverage in the colour map's alpha ([`cut_out_image`]) and list their textures
-/// in the line; those of them also in `solid` keep their plain colour map when no coverage is found (a whole cloak
-/// rather than none). Those in `dye` are dyed black ([`blacken`]). `buf` holds the start of r_heroa00.wad (its chunk
-/// table `es`), `wad_dir` the folder with the texture packs. Gloss is scaled by [`BODY_GLOSS`].
+/// its surface scaled to at most `max_surface`, and a line per material saying what was found. The `strands` (hair
+/// cards and the like) get their coverage in the colour map's alpha ([`cut_out_image`], [`Strands`]) and list their
+/// textures in the line. Those in `dye` are dyed black ([`blacken`]). `buf` holds the start of r_heroa00.wad (its
+/// chunk table `es`), `wad_dir` the folder with the texture packs. Gloss is scaled by [`BODY_GLOSS`].
 #[allow(clippy::too_many_arguments)]
-pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], cut_out: &[u16], solid: &[u16], max_side: u32, max_surface: u32, dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
-    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, cut_out, solid, max_side, max_surface, BODY_GLOSS, &[], dye)
+pub fn outfit_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, materials: &[u16], strands: Strands, max_side: u32, max_surface: u32, dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
+    model_looks(buf, es, wad_dir, "MESH_heroa00_0", materials, strands, max_side, max_surface, BODY_GLOSS, &[], dye)
 }
 
 /// How much of Ragnarök's gloss Kratos's body keeps: at its full gloss his skin and leather looked wet and very shiny
@@ -328,7 +341,7 @@ pub const BODY_GLOSS: f32 = 0.5;
 /// [`crate::weapon_part::PartRules::reject`]) are passed over when a map is chosen, so a material layered with a
 /// variant's maps draws with its own.
 #[allow(clippy::too_many_arguments)]
-pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], cut_out: &[u16], solid: &[u16], max_side: u32, max_surface: u32, gloss_scale: f32, skip: &[&str], dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
+pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, materials: &[u16], strands: Strands, max_side: u32, max_surface: u32, gloss_scale: f32, skip: &[&str], dye: &[u16]) -> (BTreeMap<u16, Look>, String) {
     let mut out = BTreeMap::new();
     let mut note = String::new();
     let bytes = |e: &Entry| buf.get(e.file_off as usize..(e.file_off + e.length as u64) as usize);
@@ -369,7 +382,7 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                 None => note.push_str(", dyed black"),
             }
         };
-        if cut_out.contains(&m) {
+        if strands.materials.contains(&m) {
             let stems: Vec<&str> = all_names.iter().filter(|r| r.starts_with("TX_")).map(|r| stem(r)).collect();
             note.push_str(&format!("{m} (cut-out; textures {stems:?}): "));
             let mut colour = colour_map(&ref_names).and_then(|t| get(t).ok().map(|img| (img, stem(t).contains("uv2"))));
@@ -379,7 +392,13 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                     note.push_str(": ");
                 }
             }
+            // the colour map's own alpha, where the material is known to carry its strands there
+            let own_alpha = strands.colour_alpha.contains(&m) && colour.as_ref().is_some_and(|(img, uv2)| !uv2 && (0.02..0.98).contains(&clear_share(img)));
             let coverage = match coverage_map(&ref_names) {
+                _ if own_alpha => {
+                    note.push_str(&format!("coverage from its own colour map's alpha (x{COLOUR_ALPHA_GAIN}), "));
+                    None
+                }
                 Some(t) => get(t).ok(),
                 None => {
                     // no opacity map by name: the strand-like textures' pixels tell
@@ -398,12 +417,19 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                 }
             };
             match cut_out_image(colour.as_ref().map(|(img, uv2)| (img, *uv2)), coverage.as_ref(), max_side) {
-                Some((img, how)) => {
+                Some((mut img, how)) => {
+                    if own_alpha {
+                        for p in img.rgba.chunks_exact_mut(4) {
+                            p[3] = (p[3] as f32 * COLOUR_ALPHA_GAIN).min(255.0) as u8;
+                        }
+                        let drawn = img.rgba.chunks_exact(4).filter(|p| p[3] >= 128).count() as f32 / (img.w * img.h).max(1) as f32;
+                        note.push_str(&format!("{:.0} % drawn after the gain, ", 100.0 * drawn));
+                    }
                     note.push_str(&format!("{}x{}, {how}", img.w, img.h));
                     look.colour = Some(img);
                     look.cut_out = true;
                 }
-                None => match colour.as_ref().filter(|_| solid.contains(&m)) {
+                None => match colour.as_ref().filter(|_| strands.solid.contains(&m)) {
                     Some((img, _)) => {
                         let img = crate::dds::downscale(img, max_side);
                         note.push_str(&format!("no coverage found, drawn solid ({}x{})", img.w, img.h));
@@ -530,11 +556,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gowring-looks-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         // no texture pack and no texture in the WAD: the note names the map that was chosen
-        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, 1.0, &[], &[]);
+        let (_, plain) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], Strands::default(), 64, 64, 1.0, &[], &[]);
         assert!(plain.contains("0: axe02_base_ice_gen_0d failed"), "{plain}");
-        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], &[], &[], 64, 64, 1.0, &["ice"], &[]);
+        let (_, skipped) = model_looks(&buf, &es, &dir, "MESH_axe00_0", &[0], Strands::default(), 64, 64, 1.0, &["ice"], &[]);
         assert!(skipped.contains("0: axe02_base_metal_gen_0d failed"), "{skipped}");
-        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], &[], &[], 64, 64, 1.0, &[], &[]).1, "no MESH_kratosspear00_0");
+        assert_eq!(model_looks(&buf, &es, &dir, "MESH_kratosspear00_0", &[0], Strands::default(), 64, 64, 1.0, &[], &[]).1, "no MESH_kratosspear00_0");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

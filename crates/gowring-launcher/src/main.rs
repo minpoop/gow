@@ -340,7 +340,7 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
             let t1 = std::time::Instant::now();
             let materials = gowring_gow::kratos_part::outfit_materials(mesh, mg, outfit);
             let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
-            let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, &gowring_gow::kratos_part::CUT_OUT, &gowring_gow::kratos_part::SOLID_IF_UNCUT, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE, outfit.dyed());
+            let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, gowring_gow::kratos_part::STRANDS, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE, outfit.dyed());
             ctx.log(&format!("play: Kratos's look in {:.1}s for {} materials: {look_note}", t1.elapsed().as_secs_f32(), materials.len()));
             let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks, outfit)?;
             // for the next round: the fur's, strap's and waist pieces' maps, and the cloak, strap, waist and chest pieces
