@@ -501,10 +501,14 @@ pub const DEFAULT_OUTFIT: &[u16] = &[
 /// under the harness). The harness's fur (229, material 29: tufts around the shoulder pad, front to back) stays, and so
 /// does the pad's second panel (227, material 70 as the pad: the laced leather band over the back of the shoulder, laid
 /// out on the half of `kratos00_int9_shoulder` the pad leaves empty, so the same pauldron, not an alternative; left out
-/// in 0.1.66-0.1.71). The black is a dye ([`crate::kratos_part::Outfit::dyed`]).
+/// in 0.1.66-0.1.71). His arms are the set's too (0.1.74, "his arms are meant to be armored"): the guards over his
+/// upper arms (225, 226) and the bracers (210-212), materials 67 `kratos00_int9_leftarm` and 68 `kratos00_int9_rightarm`,
+/// the same family as the pad, harness, belt and apron (0.1.66 judged the guards another set's from a render and kept
+/// the default outfit's `youngkratos_armbracer` bracers, 203 and 204). The black is a dye
+/// ([`crate::kratos_part::Outfit::dyed`]).
 pub const BLACK_BEAR_OUTFIT: &[u16] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 200, 201, 203, 204, 205, 206, 207, 208, 209, 214, 224, 227, 228, 229, 230, 234, 235, 238, 239, 240, 241, 243, 251, 263, 264,
-    265, 267, 268, 269, 270, 271, 272, 273, 274, 277, 279, 280,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 200, 201, 205, 206, 207, 208, 209, 210, 211, 212, 214, 224, 225, 226, 227, 228, 229, 230, 234, 235, 238, 239, 240, 241, 243,
+    251, 263, 264, 265, 267, 268, 269, 270, 271, 272, 273, 274, 277, 279, 280,
 ];
 
 /// Parts that are not drawn as Kratos: a capsule and three ellipsoids per body region (244-258, likely shadow or

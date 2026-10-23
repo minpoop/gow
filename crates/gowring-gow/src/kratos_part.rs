@@ -81,12 +81,13 @@ impl Outfit {
     }
 
     /// The materials it dyes black (see [`crate::kratos_look::blacken_laced`]): for the Black Bear Set the cloak's fur
-    /// (24), the fur under it (69), the harness's fur (29), the leggings (88), boots (62), the belt (66), the apron (21)
-    /// and the harness with its shoulder pad (71, 70), their metal kept and their lacing orange as in the set's art.
+    /// (24), the fur under it (69), the harness's fur (29), the leggings (88), boots (62), the belt (66), the apron (21),
+    /// the harness with its shoulder pad (71, 70) and the arm guards and bracers (67, 68), their metal kept and their
+    /// lacing orange as in the set's art.
     pub fn dyed(self) -> &'static [u16] {
         match self {
             Outfit::Survival => &[],
-            Outfit::BlackBear => &[24, 69, 29, 88, 62, 66, 21, 70, 71],
+            Outfit::BlackBear => &[24, 69, 29, 88, 62, 66, 21, 70, 71, 67, 68],
         }
     }
 
@@ -105,10 +106,11 @@ pub const EYES: u16 = 77;
 /// the eyes level the top of its head and its hair showed above his. 1.5 cm puts both crowns and chins level.
 pub const HEAD_RAISE: f32 = 0.015;
 
-/// The largest side of a colour map in the part (Ragnarök's are up to 2048).
-pub const MAX_TEXTURE: u32 = 1024;
-/// The largest side of a surface (normal and roughness) map.
-pub const MAX_SURFACE: u32 = 512;
+/// The largest side of a colour map in the part: Ragnarök's own, up to 2048 (the shoulder pad's; 1024 until 0.1.73,
+/// which halved the armour's leather, metal and stitching). In BC1 with its mips a 2048 map is 2.8 MB.
+pub const MAX_TEXTURE: u32 = 2048;
+/// The largest side of a surface (normal and roughness) map (512 until 0.1.73).
+pub const MAX_SURFACE: u32 = 1024;
 
 /// The Kratos materials the body part draws: every material of the outfit's most detailed level, less the see-through
 /// ones.
@@ -1036,12 +1038,12 @@ mod tests {
     fn the_black_bear_set_swaps_the_leather_cloak_for_the_bear_fur_one() {
         // the leather cloak with its strap and fur, and the youngkratos belt and cloth, leave; the int9 harness, belt
         // and apron and the bear cloak come in
-        let out: Vec<u16> = [194, 195, 196, 197, 198, 213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 231, 236].to_vec();
-        let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !out.contains(p)).chain([205, 206, 207, 208, 209, 224, 227, 228, 229, 235]).collect();
+        let out: Vec<u16> = [194, 195, 196, 197, 198, 203, 204, 213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 231, 236].to_vec();
+        let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !out.contains(p)).chain([205, 206, 207, 208, 209, 210, 211, 212, 224, 225, 226, 227, 228, 229, 235]).collect();
         expected.sort_unstable();
         assert_eq!(Outfit::BlackBear.parts(), expected.as_slice());
         assert!(Outfit::Survival.dyed().is_empty());
-        assert_eq!(Outfit::BlackBear.dyed(), &[24, 69, 29, 88, 62, 66, 21, 70, 71]);
+        assert_eq!(Outfit::BlackBear.dyed(), &[24, 69, 29, 88, 62, 66, 21, 70, 71, 67, 68]);
         // the bear cloak and its fur take the body's weights and are pushed out of the skin like the leather ones; the
         // apron follows the legs a little over half, as the cloth it replaces
         assert!(CLOTH.iter().any(|c| c.0 == 24) && CLOTH.iter().any(|c| c.0 == 69) && CLOAKS.contains(&24) && FURS.contains(&69));
