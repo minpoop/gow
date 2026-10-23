@@ -10,8 +10,8 @@
 //!
 //! The simulation, in his own frame (model space: it turns and moves with him; his spine's own movement is not known
 //! to the mod, it only carries the result): each chain is a string of points, the first pinned where the rig puts it,
-//! the others under gravity, air drag (a gusting wind, and part of the air he moves through), a softened push from his
-//! speeding up and slowing down and a softened, capped swing from his turning, pulled back toward
+//! the others under gravity, air drag (a gusting wind along his back, and part of the air he moves through), a
+//! softened push from his speeding up and slowing down and a softened, capped swing from his turning, pulled back toward
 //! where the cloak hangs at rest (firmly near the top, barely at the hem), kept at their rest spacing and out of his
 //! torso and legs at rest (capsules, never tighter than the cloak sits). His limbs' movement is not known either, so
 //! no point goes in front of where it hangs at rest (0.1.72 let the wind from behind and his stopping swing it into
@@ -312,7 +312,7 @@ pub fn step() {
         use fromsoftware_shared::FromStatic;
         let wcm = unsafe { WorldChrMan::instance() }.ok()?;
         let p = wcm.main_player.as_ref()?;
-        let model_item = &*p.chr_ins.chr_model_ins.model_ins.model_item as *const _ as usize;
+        let model_item = crate::host::model_item_of(&p.chr_ins)?;
         let HavokPosition(x, y, z, _) = p.chr_ins.modules.physics.position;
         let o = p.chr_ins.modules.physics.orientation;
         Some((model_item, [x, y, z], [o.0, o.1, o.2, o.3]))
@@ -399,7 +399,11 @@ pub fn step() {
             let gust = (0.6 + 0.4 * (0.7 * t).sin() + 0.25 * (1.9 * t + 1.1).sin() + 0.15 * (4.3 * t + 0.3).sin()).max(0.0);
             let angle = 2.0 + 0.5 * (0.03 * t).sin();
             let wind = [angle.cos() * WIND * gust * wind_scale, 0.0, angle.sin() * WIND * gust * wind_scale];
-            let air = mv(&turn_t, sub(wind, scale(vel, HEADWIND)));
+            // the wind along his back only: from a side it held the cloak against its sideways limit for as long as
+            // he faced that way (0.1.82: "its only moving to the side like that after i move for the first time";
+            // offline, standing side-on, the hem sat 8 to 11 cm to one side, and 2 cm without the wind's side part)
+            let breeze = mv(&turn_t, wind);
+            let air = sub(sub(breeze, scale(left, dot(breeze, left))), mv(&turn_t, scale(vel, HEADWIND)));
             for k in 1..=last {
                 let v = scale(sub(chain.p[k], chain.q[k]), damp);
                 let velp = scale(v, 1.0 / h);

@@ -393,8 +393,7 @@ impl Bridge {
     pub fn player_model_item(&self) -> Option<usize> {
         let wcm = unsafe { WorldChrMan::instance() }.ok()?;
         let player = wcm.main_player.as_ref()?;
-        let model = &*player.chr_ins.chr_model_ins;
-        Some(&*model.model_ins.model_item as *const _ as usize)
+        model_item_of(&player.chr_ins)
     }
 
     /// The address of the player's face data (`FaceDataBuffer`: "FACE", version, size, then the parts and sliders the
@@ -1150,13 +1149,21 @@ fn ehp_alive(e: &ChrIns) -> bool {
     opt(&e.modules.data).map(|d| d.hp > 0).unwrap_or(false) && !e.chr_flags1c5.death_flag()
 }
 
-/// `OwnedPtr<T>` is declared non-null, but a character without a module can still hold null there.
+/// `OwnedPtr<T>` is declared non-null, but a character without a module can still hold null there. The pointer is
+/// read as a plain address: read through the non-null type, the compiler may drop the check.
 fn opt<T>(p: &fromsoftware_shared::OwnedPtr<T>) -> Option<&T> {
-    let raw = p.as_ptr();
+    let raw = unsafe { std::ptr::read_volatile(p as *const _ as *const *const T) };
     if raw.is_null() { None } else { Some(unsafe { &*raw }) }
 }
 
 fn opt_mut<T>(p: &mut fromsoftware_shared::OwnedPtr<T>) -> Option<&mut T> {
-    let raw = p.as_ptr();
+    let raw = unsafe { std::ptr::read_volatile(p as *const _ as *const *mut T) };
     if raw.is_null() { None } else { Some(unsafe { &mut *raw }) }
+}
+
+/// The address of a character's model item. The game leaves its model null while it rebuilds him (0.1.82 read through
+/// it a few seconds after a fall, with the player back but his model not yet, and crashed), so both are checked.
+pub(crate) fn model_item_of(chr: &ChrIns) -> Option<usize> {
+    let model = opt(&chr.chr_model_ins)?;
+    opt(&model.model_ins.model_item).map(|m| m as *const _ as usize)
 }
