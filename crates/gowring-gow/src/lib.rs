@@ -8,6 +8,7 @@
 
 pub mod audiopack;
 pub mod bnk;
+pub mod cape;
 pub mod catalog;
 pub mod convert;
 pub mod dds;

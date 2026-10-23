@@ -36,9 +36,14 @@ pub struct Settings {
     pub debug_rage_key: u8,
     /// The function key that steps the close-up camera (chest, nearer, waist, off) for looking at Kratos's model.
     pub debug_camera_key: u8,
-    /// The function key that runs the pose probe (see `bonepose`): his head lifted step by step through the game's
-    /// bone arrays, to find the one it draws him with.
+    /// The function key that runs the pose probe (see `bonepose`): his hand and arm turned step by step through the
+    /// game's bone offsets, to learn how they combine with his pose.
     pub debug_pose_key: u8,
+    /// Kratos's cloak swings and blows in the wind (the launcher skins it to the bones the DLL moves; applies the next
+    /// time Play is pressed).
+    pub cape_physics: bool,
+    /// How hard the wind blows on the cloak (0 = no wind; his own movement still swings it).
+    pub cape_wind: f32,
     /// Enemies drop health stones that heal Kratos when he walks over them (Ragnarök's way of healing).
     pub health_stones: bool,
     /// Health given to a summoned enemy.
@@ -106,6 +111,8 @@ impl Default for Settings {
             debug_rage_key: 10,
             debug_camera_key: 11,
             debug_pose_key: 8,
+            cape_physics: false,
+            cape_wind: 1.0,
             health_stones: true,
             debug_enemy_health: 20000.0,
             debug_enemy_damage_multiplier: 3.5,
@@ -118,7 +125,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 12;
+const FILE_VERSION: u32 = 13;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -191,7 +198,13 @@ fn render(s: &Settings) -> String {
   "_debug_camera_key": "Keyboard key (F1 to F12) that brings the camera close to Kratos, for looking at his model: each press steps chest, nearer, waist, then back to the normal camera. Turn it with the camera stick as usual.",
 
   "debug_pose_key": "F{pkey}",
-  "_debug_pose_key": "Keyboard key (F1 to F12) that runs the pose probe, a test for making his cloak move: for a few seconds per step his head is lifted out of place through one of the game's bone arrays, with the step on screen. Say which step lifted it.",
+  "_debug_pose_key": "Keyboard key (F1 to F12) that runs the pose probe, a test for making his cloak move: for a few seconds each, his right hand is turned twice and then his left upper arm, with the step on screen. Say what each step did.",
+
+  "cape_physics": {cape},
+  "_cape_physics": "Experimental, off for now: true = the back of Kratos's cloak swings as he moves and blows in the wind (it does not yet follow his back in rolls and attacks). false = it stays on his back. Applies the next time you press Play.",
+
+  "cape_wind": {cwind:?},
+  "_cape_wind": "How hard the wind blows on his cloak (0 to 3). 0 = no wind (it still swings as he moves).",
 
   "debug_enemy_health": {dhp:?},
   "_debug_enemy_health": "Health of a summoned enemy (100 to 100000). Summons are treated as bosses: the big health bar, a boss stun bar, and finishers that take a slice instead of killing.",
@@ -219,6 +232,8 @@ fn render(s: &Settings) -> String {
         rkey = s.debug_rage_key,
         ckey = s.debug_camera_key,
         pkey = s.debug_pose_key,
+        cape = s.cape_physics,
+        cwind = s.cape_wind,
         stones = s.health_stones,
         dhp = s.debug_enemy_health,
         ddm = s.debug_enemy_damage_multiplier,
@@ -283,6 +298,8 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     debug_rage_key: 10,
     debug_camera_key: 11,
     debug_pose_key: 8,
+    cape_physics: false,
+    cape_wind: 1.0,
     health_stones: true,
     debug_enemy_health: 20000.0,
     debug_enemy_damage_multiplier: 3.5,
@@ -349,6 +366,12 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     }
     if let Some(k) = v.get("debug_pose_key").and_then(|x| x.as_str()).and_then(fkey) {
         s.debug_pose_key = k;
+    }
+    if let Some(b) = v.get("cape_physics").and_then(|x| x.as_bool()) {
+        s.cape_physics = b;
+    }
+    if let Some(w) = v.get("cape_wind").and_then(|x| x.as_f64()) {
+        s.cape_wind = (w as f32).clamp(0.0, 3.0);
     }
     flag(&v, "health_stones", &mut s.health_stones);
     flag(&v, "black_bear_outfit", &mut s.black_bear_outfit);
@@ -417,9 +440,9 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
         s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
-    // versions 3 and 7-12 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
-    // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key): re-rendering the file
-    // shows them with their notes
+    // versions 3 and 7-13 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
+    // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key; 13: the cape): re-rendering
+    // the file shows them with their notes
     Some(render(&s))
 }
 
@@ -510,6 +533,8 @@ mod tests {
             debug_rage_key: 12,
             debug_camera_key: 8,
             debug_pose_key: 7,
+            cape_physics: true,
+            cape_wind: 2.5,
             health_stones: false,
             debug_enemy_health: 5000.0,
             debug_enemy_damage_multiplier: 4.0,

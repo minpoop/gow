@@ -856,6 +856,9 @@ pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collect
     (mats, textures, counts)
 }
 
+/// The cape rig beside the parts (see [`crate::cape`]); written with every build, with no chains when there is none.
+pub const CAPE_RIG_FILE: &str = "kratos_cape.json";
+
 fn material(id: u16) -> Material {
     material_with(id, "kratos", &format!("kratos_{id}_a"), &format!("kratos_{id}_n"))
 }
@@ -871,7 +874,8 @@ fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
 /// that hide the character's own. Each comes as the normal and the low-detail (`_l`) file, male and female.
 /// `looks` holds a colour map and surface per Kratos material (a missing colour is a neutral grey, a missing surface
 /// flat and rough).
-pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>, outfit: Outfit) -> Result<(Vec<(String, Vec<u8>)>, String)> {
+#[allow(clippy::too_many_arguments)]
+pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>, outfit: Outfit, cape: bool) -> Result<(Vec<(String, Vec<u8>)>, String)> {
     let rs = mesh_records(mesh);
     let parts = mg_parts(mg);
     let level0 = |list: &[u16]| -> Vec<usize> { list.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect() };
@@ -933,6 +937,12 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
         let n = fur_normals_from_skin(&mut meshes, &used);
         note.push_str(&format!("{n} fur vertices shaded by the skin under them; "));
     }
+    // the back of the cloak on the spare bone chains gowring.dll swings (see crate::cape), when the cape is on
+    let rig = if cape && retargeted.is_some() { crate::cape::rig(&mut meshes, &used, &CLOAKS, skeleton) } else { None };
+    match &rig {
+        Some(r) => note.push_str(&format!("cape: {} cloak vertices on {} chains of {}; ", r.vertices, r.chains.len(), crate::cape::POINTS)),
+        None => note.push_str(if cape { "cape: no rig (no cloak behind the body, or no chain bones); " } else { "cape: off; " }),
+    }
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let tex = format!("kratos_{MODEL_ID}");
     let (mats, textures, LookCounts { coloured, surfaced, strands }) = look_materials(&Naming { tex: &tex, material: "kratos", dir: KRATOS_TEX_DIR }, &used, looks);
@@ -943,6 +953,7 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
         add(slot, id, &nodes, &meshes, &[material(id)], texture_pack(id, [128, 128, 128]));
     }
     note.push_str("head, arms and legs: empty pieces");
+    out.push((CAPE_RIG_FILE.into(), rig.map_or_else(crate::cape::no_rig_json, |r| r.json()).into_bytes()));
     Ok((out, note))
 }
 
@@ -1286,7 +1297,7 @@ mod tests {
                 colours.insert(m, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: info.width, h: info.height, rgba, format: crate::dds::Format::Bc1 }), surface: None, cut_out });
             }
         }
-        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours, Outfit::Survival).unwrap();
+        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours, Outfit::Survival, true).unwrap();
         println!("{real} real resources; {note}");
         for (name, bytes) in files {
             std::fs::write(dir.join(name), bytes).unwrap();

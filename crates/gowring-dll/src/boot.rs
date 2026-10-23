@@ -173,6 +173,9 @@ pub fn run(hmodule: usize) {
             if catch_unwind(|| crate::bonepose::on_stage(crate::bonepose::Stage::DrawPre)).is_err() {
                 crate::log::once("bonepose-panic", "bonepose", "PANIC in the pose probe before drawing");
             }
+            if catch_unwind(crate::cape::step).is_err() {
+                crate::log::once("cape-panic", "cape", "PANIC in the cape before drawing");
+            }
         },
         CSTaskGroupIndex::Draw_Pre,
     );
@@ -193,7 +196,7 @@ pub fn run(hmodule: usize) {
     crate::testmode::TASKS_REGISTERED.store(true, std::sync::atomic::Ordering::SeqCst);
     crate::testmode::stage("tasks-registered");
     spawn_heartbeat();
-    crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, pose probe @ ChrIns_PostPhysicsSafe, camera @ Draw_Pre)");
+    crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, pose probe @ ChrIns_PostPhysicsSafe, camera and cape @ Draw_Pre)");
 }
 
 struct Hudhook;

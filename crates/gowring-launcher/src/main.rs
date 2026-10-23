@@ -296,7 +296,7 @@ const OUTFIT_PROBE_PARTS: [u16; 19] = [230, 235, 224, 205, 206, 207, 208, 209, 2
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 21;
+    const BUILD: u32 = 22;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -318,12 +318,19 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
         .and_then(|v| v.get("black_bear_outfit").and_then(|b| b.as_bool()))
         .unwrap_or(true);
     let outfit = if black_bear { gowring_gow::kratos_part::Outfit::BlackBear } else { gowring_gow::kratos_part::Outfit::Survival };
-    let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x} outfit {outfit:?}\n", size(&wad), size(&pack));
+    // the cloak on the chains gowring.dll swings: settings.json's "cape_physics" (off unless it says true: experimental)
+    let cape = std::fs::read_to_string(ctx.local.join("settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("cape_physics").and_then(|b| b.as_bool()))
+        .unwrap_or(false);
+    let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x} outfit {outfit:?} cape {cape}\n", size(&wad), size(&pack));
     let cache = ctx.cache.join("kratos_part");
     let names: Vec<String> = ["bd", "am", "lg", "hd"]
         .iter()
         .zip([9701, 9702, 9703, 9700])
         .flat_map(|(slot, id)| ["m", "f"].iter().flat_map(move |sex| ["", "_l"].iter().map(move |low| format!("{slot}_{sex}_{id}{low}.partsbnd.dcx"))))
+        .chain([gowring_gow::kratos_part::CAPE_RIG_FILE.to_string()])
         .collect();
     let cached = std::fs::read_to_string(cache.join("stamp.txt")).is_ok_and(|s| s == stamp) && names.iter().all(|n| cache.join(n).exists());
     let t0 = std::time::Instant::now();
@@ -343,7 +350,7 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
             let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
             let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, gowring_gow::kratos_part::STRANDS, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE, outfit.dyed());
             ctx.log(&format!("play: Kratos's look in {:.1}s for {} materials: {look_note}", t1.elapsed().as_secs_f32(), materials.len()));
-            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks, outfit)?;
+            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks, outfit, cape)?;
             // for the next round: the fur's, strap's and waist pieces' maps, and the cloak, strap, waist and chest pieces
             // with their UVs (`outfit_probe`)
             let probe = ctx.local.join("outfit_probe");

@@ -222,23 +222,36 @@ impl Runtime {
             self.camera_key_down = down;
             let down = function_key_down(st.debug_pose_key);
             if down && !self.pose_key_down {
-                // the roots the pose capture searches from: the model item's bone-matrix entity, the model item, the
-                // behaviour module
+                // the roots the probe searches from: the model item's bone-matrix entity, the model item, the behaviour
+                // module and its hkbCharacter, and the character's pose importer and anim-skeleton-to-model modifier
+                // (ChrIns +0x398 and +0x3a8, eldenring 0.14's `hka_pose_importer`, `anim_skeleton_to_model_modifier`)
+                let read = |a: usize| crate::skeleton::read::<usize>(a).filter(|p| *p > 0x10000);
                 let mut roots: Vec<(&'static str, usize)> = Vec::new();
-                if let Some(m) = self.bridge.player_model_item() {
-                    if let Some(e) = crate::skeleton::read::<usize>(m + crate::pose::MTX43_ARRAY_ENTITY) {
+                let model = self.bridge.player_model_item();
+                if let Some(m) = model {
+                    if let Some(e) = read(m + crate::pose::MTX43_ARRAY_ENTITY) {
                         roots.push(("mtx43 array entity", e));
                     }
                     roots.push(("model item", m));
                 }
                 if let Some(b) = self.bridge.player_behavior_module() {
                     roots.push(("behaviour", b));
+                    if let Some(c) = read(b + 0x10).and_then(|x| read(x + 0x30)) {
+                        roots.push(("hkbCharacter", c));
+                    }
+                }
+                if let Some(chr) = self.bridge.player_chr_ins() {
+                    if let Some(p) = read(chr + 0x398) {
+                        roots.push(("pose importer", p));
+                    }
+                    if let Some(p) = read(chr + 0x3a8) {
+                        roots.push(("skeleton to model", p));
+                    }
                 }
                 crate::glog!("debug", "F{} pressed: pose probe from {} root(s)", st.debug_pose_key, roots.len());
-                if roots.is_empty() {
-                    crate::overlay::toast("Pose probe: no player model yet (debug)");
-                } else {
-                    crate::bonepose::start(roots);
+                match model {
+                    Some(m) if !roots.is_empty() => crate::bonepose::start(roots, m),
+                    _ => crate::overlay::toast("Pose probe: no player model yet (debug)"),
                 }
             }
             self.pose_key_down = down;

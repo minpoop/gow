@@ -34,7 +34,7 @@ pub enum Layout {
 }
 
 impl Layout {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Layout::M44 => "4x4",
             Layout::M34 => "3x4",
@@ -87,16 +87,16 @@ pub struct Found {
     pub floats: Vec<f32>,
 }
 
-/// The arrays of bone transforms within two pointers of `roots` (name, address), at most `max_found`, within `budget`
-/// reads; and how many objects were looked at.
-pub fn find(roots: &[(&str, usize)], budget: u64, max_found: usize) -> (Vec<Found>, usize) {
+/// The arrays of bone transforms within `depth` pointers of `roots` (name, address), at most `max_found`, within
+/// `budget` reads; and how many objects were looked at.
+pub fn find(roots: &[(&str, usize)], budget: u64, max_found: usize, depth: usize) -> (Vec<Found>, usize) {
     let r0 = reads();
     let mut seen: HashSet<usize> = HashSet::new();
     let mut found: Vec<Found> = Vec::new();
     let looks_like_pointer = |w: usize| (0x10000..0x7fff_ffff_0000).contains(&w) && w % 8 == 0;
     // breadth first: (path, address of an object to look into), two levels
     let mut level: Vec<(String, usize)> = roots.iter().map(|(n, a)| (n.to_string(), *a)).collect();
-    for depth in 0..3 {
+    for level_no in 0..=depth {
         let mut next = Vec::new();
         for (path, at) in level {
             if reads() - r0 > budget || found.len() >= max_found {
@@ -112,7 +112,7 @@ pub fn find(roots: &[(&str, usize)], budget: u64, max_found: usize) -> (Vec<Foun
                     continue;
                 }
             }
-            if depth == 2 {
+            if level_no == depth {
                 continue;
             }
             let Some(words) = read_vec::<usize>(at, OBJECT / 8) else { continue };
@@ -130,7 +130,7 @@ pub fn find(roots: &[(&str, usize)], budget: u64, max_found: usize) -> (Vec<Foun
 /// Search from `roots` (name, address) and write what is found as capture `label`. Returns a line for the log.
 pub fn capture(roots: &[(&str, usize)], label: &str) -> String {
     let (t0, r0) = (std::time::Instant::now(), reads());
-    let (found, looked) = find(roots, READ_BUDGET, 8);
+    let (found, looked) = find(roots, READ_BUDGET, 8, 2);
     let found: Vec<(String, usize, Layout, Vec<f32>)> = found.into_iter().map(|f| (f.path, f.address, f.layout, f.floats)).collect();
     let mut j = format!("{{\n  \"capture\": {label:?},\n  \"arrays\": [\n");
     for (i, (path, at, layout, f)) in found.iter().enumerate() {
