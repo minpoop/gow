@@ -237,8 +237,9 @@ struct Probe {
 static PROBE: Mutex<Option<Probe>> = Mutex::new(None);
 static SEARCHING: AtomicBool = AtomicBool::new(false);
 static MODEL_ITEM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-/// The offset arrays the search found when the path from the model item did not lead to them (0.1.68: "no offset
-/// arrays"), used by the steps instead.
+/// The offset arrays the search found, which the steps write to. The path from the model item is not fixed: 0.1.67's
+/// session had them at the entity's +0x30 object's +0x508 and +0x510, 0.1.68's at +0x748 and +0x750 (both null at
+/// +0x508/+0x510: "no offset arrays").
 static FOUND_OFFSETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 /// An array of the offsets' kind: 3x4, at least the skeleton long, the identity for at least 95 % of the skeleton's
@@ -248,12 +249,8 @@ fn offsets_like(f: &Found, bones: &[Bone]) -> bool {
     f.layout == Layout::M34 && f.floats.len() >= n * 12 && f.floats.chunks_exact(12).take(n).filter(|e| e.iter().zip(IDENTITY).all(|(a, b)| (a - b).abs() < 1e-4)).count() * 100 >= n * 95
 }
 
-/// Where the steps write: the arrays the path leads to, else those the search found.
+/// Where the steps write: the offset arrays the search found.
 fn targets() -> Vec<usize> {
-    let by_path: Vec<usize> = offset_arrays(MODEL_ITEM.load(Ordering::SeqCst)).into_iter().filter(|a| *a != 0).collect();
-    if !by_path.is_empty() {
-        return by_path;
-    }
     FOUND_OFFSETS.lock().map(|v| v.clone()).unwrap_or_default()
 }
 
@@ -322,7 +319,11 @@ pub fn start(roots: Vec<(&'static str, usize)>, model_item: usize) {
                 })
                 .collect();
             let by_path = offset_arrays(MODEL_ITEM.load(Ordering::SeqCst));
-            let found_offsets: Vec<(String, usize)> = found.iter().filter(|f| offsets_like(f, bones)).map(|f| (f.path.clone(), f.address)).collect();
+            // the offset-like arrays under the entity's +0x30 object (the pair 0.1.67 lifted the head through), else all
+            // offset-like arrays found (0.1.68's search found eight more under +0x5b0 and +0x690)
+            let all_offsets: Vec<(String, usize)> = found.iter().filter(|f| offsets_like(f, bones)).map(|f| (f.path.clone(), f.address)).collect();
+            let pair: Vec<(String, usize)> = all_offsets.iter().filter(|(p, _)| p.starts_with("mtx43 array entity+0x30+") && p.matches('+').count() == 2).cloned().collect();
+            let found_offsets = if pair.is_empty() { all_offsets } else { pair };
             if let Ok(mut v) = FOUND_OFFSETS.lock() {
                 *v = found_offsets.iter().map(|(_, a)| *a).collect();
             }
