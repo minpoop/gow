@@ -7,7 +7,7 @@ import hashlib, json, os, shutil, subprocess, sys, tempfile, urllib.request, zip
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TARGET = "x86_64-pc-windows-msvc"
-VERSION = "0.1.71"
+VERSION = "0.1.72"
 ME2_URL = "https://github.com/soulsmods/ModEngine2/releases/download/release-2.1.0/ModEngine-2.1.0.0-win64.zip"
 ME2_LICENSE_URL = "https://raw.githubusercontent.com/soulsmods/ModEngine2/main/LICENSE-MIT"
 VGM_URL = "https://github.com/vgmstream/vgmstream/releases/latest/download/vgmstream-win64.zip"

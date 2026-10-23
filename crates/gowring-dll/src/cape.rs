@@ -1,9 +1,9 @@
-//! Kratos's cloak, swung by the mod. The launcher skins the back of the cloak below mid-back to two chains of helper
-//! bones that hang off his spine and pelvis (`gowring_gow::cape`, the rig in `mod/parts/kratos_cape.json`). The game
-//! keeps a per-bone offset that it applies in rest space under the animation, per bone, not to its children (the pose
-//! probes, 0.1.67-0.1.69: a hand turned about its rest position turned in place, one turned about the origin stretched
-//! away, an upper arm turned without its forearm). So every frame, just before drawing, this simulates the chains and
-//! writes each chain bone's offset: the cloak bends in rest space, and his spine and hips carry it (the bone's own
+//! Kratos's cloak, swung by the mod. The launcher skins the back of the cloak below his shoulder blades to two chains
+//! of helper bones that hang off his spine and pelvis (`gowring_gow::cape`, the rig in `mod/parts/kratos_cape.json`).
+//! The game keeps a per-bone offset that it applies in rest space under the animation, per bone, not to its children
+//! (the pose probes, 0.1.67-0.1.69: a hand turned about its rest position turned in place, one turned about the origin
+//! stretched away, an upper arm turned without its forearm). So every frame, just before drawing, this simulates the
+//! chains and writes each chain bone's offset: the cloak bends in rest space, and his spine and hips carry it (the bone's own
 //! skinning matrix times our offset). The offsets are not at a fixed address (0.1.67, 0.1.68 and 0.1.69 each found
 //! them elsewhere), so they are searched for as the probe does, on a thread of our own, whenever the player's model
 //! changes.
@@ -37,11 +37,13 @@ const DRAG: f32 = 2.0;
 /// The wind's mean speed (m/s) at `cape_wind` 1.
 const WIND: f32 = 4.0;
 /// The pull back toward the cloak's rest shape per step, at the top of a chain and at the hem. Tuned offline on the
-/// rig's own points (scratchpad `capesim2.py`, the same loop): the hem 4 cm from rest standing still, 10 cm on average
-/// (up to 24) in the gusts, 15 cm walking at 2 m/s, 38 cm (about 30 degrees) running at 6 m/s; 0.20 / 0.02 kept it
-/// within 3 cm in the wind and 14 cm running.
-const STIFF_TOP: f32 = 0.04;
-const STIFF_HEM: f32 = 0.002;
+/// rig's own points (scratchpad `capesim2.py` / `shoulder72/capesim3.py`, the same loop). 0.1.70's 0.04 / 0.002 on
+/// chains from mid-back: the hem 6 cm from rest standing still, 12 cm on average in the gusts, 17 walking, 43 running,
+/// the upper points barely moving ("only the bottom of the cloak is moving"). Now, on chains from his shoulder blades
+/// (bear cloak points), per point top to hem: standing 1 / 5 / 8 cm, in the gusts 6 / 10 / 19 (hem up to 46), walking
+/// at 2 m/s 7 / 13 / 26, running at 6 m/s 21 / 39 / 68 (about 40 degrees).
+const STIFF_TOP: f32 = 0.015;
+const STIFF_HEM: f32 = 0.0015;
 const ITERATIONS: usize = 3;
 const STEP_S: f32 = 1.0 / 60.0;
 /// A frame longer than this, or the player moving further than `JUMP_M`, starts the cloak again at rest.

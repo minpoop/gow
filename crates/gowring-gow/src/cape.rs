@@ -2,30 +2,39 @@
 //! module). Elden Ring moves capes with Havok cloth data in each armour's files, which the mod cannot make. What the
 //! mod can do (the pose probes, 0.1.67-0.1.69): write a per-bone offset the game applies in rest space under the
 //! animation (a bone's skinning matrix becomes its own times the offset, not passed to its children). So the back of
-//! the cloak below mid-back is skinned to two chains of helper bones that hang off his spine and pelvis and that his
-//! mesh uses nowhere else ([`CHAINS`]: the four Mantle bones, the two SpineArmor bones, the pelvis dummies), and the DLL
+//! the cloak below his shoulder blades is skinned to two chains of helper bones that hang off his spine and pelvis and
+//! that his mesh uses nowhere else ([`CHAINS`]: the Mantle bones, a SpineArmor bone, the pelvis dummies), and the DLL
 //! writes each one's offset from a small simulation of its own: the cloak bends in rest space and his spine and hips
 //! carry it. If the DLL writes nothing, those bones follow his spine and hips and the cloak stays as before.
 //!
 //! The rig: each chain is [`POINTS`] points from the height of the anchor bone ([`ANCHOR`], where the cloak starts to
 //! hang free) down to the hem, each the mean of that side's cloak vertices behind the body at that height (rest pose,
-//! model space). A cloak vertex behind the body and below the anchor takes the chain's weights by its height (the two
-//! points it lies between) and its side (both chains near the middle), blended in over [`BLEND`] below the anchor, and
-//! keeps the rest of its own; the four largest are kept.
+//! model space). A cloak vertex below the anchor, behind the body or at its sides ([`SIDES`]), takes the chain's weights
+//! by its height (the two points it lies between) and its side (both chains near the middle), blended in over [`BLEND`]
+//! below the anchor, and keeps the rest of its own; the four largest are kept.
+//!
+//! 0.1.70-0.1.71 hung the chains from mid-back (`Spine1`, 1.15 m) with a 0.25 m blend: the top half of the bear cloak
+//! stayed on his torso and arms and only the part below his waist swung ("only the bottom of the cloak is moving"), and
+//! the cloak by his right arm, which hangs lower on that side, sat in the blend half on the arm ("a section near his
+//! right arm that looks like it's stuck").
 
 use crate::erpart::{world_matrices, Mesh, Node};
 
-/// The chains, top to hem: on his left, on his right. The upper two of each hang off his spine (Spine1, Spine2), the
-/// lower two off his pelvis, so the cloak's top follows his back and its lower half his hips.
-pub const CHAINS: [[&str; POINTS]; 2] = [["Spine1_Mantle", "SpineArmor1", "Pelvis_Mantle", "L_Thigh_Root_Dummy"], ["Spine2_Mantle", "SpineArmor2", "Pelvis_Dummy", "R_Thigh_Root_Dummy"]];
+/// The chains, top to hem: on his left, on his right. Each bone follows the body near its point's height: the top
+/// (by his shoulder blades) his upper spine (Spine2, Spine1), the next (by his waist) his lower spine (Spine, Spine1),
+/// the lower two his pelvis, so the cloak's top follows his back and its lower half his hips.
+pub const CHAINS: [[&str; POINTS]; 2] = [["Spine2_Mantle", "Spine_Mantle", "Pelvis_Mantle", "L_Thigh_Root_Dummy"], ["SpineArmor2", "Spine1_Mantle", "Pelvis_Dummy", "R_Thigh_Root_Dummy"]];
 /// Points (bones) per chain.
 pub const POINTS: usize = 4;
-/// The bone the chains hang from: the cloak above its height stays on the torso.
-pub const ANCHOR: &str = "Spine1";
+/// The bone whose height the chains hang from (his shoulders, 1.39 m): the cloak above it stays on his shoulders.
+pub const ANCHOR: &str = "L_Clavicle";
 /// How far below the anchor the cloak is wholly on the chains (m).
-pub const BLEND: f32 = 0.25;
+pub const BLEND: f32 = 0.15;
 /// How far behind the body's middle a vertex is wholly on the chains (m; from 0 at the middle).
 const BEHIND: f32 = 0.08;
+/// How far in front of the body's middle the cloak's sides start to follow the chains (m): the cloak hanging beside
+/// his arms goes with the back of it.
+const SIDES: f32 = 0.03;
 /// The width over which the two chains share a vertex at his back's middle (m).
 const MIDDLE: f32 = 0.12;
 
@@ -142,7 +151,7 @@ pub fn rig(meshes: &mut [Mesh], used: &[u16], cloaks: &[u16], skeleton: &[Node])
         for v in m.vertices.iter_mut() {
             let p = v.position;
             let down = ((top - p[1]) / BLEND).clamp(0.0, 1.0);
-            let back_share = (behind(p) / BEHIND).clamp(0.0, 1.0);
+            let back_share = ((behind(p) + SIDES) / (BEHIND + SIDES)).clamp(0.0, 1.0);
             let b = down * down * (3.0 - 2.0 * down) * back_share;
             if b <= 0.0 {
                 continue;
@@ -196,9 +205,9 @@ mod tests {
         Node { name: name.into(), parent, t, r: [0.0; 3], s: [1.0; 3], flags: 8 }
     }
 
-    /// A skeleton facing +z with his left at +x, the chain bones (from index 9) under the spine and pelvis.
+    /// A skeleton facing +z with his left at +x, the chain bones (from index 10) under the spine and pelvis.
     fn skeleton() -> Vec<Node> {
-        let mut s = vec![node("Master", -1, [0.0; 3]), node("Pelvis", 0, [0.0, 1.0, 0.0]), node("Spine1", 1, [0.0, 0.3, 0.0])];
+        let mut s = vec![node("Master", -1, [0.0; 3]), node("Pelvis", 0, [0.0, 1.0, 0.0]), node("Spine1", 1, [0.0, 0.3, 0.0]), node("L_Clavicle", 2, [0.02, 0.0, 0.0])];
         for (side, x) in [("L", 0.1), ("R", -0.1)] {
             let thigh = s.len() as i16;
             s.push(node(&format!("{side}_Thigh"), 1, [x, -0.1, 0.0]));
@@ -227,27 +236,32 @@ mod tests {
                 verts.push(vertex([-0.15 + 0.05 * j as f32, 1.6 - 0.05 * i as f32, -0.15]));
             }
         }
+        // beside him (at his body's middle, by his arm), then the front flap
+        verts.push(vertex([0.2, 0.9, 0.0]));
         verts.push(vertex([0.1, 0.9, 0.2]));
         let mut meshes = vec![Mesh { material: 0, node: 0, vertices: verts, indices: vec![0, 1, 2] }];
         let rig = rig(&mut meshes, &[24], &[24], &sk).expect("a rig");
         assert_eq!(rig.chains.len(), 2);
         let (bones, points) = &rig.chains[0];
-        assert_eq!(bones[0], "Spine1_Mantle");
+        assert_eq!(bones[0], "Spine2_Mantle");
         assert_eq!(points.len(), POINTS);
         // from the anchor's height (1.3 m) down to the hem, on his left (+x) and behind him
         assert!((points[0][1] - 1.3).abs() < 1e-4 && (points[POINTS - 1][1] - 0.5).abs() < 1e-4);
         assert!(points.iter().all(|p| p[0] > 0.0 && p[2] < 0.0));
         assert!(rig.chains[1].1.iter().all(|p| p[0] < 0.0));
         let v = &meshes[0].vertices;
-        let chain_share = |v: &Vertex| v.bones.iter().zip(v.weights).filter(|(b, _)| **b as usize >= 9).map(|(_, w)| w).sum::<f32>();
+        let chain_share = |v: &Vertex| v.bones.iter().zip(v.weights).filter(|(b, _)| **b as usize >= 10).map(|(_, w)| w).sum::<f32>();
         // above the anchor: untouched; at the hem: wholly on the chains, summing to 1; the front flap: untouched
         assert_eq!(chain_share(&v[0]), 0.0);
         let hem = &v[22 * 7 + 6];
         assert!((chain_share(hem) - 1.0).abs() < 1e-5 && (hem.weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         assert_eq!(chain_share(v.last().unwrap()), 0.0);
+        // the cloak beside him goes partly with the back of it
+        let beside = chain_share(&v[v.len() - 2]);
+        assert!((0.2..0.35).contains(&beside), "{beside}");
         // a vertex at his back's middle is shared by both chains
         let mid = &v[20 * 7 + 3];
-        let left = mid.bones.iter().zip(mid.weights).filter(|(b, _)| (9..9 + POINTS).contains(&(**b as usize))).map(|(_, w)| w).sum::<f32>();
+        let left = mid.bones.iter().zip(mid.weights).filter(|(b, _)| (10..10 + POINTS).contains(&(**b as usize))).map(|(_, w)| w).sum::<f32>();
         assert!((left - 0.5).abs() < 0.05);
         assert!(rig.vertices > 0 && rig.vertices < v.len());
         // the file names the chains
