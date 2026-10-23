@@ -296,7 +296,7 @@ const OUTFIT_PROBE_PARTS: [u16; 19] = [230, 235, 224, 205, 206, 207, 208, 209, 2
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 24;
+    const BUILD: u32 = 25;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -318,11 +318,13 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
         .and_then(|v| v.get("black_bear_outfit").and_then(|b| b.as_bool()))
         .unwrap_or(true);
     let outfit = if black_bear { gowring_gow::kratos_part::Outfit::BlackBear } else { gowring_gow::kratos_part::Outfit::Survival };
-    // the cloak on the chains gowring.dll swings: settings.json's "cape_physics" (on unless it says false)
+    // the cloak on the chains gowring.dll swings: settings.json's "cape_physics" (on unless it says false). A file older
+    // than settings version 14 counts as on: 0.1.68 and 0.1.69 wrote false into every file while it was experimental, and
+    // gowring.dll brings the file forward only once the game has started, after this build.
     let cape = std::fs::read_to_string(ctx.local.join("settings.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-        .and_then(|v| v.get("cape_physics").and_then(|b| b.as_bool()))
+        .map(|v| v.get("settings_version").and_then(|n| n.as_u64()).unwrap_or(1) < 14 || v.get("cape_physics").and_then(|b| b.as_bool()).unwrap_or(true))
         .unwrap_or(true);
     let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x} outfit {outfit:?} cape {cape}\n", size(&wad), size(&pack));
     let cache = ctx.cache.join("kratos_part");

@@ -125,7 +125,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 13;
+const FILE_VERSION: u32 = 14;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -440,6 +440,10 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 6 && (s.debug_enemy_damage_multiplier - 2.5).abs() < 0.01 {
         s.debug_enemy_damage_multiplier = Settings::default().debug_enemy_damage_multiplier;
     }
+    // version 14: the cape went from off (experimental, 0.1.68-0.1.69 wrote "cape_physics": false into every file) to on
+    if version < 14 {
+        s.cape_physics = true;
+    }
     // versions 3 and 7-13 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
     // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key; 13: the cape): re-rendering
     // the file shows them with their notes
@@ -571,6 +575,16 @@ mod tests {
         assert_eq!(s.hud_scale, 1.2);
         assert!(s.debug_tools);
         assert_eq!(s.debug_spawn_key, 9);
+    }
+
+    #[test]
+    fn a_version_13_file_turns_the_cape_on_once() {
+        let s = parse(&migrated_text(r#"{ "settings_version": 13, "cape_physics": false, "cape_wind": 2.0 }"#).unwrap()).unwrap();
+        assert!(s.cape_physics, "0.1.68-0.1.69 wrote false while the cape was experimental");
+        assert_eq!(s.cape_wind, 2.0);
+        let mut off = s.clone();
+        off.cape_physics = false;
+        assert!(migrated_text(&render(&off)).is_none(), "turned off again in a current file, it stays off");
     }
 
     #[test]

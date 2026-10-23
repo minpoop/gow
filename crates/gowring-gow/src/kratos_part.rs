@@ -28,11 +28,13 @@ pub const SCALE: f32 = 0.92;
 pub const SEE_THROUGH: [u16; 5] = [3, 5, 6, 76, 78];
 /// Materials made of strands on cards: the eyebrows (4), eyelashes (7), the bear cloak (24; drawn solid its fur cards
 /// showed as black and white blocks in 0.1.61), the leather cloak's fur (29; drawn solid it showed as grey blocks by
-/// the claw on the upper back), the fur under the bear cloak (69) and the long beard (86, 87), and the Black Bear
-/// Set's apron (21), whose torn hide under the riveted panels has its ragged edge in its alpha. They are drawn with
-/// Elden Ring's cut-out material when their look has a coverage (see [`crate::kratos_look::cut_out_image`]) and left
-/// out otherwise, except those in [`SOLID_IF_UNCUT`].
-pub const CUT_OUT: [u16; 8] = [4, 7, 21, 24, 29, 69, 86, 87];
+/// the claw on the upper back) and the long beard (86, 87), and the Black Bear Set's apron (21), whose torn hide under
+/// the riveted panels has its ragged edge in its alpha. They are drawn with Elden Ring's cut-out material when their
+/// look has a coverage (see [`crate::kratos_look::cut_out_image`]) and left out otherwise, except those in
+/// [`SOLID_IF_UNCUT`]. Not the fur under the bear cloak (69, `kratos_underfur`): a hide vest over the upper back and
+/// left shoulder with the fur painted on, its colour map solid and no strand mask among its maps, so as a strand
+/// material 0.1.66-0.1.71 left it out and the skin showed through the bear cloak's fur cards by the shoulder pad.
+pub const CUT_OUT: [u16; 7] = [4, 7, 21, 24, 29, 86, 87];
 /// Strand materials drawn solid when no coverage is found: the bear cloak (24) is the whole cloak, not a trim, and the
 /// apron (21) the front of the waist.
 pub const SOLID_IF_UNCUT: [u16; 2] = [21, 24];
@@ -1035,7 +1037,7 @@ mod tests {
         // the leather cloak with its strap and fur, and the youngkratos belt and cloth, leave; the int9 harness, belt
         // and apron and the bear cloak come in
         let out: Vec<u16> = [194, 195, 196, 197, 198, 213, 215, 216, 217, 218, 219, 220, 221, 222, 223, 231, 236].to_vec();
-        let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !out.contains(p)).chain([205, 206, 207, 208, 209, 224, 228, 229, 235]).collect();
+        let mut expected: Vec<u16> = DEFAULT_OUTFIT.iter().copied().filter(|p| !out.contains(p)).chain([205, 206, 207, 208, 209, 224, 227, 228, 229, 235]).collect();
         expected.sort_unstable();
         assert_eq!(Outfit::BlackBear.parts(), expected.as_slice());
         assert!(Outfit::Survival.dyed().is_empty());
@@ -1043,6 +1045,8 @@ mod tests {
         // the bear cloak and its fur take the body's weights and are pushed out of the skin like the leather ones; the
         // apron follows the legs a little over half, as the cloth it replaces
         assert!(CLOTH.iter().any(|c| c.0 == 24) && CLOTH.iter().any(|c| c.0 == 69) && CLOAKS.contains(&24) && FURS.contains(&69));
+        // the fur under the cloak is a solid hide, drawn whole; the cloak's own fur cards are cut out
+        assert!(!CUT_OUT.contains(&69) && CUT_OUT.contains(&24));
         assert!(CLOTH.contains(&(21, 0.6)));
     }
 
