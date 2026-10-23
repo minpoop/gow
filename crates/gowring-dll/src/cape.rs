@@ -8,9 +8,10 @@
 //! them elsewhere), so they are searched for as the probe does, on a thread of our own, whenever the player's model
 //! changes.
 //!
-//! The simulation, in world space following his body as a whole (his position and turn; his spine's own movement is
-//! not known to the mod, it only carries the result): each chain is a string of points, the first pinned where the rig
-//! puts it, the others under gravity and air drag (a gusting wind, and the air he runs through), pulled back toward
+//! The simulation, in his own frame (model space: it turns and moves with him; his spine's own movement is not known
+//! to the mod, it only carries the result): each chain is a string of points, the first pinned where the rig puts it,
+//! the others under gravity, air drag (a gusting wind, and part of the air he moves through), a softened push from his
+//! speeding up and slowing down and a softened, capped swing from his turning, pulled back toward
 //! where the cloak hangs at rest (firmly near the top, barely at the hem), kept at their rest spacing and out of his
 //! torso and legs at rest (capsules, never tighter than the cloak sits). His limbs' movement is not known either, so
 //! no point goes in front of where it hangs at rest (0.1.72 let the wind from behind and his stopping swing it into
@@ -61,8 +62,19 @@ const SIDEWAYS: f32 = 0.12;
 /// his legs swing back further than the cloak hangs behind them at rest.
 const LEG_ROOM: f32 = 0.15;
 const LEG_ROOM_SPEED: f32 = 4.0;
-/// How quickly his speed is followed (s).
-const SPEED_SMOOTH_S: f32 = 0.3;
+/// How quickly his velocity and turn rate are followed, and their change (s): the step pulses of a walk are smoothed
+/// out of the push he gives the cape.
+const VEL_SMOOTH_S: f32 = 0.15;
+const ACC_SMOOTH_S: f32 = 0.25;
+/// The share of the air he moves through that blows on the cape (his own speed against it), of his speeding up and
+/// slowing down it feels, and of the swing of his turning (capped, m/s^2). The cape lives in his own frame: 0.1.70-0.1.78
+/// simulated it in the world, so a start whipped it up like a yanked pendulum and a quick turn flung it round through
+/// the air ("when i walk it bounces way higher than i should be. and when i turn 180 my cape also freaks out"; offline
+/// the hem rose 0.43 m walking and 1.24 m over a half turn, then 0.02 m and 0.04 m without wind).
+const HEADWIND: f32 = 0.5;
+const INERTIA: f32 = 0.4;
+const TURN: f32 = 0.15;
+const TURN_MAX: f32 = 6.0;
 /// Bones whose offsets must read as the identity for an array to be written (nothing offsets the root).
 const ROOTS: [&str; 3] = ["Master", "RootPos", "Pelvis"];
 /// The least time between searches (s).
@@ -88,8 +100,14 @@ struct Cape {
     /// His back and his left (model space, level).
     back: V3,
     left: V3,
-    /// His speed over the ground (m/s, smoothed).
-    speed: f32,
+    /// His velocity (world) and its change, and his turn about y with its rate and the rate's change, smoothed.
+    vel: V3,
+    last_vel: V3,
+    acc: V3,
+    yaw: f32,
+    w: f32,
+    last_w: f32,
+    dw: f32,
     /// Times a point was held back from going into him or too far to a side.
     held: u64,
     started: bool,
@@ -217,7 +235,7 @@ fn load(bones: &'static [Bone]) -> Result<Option<Cape>, String> {
         chains.push(Chain { bones: bone_ids, p: rest.clone(), q: rest.clone(), rest, len, clear });
     }
     crate::glog!("cape", "rig: {} chain(s) of {} points from {} ({} cloak vertices), bones {:?}, {} body capsules", chains.len(), chains[0].rest.len(), path.display(), v["vertices"].as_u64().unwrap_or(0), chains.iter().map(|c| c.bones.iter().map(|b| bones[*b].name.as_str()).collect::<Vec<_>>()).collect::<Vec<_>>(), capsules.len());
-    Ok(Some(Cape { chains, roots, caps: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(), back, left, speed: 0.0, held: 0, started: false, last: None, t: 0.0, last_pos: [0.0; 3], frames: 0, writes: 0, failed: 0, next_log: 5.0 }))
+    Ok(Some(Cape { chains, roots, caps: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(), back, left, vel: [0.0; 3], last_vel: [0.0; 3], acc: [0.0; 3], yaw: 0.0, w: 0.0, last_w: 0.0, dw: 0.0, held: 0, started: false, last: None, t: 0.0, last_pos: [0.0; 3], frames: 0, writes: 0, failed: 0, next_log: 5.0 }))
 }
 
 /// Search for the offset arrays from the player's model item on a thread of our own (as the pose probe does).
@@ -320,30 +338,51 @@ pub fn step() {
     }
     let turn_m = quat(turn);
     let turn_t: M3 = std::array::from_fn(|i| std::array::from_fn(|j| turn_m[j][i]));
-    let to_world = |p: V3| add(mv(&turn_m, p), pos);
-    let to_model = |p: V3| mv(&turn_t, sub(p, pos));
-    let caps: Vec<(V3, V3)> = c.caps.iter().map(|(a, b)| (to_world(*a), to_world(*b))).collect();
     let reset = !c.started || dt > RESET_S || length(sub(pos, c.last_pos)) > JUMP_M;
-    let ground = sub(pos, c.last_pos);
-    let speed_now = if reset { 0.0 } else { ((ground[0] * ground[0] + ground[2] * ground[2]).sqrt() / dt.max(1e-3)).min(12.0) };
-    c.speed += (speed_now - c.speed) * (1.0 - (-dt.min(RESET_S) / SPEED_SMOOTH_S).exp());
-    let room = (c.speed / LEG_ROOM_SPEED).min(1.0);
-    let (back, left) = (mv(&turn_m, c.back), mv(&turn_m, c.left));
+    // his motion, smoothed: velocity, acceleration, turn rate and its change (world, and his turn about y)
+    let h_all = dt.min(RESET_S);
+    let ease = |tau: f32| 1.0 - (-h_all / tau).exp();
+    let yaw = turn_m[0][2].atan2(turn_m[0][0]);
+    if reset {
+        (c.vel, c.last_vel, c.acc, c.w, c.last_w, c.dw) = ([0.0; 3], [0.0; 3], [0.0; 3], 0.0, 0.0, 0.0);
+    } else {
+        let v_now = scale(sub(pos, c.last_pos), 1.0 / dt.max(1e-3));
+        c.vel = add(c.vel, scale(sub(v_now, c.vel), ease(VEL_SMOOTH_S)));
+        let a_now = scale(sub(c.vel, c.last_vel), 1.0 / dt.max(1e-3));
+        c.acc = add(c.acc, scale(sub(a_now, c.acc), ease(ACC_SMOOTH_S)));
+        let mut turned = yaw - c.yaw;
+        if turned > std::f32::consts::PI {
+            turned -= 2.0 * std::f32::consts::PI;
+        } else if turned < -std::f32::consts::PI {
+            turned += 2.0 * std::f32::consts::PI;
+        }
+        c.w += (turned / dt.max(1e-3) - c.w) * ease(VEL_SMOOTH_S);
+        c.dw += ((c.w - c.last_w) / dt.max(1e-3) - c.dw) * ease(ACC_SMOOTH_S);
+    }
+    c.last_vel = c.vel;
+    c.last_w = c.w;
+    c.yaw = yaw;
+    let speed = (c.vel[0] * c.vel[0] + c.vel[2] * c.vel[2]).sqrt();
+    let room = (speed / LEG_ROOM_SPEED).min(1.0);
+    let (back, left) = (c.back, c.left);
+    let (vel, acc, w, dw) = (c.vel, c.acc, c.w, c.dw);
     let mut held = 0;
     c.started = true;
     c.last_pos = pos;
     let st = crate::settings::get();
     let wind_scale = st.cape_wind.clamp(0.0, 3.0);
-    let steps = ((dt.min(RESET_S) / STEP_S).ceil() as usize).clamp(1, 4);
-    let h = dt.min(RESET_S) / steps as f32;
+    let steps = ((h_all / STEP_S).ceil() as usize).clamp(1, 4);
+    let h = h_all / steps as f32;
     let damp = DAMP.powf(h / STEP_S);
     let t0 = c.t;
     c.t += h * steps as f32;
+    // the air past him and his speeding up and slowing down, in his own frame (where the chains live)
+    let push = scale(mv(&turn_t, acc), -INERTIA);
+    let caps = &c.caps;
     for chain in c.chains.iter_mut() {
-        let targets: Vec<V3> = chain.rest.iter().map(|r| to_world(*r)).collect();
         if reset {
-            chain.p = targets.clone();
-            chain.q = targets.clone();
+            chain.p = chain.rest.clone();
+            chain.q = chain.rest.clone();
         }
         let last = chain.rest.len() - 1;
         for s in 0..steps {
@@ -351,18 +390,28 @@ pub fn step() {
             let gust = (0.6 + 0.4 * (0.7 * t).sin() + 0.25 * (1.9 * t + 1.1).sin() + 0.15 * (4.3 * t + 0.3).sin()).max(0.0);
             let angle = 2.0 + 0.5 * (0.03 * t).sin();
             let wind = [angle.cos() * WIND * gust * wind_scale, 0.0, angle.sin() * WIND * gust * wind_scale];
+            let air = mv(&turn_t, sub(wind, scale(vel, HEADWIND)));
             for k in 1..=last {
                 let v = scale(sub(chain.p[k], chain.q[k]), damp);
-                let vel = scale(v, 1.0 / h);
-                let a = add([0.0, -GRAVITY, 0.0], scale(sub(wind, vel), DRAG));
+                let velp = scale(v, 1.0 / h);
+                // his turn: the cape lags its start (Euler) and flares out (centrifugal), softened and capped
+                let r = [chain.p[k][0], 0.0, chain.p[k][2]];
+                let lag = [-dw * r[2], 0.0, dw * r[0]];
+                let flare = scale(r, w * w);
+                let mut swing = scale(add(lag, flare), TURN);
+                let sl = length(swing);
+                if sl > TURN_MAX {
+                    swing = scale(swing, TURN_MAX / sl);
+                }
+                let a = add(add(add([0.0, -GRAVITY, 0.0], scale(sub(air, velp), DRAG)), push), swing);
                 chain.q[k] = chain.p[k];
                 chain.p[k] = add(add(chain.p[k], v), scale(a, h * h));
                 // back toward the rest shape, firmly at the top
                 let s = STIFF_TOP + (STIFF_HEM - STIFF_TOP) * k as f32 / last as f32;
-                chain.p[k] = add(chain.p[k], scale(sub(targets[k], chain.p[k]), s));
+                chain.p[k] = add(chain.p[k], scale(sub(chain.rest[k], chain.p[k]), s));
             }
-            chain.p[0] = targets[0];
-            chain.q[0] = targets[0];
+            chain.p[0] = chain.rest[0];
+            chain.q[0] = chain.rest[0];
             for _ in 0..ITERATIONS {
                 for k in 1..=last {
                     let d = sub(chain.p[k], chain.p[k - 1]);
@@ -389,12 +438,12 @@ pub fn step() {
                     // while he moves, and only so far to either side (into his hips and arms)
                     let f = k as f32 / last as f32;
                     let least = LEG_ROOM * f * room;
-                    let along = dot(sub(chain.p[k], targets[k]), back);
+                    let along = dot(sub(chain.p[k], chain.rest[k]), back);
                     if along < least {
                         hold(&mut chain.p[k], &mut chain.q[k], back, least - along);
                         held += 1;
                     }
-                    let across = dot(sub(chain.p[k], targets[k]), left);
+                    let across = dot(sub(chain.p[k], chain.rest[k]), left);
                     let most = SIDEWAYS * f;
                     if across.abs() > most {
                         hold(&mut chain.p[k], &mut chain.q[k], scale(left, -across.signum()), across.abs() - most);
@@ -408,7 +457,7 @@ pub fn step() {
     // each chain bone's offset (rest space): its rest segment turned onto the simulated one about its rest point
     let mut out: Vec<(usize, [f32; 12])> = Vec::new();
     for chain in &c.chains {
-        let pm: Vec<V3> = chain.p.iter().map(|p| to_model(*p)).collect();
+        let pm = &chain.p;
         let last = chain.rest.len() - 1;
         for k in 0..=last {
             let (a, b) = if k < last { (k, k + 1) } else { (k - 1, k) };
@@ -430,7 +479,7 @@ pub fn step() {
     c.frames += 1;
     if c.t >= c.next_log {
         c.next_log = c.t + LOG_EVERY_S;
-        let hem: Vec<String> = c.chains.iter().map(|ch| format!("{:.2}", length(sub(ch.p[ch.p.len() - 1], to_world(ch.rest[ch.rest.len() - 1]))))).collect();
-        crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; {} holds (kept out of him or from going too far sideways); speed {:.1} m/s; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "), c.held, c.speed);
+        let hem: Vec<String> = c.chains.iter().map(|ch| format!("{:.2}", length(sub(ch.p[ch.p.len() - 1], ch.rest[ch.rest.len() - 1])))).collect();
+        crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; {} holds (kept out of him or from going too far sideways); speed {speed:.1} m/s, turning {:.1} rad/s; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "), c.held, c.w);
     }
 }
