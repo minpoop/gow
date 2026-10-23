@@ -48,6 +48,10 @@ pub const STRANDS: crate::kratos_look::Strands<'static> = crate::kratos_look::St
 /// The short goatee under the long beard (86, 87): left out when the long beard is drawn, which covers its place (it
 /// showed under it).
 pub const GOATEE: u16 = 89;
+/// The fur on cards drawn with Elden Ring's hair material when the setting asks for it (0.1.78, "i do want better fur
+/// if possible"): the bear cloak (24) and the harness's tufts (29). The cut-out material (Torrent's mane's) cuts each
+/// strand hard against its alpha and lights it as armour; the hair shader is the one Elden Ring gives its people's hair.
+pub const HAIR_FUR: [u16; 2] = [24, 29];
 /// Elden Ring's cut-out character material: Torrent's body (the `C[AMSN][PixelKill]` shader, the armour's own with
 /// pixels under half albedo alpha not drawn, and the same vertex layout), with its three samplers.
 pub const CUT_OUT_MTD: &str = "N:\\GR\\data\\Material\\mtd\\Chr\\matxml\\C[c4000]_Horse_Body.matxml";
@@ -803,6 +807,8 @@ pub(crate) struct Naming<'a> {
     pub tex: &'a str,
     pub material: &'a str,
     pub dir: &'a str,
+    /// Strand materials drawn with Elden Ring's hair material ([`erpart::HAIR_MTD`]) instead of the cut-out one.
+    pub hair: &'a [u16],
 }
 
 /// How many of a part's materials got their colour map, their surface, and a cut-out colour map (strands).
@@ -849,8 +855,9 @@ pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collect
         };
         let mut mat = material_in(naming.dir, &format!("{}_m{m}", naming.material), &stem, &format!("{tex}_m"), &normal);
         if cut {
-            mat.mtd = CUT_OUT_MTD.into();
-            for (t, name) in mat.textures.iter_mut().zip(CUT_OUT_SAMPLERS) {
+            let (mtd, samplers) = if naming.hair.contains(m) { (erpart::HAIR_MTD, erpart::HAIR_SAMPLERS) } else { (CUT_OUT_MTD, CUT_OUT_SAMPLERS) };
+            mat.mtd = mtd.into();
+            for (t, name) in mat.textures.iter_mut().zip(samplers) {
                 t.0 = name.into();
             }
         }
@@ -883,7 +890,8 @@ fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
 /// `looks` holds a colour map and surface per Kratos material (a missing colour is a neutral grey, a missing surface
 /// flat and rough).
 #[allow(clippy::too_many_arguments)]
-pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>, outfit: Outfit, cape: bool) -> Result<(Vec<(String, Vec<u8>)>, String)> {
+#[allow(clippy::too_many_arguments)]
+pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Option<&[Node]>, kratos: Option<&crate::kratos::Skeleton>, looks: &std::collections::BTreeMap<u16, crate::kratos_look::Look>, outfit: Outfit, cape: bool, hair_fur: bool) -> Result<(Vec<(String, Vec<u8>)>, String)> {
     let rs = mesh_records(mesh);
     let parts = mg_parts(mg);
     let level0 = |list: &[u16]| -> Vec<usize> { list.iter().filter_map(|p| parts.get(*p as usize)).filter_map(|l| l.first()).flat_map(|l| l.first as usize..l.first as usize + l.draws as usize).collect() };
@@ -957,9 +965,12 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     }
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let tex = format!("kratos_{MODEL_ID}");
-    let (mats, textures, LookCounts { coloured, surfaced, strands }) = look_materials(&Naming { tex: &tex, material: "kratos", dir: KRATOS_TEX_DIR }, &used, looks);
+    let hair: &[u16] = if hair_fur { &HAIR_FUR } else { &[] };
+    let (mats, textures, LookCounts { coloured, surfaced, strands }) = look_materials(&Naming { tex: &tex, material: "kratos", dir: KRATOS_TEX_DIR, hair }, &used, looks);
     let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures));
     note.push_str(&format!("body {} meshes ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {strands} of strands cut out, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
+    let on_hair: Vec<u16> = hair.iter().copied().filter(|m| used.contains(m) && looks.get(m).is_some_and(|l| l.cut_out)).collect();
+    note.push_str(&format!("fur on Elden Ring's hair material: {on_hair:?}; "));
     let (nodes, meshes) = empty_piece();
     for (slot, id) in [("hd", MODEL_ID - 1), ("am", MODEL_ID + 1), ("lg", MODEL_ID + 2)] {
         add(slot, id, &nodes, &meshes, &[material(id)], texture_pack(id, [128, 128, 128]));
@@ -1100,7 +1111,7 @@ mod tests {
         let mut looks = std::collections::BTreeMap::new();
         looks.insert(3u16, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: 4, h: 4, rgba: vec![200; 64], format: crate::dds::Format::Bc1 }), surface: None, cut_out: false });
         let dir = "N:\\GR\\data\\INTERROOT_win64\\parts\\Weapon\\WP_A_9710\\tex";
-        let (mats, tex, counts) = look_materials(&Naming { tex: "wp_a_9710", material: "WP_A_9710", dir }, &[3, 5], &looks);
+        let (mats, tex, counts) = look_materials(&Naming { tex: "wp_a_9710", material: "WP_A_9710", dir, hair: &[] }, &[3, 5], &looks);
         assert_eq!(mats.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["WP_A_9710_m3", "WP_A_9710_m5"]);
         assert_eq!(mats[0].textures[0].1, format!("{dir}\\wp_a_9710_m3_a.tif"));
         assert_eq!(mats[1].textures[2].1, format!("{dir}\\wp_a_9710_n.tif"));
@@ -1311,7 +1322,7 @@ mod tests {
                 colours.insert(m, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: info.width, h: info.height, rgba, format: crate::dds::Format::Bc1 }), surface: None, cut_out });
             }
         }
-        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours, Outfit::Survival, true).unwrap();
+        let (files, note) = build_parts(&mesh, &mg, &gpu, &dir.join("root.lodpack"), skeleton.as_deref(), kratos.as_ref(), &colours, Outfit::Survival, true, true).unwrap();
         println!("{real} real resources; {note}");
         for (name, bytes) in files {
             std::fs::write(dir.join(name), bytes).unwrap();

@@ -1396,7 +1396,7 @@ pub fn build_weapon(spec: &WeaponSpec, buf: &[u8], es: &[Entry], wad_dir: &Path,
     let (nodes, meshes) = kratos_part::merge_by_material_named(vec![root], meshes, 1, &format!("{er}_mesh"));
     let low = er.to_ascii_lowercase();
     let dir = format!("N:\\GR\\data\\INTERROOT_win64\\parts\\Weapon\\{er}\\tex");
-    let (mats, textures, LookCounts { coloured, surfaced, .. }) = kratos_part::look_materials(&Naming { tex: &low, material: &er, dir: &dir }, &used, &looks);
+    let (mats, textures, LookCounts { coloured, surfaced, .. }) = kratos_part::look_materials(&Naming { tex: &low, material: &er, dir: &dir, hair: &[] }, &used, &looks);
     let mut final_geometry = Geometry::default();
     for m in &meshes {
         final_geometry.positions.extend(m.vertices.iter().map(|v| v.position));

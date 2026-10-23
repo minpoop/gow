@@ -63,6 +63,12 @@ pub struct Material {
     pub textures: Vec<(String, String)>,
 }
 
+/// Elden Ring's hair material (a character's: `C[c8902]`, shader `C_Hair`; FLVER_Editor's BankER): the armour
+/// material's three samplers (albedo, metallic, normal) with hair lighting. Its meshes need one more vertex value
+/// after the UVs, a Byte4C "UV[1]" (44 bytes a vertex), which [`flver2_with`] writes for every mesh drawn with it.
+pub const HAIR_MTD: &str = "N:\\GR\\data\\Material\\mtd\\Chr\\matxml\\C[c8902]_Hair.matxml";
+pub const HAIR_SAMPLERS: [&str; 3] = ["C_Hair__snp_Texture2D_2_AlbedoMap_0", "C_Hair__snp_Texture2D_0_MetallicMap_0", "C_Hair__snp_Texture2D_7_NormalMap_4"];
+
 /// A hit point ("dummy poly") of a weapon model: where its attacks reach (100 tip, 110 middle, 120 by the hand, 122
 /// pommel, 130 between tip and middle), where weapon buffs and trails run (300 to 301), each a point with a forward and
 /// an up direction. Written as the game's own (SoulsFormats' `FLVER.Dummy`, version 0x2001A): 64 bytes each.
@@ -352,6 +358,10 @@ pub fn flver2(nodes: &[Node], materials: &[Material], meshes: &[Mesh]) -> Vec<u8
 /// should carry flag 2 (it owns dummies). With none, the bytes are those [`flver2`] always wrote.
 pub fn flver2_with(nodes: &[Node], materials: &[Material], meshes: &[Mesh], dummies: &[Dummy]) -> Vec<u8> {
     const LOD_FLAGS: [u32; 6] = [0, 0x0100_0000, 0x0200_0000, 0x8000_0000, 0x8100_0000, 0x8200_0000];
+    // a mesh with the hair material takes the second layout, 4 bytes longer (see [`HAIR_MTD`])
+    let hair = |m: &Mesh| materials.get(m.material as usize).is_some_and(|mat| mat.mtd == HAIR_MTD);
+    let stride = |m: &Mesh| if hair(m) { 44 } else { 40 };
+    let layouts = if meshes.iter().any(hair) { 2 } else { 1 };
     let mut w = W::new();
     let world = world_matrices(nodes);
     let all = bbox(meshes.iter().flat_map(|m| m.vertices.iter().map(|v| v.position)));
@@ -378,7 +388,7 @@ pub fn flver2_with(nodes: &[Node], materials: &[Material], meshes: &[Mesh], dumm
     w.u8(0);
     w.i32(0);
     w.i32((meshes.len() * LOD_FLAGS.len()) as i32);
-    w.i32(1); // buffer layouts
+    w.i32(layouts); // buffer layouts
     w.i32(materials.iter().map(|m| m.textures.len() as i32).sum());
     // as the game's own models have them
     w.u8(0);
@@ -476,19 +486,25 @@ pub fn flver2_with(nodes: &[Node], materials: &[Material], meshes: &[Mesh], dumm
     }
     for (i, m) in meshes.iter().enumerate() {
         w.i32(0); // the buffer's index within its mesh
-        w.i32(0); // layout
-        w.i32(40);
+        w.i32(hair(m) as i32); // layout
+        w.i32(stride(m));
         w.i32(m.vertices.len() as i32);
         w.i32(0);
         w.i32(0);
-        w.i32((40 * m.vertices.len()) as i32);
+        w.i32(stride(m) * m.vertices.len() as i32);
         w.reserve(format!("vb{i}"));
     }
-    // the one layout
+    // the layouts: the armour's, and the hair material's with one more value after the UVs
     w.i32(7);
     w.i32(0);
     w.i32(0);
     w.reserve("layout_members");
+    if layouts == 2 {
+        w.i32(8);
+        w.i32(0);
+        w.i32(0);
+        w.reserve("layout_members_hair");
+    }
     let mut tex_index = 0;
     for (i, m) in materials.iter().enumerate() {
         w.fill(&format!("mat_tex{i}"), tex_index);
@@ -524,15 +540,23 @@ pub fn flver2_with(nodes: &[Node], materials: &[Material], meshes: &[Mesh], dumm
         }
     }
     w.pad(16);
-    let at = w.pos() as u32;
-    w.fill("layout_members", at);
     // (offset in the vertex, type, semantic, index)
-    for (off, ty, sem, idx) in [(0, 2, 0, 0), (12, 0x11, 3, 0), (16, 0x11, 6, 0), (20, 0x11, 2, 0), (24, 0x13, 1, 0), (28, 0x13, 10, 1), (32, 0x16, 5, 0)] {
-        w.i32(0);
-        w.i32(off);
-        w.u32(ty);
-        w.u32(sem);
-        w.i32(idx);
+    const MEMBERS: [(i32, u32, u32, i32); 7] = [(0, 2, 0, 0), (12, 0x11, 3, 0), (16, 0x11, 6, 0), (20, 0x11, 2, 0), (24, 0x13, 1, 0), (28, 0x13, 10, 1), (32, 0x16, 5, 0)];
+    // the hair layout: the same, then a Byte4C "UV[1]" (C[c8902]_Hair per FLVER_Editor's BankER)
+    let hair_members: Vec<(i32, u32, u32, i32)> = MEMBERS.iter().copied().chain([(40, 0x13, 5, 1)]).collect();
+    for (name, members) in [("layout_members", MEMBERS.to_vec()), ("layout_members_hair", hair_members)] {
+        if name == "layout_members_hair" && layouts < 2 {
+            continue;
+        }
+        let at = w.pos() as u32;
+        w.fill(name, at);
+        for (off, ty, sem, idx) in members {
+            w.i32(0);
+            w.i32(off);
+            w.u32(ty);
+            w.u32(sem);
+            w.i32(idx);
+        }
     }
     w.pad(16);
     let (half, rotation, centre) = mesh_box(meshes);
@@ -637,6 +661,10 @@ pub fn flver2_with(nodes: &[Node], materials: &[Material], meshes: &[Mesh], dumm
                 for c in uv {
                     w.i16((c * 2048.0).round().clamp(-32768.0, 32767.0) as i16);
                 }
+            }
+            if hair(m) {
+                // what the hair shader reads here is not known: full, as a multiplier would want it
+                w.bytes(&[255; 4]);
             }
         }
     }
@@ -1136,6 +1164,23 @@ pub fn partsbnd_models(stem: &str, flvers: Vec<Vec<u8>>, tpf: Vec<u8>) -> Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mesh_on_the_hair_material_gets_the_longer_layout_and_the_others_keep_theirs() {
+        let nodes = vec![Node { name: "Master".into(), parent: -1, t: [0.0; 3], r: [0.0; 3], s: [1.0; 3], flags: 8 }];
+        let v = Vertex { position: [0.0, 1.0, 0.0], normal: [0.0, 0.0, 1.0], tangent: [1.0, 0.0, 0.0, 1.0], bones: [0; 4], weights: [1.0, 0.0, 0.0, 0.0], color: [255; 4], uv: [[0.0; 2]; 2] };
+        let mesh = |material: u32| Mesh { material, node: 0, vertices: vec![v; 3], indices: vec![0, 1, 2] };
+        let mat = |mtd: &str| Material { name: "m".into(), mtd: mtd.into(), textures: vec![] };
+        let u32_at = |f: &[u8], o: usize| u32::from_le_bytes(f[o..o + 4].try_into().unwrap());
+        let plain = flver2(&nodes, &[mat("C[AMSN]_e.matxml")], &[mesh(0)]);
+        let hair = flver2(&nodes, &[mat("C[AMSN]_e.matxml"), mat(HAIR_MTD)], &[mesh(0), mesh(1)]);
+        // layouts: one, or two once a mesh needs the hair one
+        assert_eq!((u32_at(&plain, 0x54), u32_at(&hair, 0x54)), (1, 2));
+        // the hair mesh's buffer says layout 1 and 44 bytes a vertex
+        let at = |f: &[u8], pat: &[u8]| f.windows(pat.len()).filter(|w| *w == pat).count();
+        let header = |layout: u32, stride: u32| [0u32, layout, stride, 3].iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        assert_eq!((at(&hair, &header(1, 44)), at(&hair, &header(0, 40)), at(&plain, &header(1, 44))), (1, 1, 0));
+    }
 
     #[test]
     fn stored_zstd_frames_split_into_raw_blocks() {

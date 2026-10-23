@@ -55,6 +55,9 @@ pub struct Settings {
     /// Kratos wears the Black Bear Set (the fur cloak, black leggings, boots and belt) instead of the Survival Set.
     /// Read by the launcher when it builds his body part, so it applies from the next Play.
     pub black_bear_outfit: bool,
+    /// The fur on cards (the bear cloak, the harness's tufts) is drawn with Elden Ring's hair material instead of the
+    /// cut-out one. Read by the launcher when it builds his body part, so it applies from the next Play.
+    pub hair_fur: bool,
     /// Kratos holds his right-hand weapon in both hands, and the shield comes out (one-handed) only while the guard
     /// button is held.
     pub two_hand_by_default: bool,
@@ -118,6 +121,7 @@ impl Default for Settings {
             debug_enemy_damage_multiplier: 3.5,
             runics: OWN_RUNICS,
             black_bear_outfit: true,
+            hair_fur: true,
             two_hand_by_default: true,
             hide_stowed_shield: true,
         }
@@ -125,7 +129,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 14;
+const FILE_VERSION: u32 = 15;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -151,6 +155,9 @@ fn render(s: &Settings) -> String {
 
   "black_bear_outfit": {bear},
   "_black_bear_outfit": "Kratos wears the Black Bear Set: the bear fur cloak, with his leggings, boots and belt in black. false = the Survival Set with the leather cloak. Applies the next time you press Play.",
+
+  "hair_fur": {hair},
+  "_hair_fur": "true = the fur of Kratos's bear cloak (and the tufts around his shoulder pad) is drawn with Elden Ring's own hair material, for softer strands lit like hair (new and still being tried). false = the cut-out material it had before. Applies the next time you press Play.",
 
   "two_hand_by_default": {two_hand},
   "_two_hand_by_default": "Kratos holds his weapon in both hands, and the Guardian Shield comes up only while you hold the guard button (L1); let go and he two-hands again. false = Elden Ring's own one-handed stance and two-hand toggle.",
@@ -238,6 +245,7 @@ fn render(s: &Settings) -> String {
         dhp = s.debug_enemy_health,
         ddm = s.debug_enemy_damage_multiplier,
         bear = s.black_bear_outfit,
+        hair = s.hair_fur,
         two_hand = s.two_hand_by_default,
         hide_shield = s.hide_stowed_shield,
         runic_lines = runic_lines(s),
@@ -305,6 +313,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     debug_enemy_damage_multiplier: 3.5,
     runics: OWN_RUNICS,
     black_bear_outfit: true,
+    hair_fur: true,
     two_hand_by_default: true,
     hide_stowed_shield: true,
 });
@@ -375,6 +384,7 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     }
     flag(&v, "health_stones", &mut s.health_stones);
     flag(&v, "black_bear_outfit", &mut s.black_bear_outfit);
+    flag(&v, "hair_fur", &mut s.hair_fur);
     flag(&v, "two_hand_by_default", &mut s.two_hand_by_default);
     flag(&v, "hide_stowed_shield", &mut s.hide_stowed_shield);
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
@@ -444,9 +454,9 @@ fn migrated_text(text: &str) -> Option<String> {
     if version < 14 {
         s.cape_physics = true;
     }
-    // versions 3 and 7-13 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
-    // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key; 13: the cape): re-rendering
-    // the file shows them with their notes
+    // versions 3, 7-13 and 15 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
+    // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key; 13: the cape; 15: the
+    // hair material for the fur): re-rendering the file shows them with their notes
     Some(render(&s))
 }
 
@@ -544,6 +554,7 @@ mod tests {
             debug_enemy_damage_multiplier: 4.0,
             runics: ["axe_ice_lance", "axe_frostfall", "blades_runic_light", "blades_scorched_arc", "spear_thunder_step", "spear_runic_heavy"],
             black_bear_outfit: false,
+            hair_fur: false,
             two_hand_by_default: false,
             hide_stowed_shield: false,
         };
