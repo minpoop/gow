@@ -11,7 +11,10 @@
 //! hang free) down to the hem, each the mean of that side's cloak vertices behind the body at that height (rest pose,
 //! model space). A cloak vertex below the anchor, behind the body or at its sides ([`SIDES`]), takes the chain's weights
 //! by its height (the two points it lies between) and its side (both chains near the middle), blended in over [`BLEND`]
-//! below the anchor, and keeps the rest of its own; the four largest are kept.
+//! below the anchor, and keeps the rest of its own; the four largest are kept. Except where it lies on his arm: its
+//! share on the arm's bones (copied from the skin under it) stays on them, so the fur over his shoulder and upper arm
+//! goes down with the arm (0.1.72-0.1.79 hung it on the chains where the arm is in the rest pose, raised and out, and
+//! it stood off his lowered arm like a bell: "there seems to be like a air pocket here").
 //!
 //! 0.1.70-0.1.71 hung the chains from mid-back (`Spine1`, 1.15 m) with a 0.25 m blend: the top half of the bear cloak
 //! stayed on his torso and arms and only the part below his waist swung ("only the bottom of the cloak is moving"), and
@@ -100,6 +103,19 @@ pub fn rig(meshes: &mut [Mesh], used: &[u16], cloaks: &[u16], skeleton: &[Node])
     let top = at(ANCHOR)?[1];
     let bones: Vec<Vec<u8>> = CHAINS.iter().map(|c| c.iter().map(|n| index(n).and_then(|i| u8::try_from(i).ok())).collect::<Option<Vec<u8>>>()).collect::<Option<Vec<_>>>()?;
     let kratos = |m: &Mesh| used.get(m.material as usize).copied().unwrap_or(u16::MAX);
+    // his arms' bones: the upper arms and everything below them
+    let on_arm: Vec<bool> = (0..skeleton.len())
+        .map(|i| {
+            let mut j = i as i32;
+            while j >= 0 {
+                if matches!(skeleton[j as usize].name.as_str(), "L_UpperArm" | "R_UpperArm") {
+                    return true;
+                }
+                j = skeleton[j as usize].parent as i32;
+            }
+            false
+        })
+        .collect();
     // the cloak behind the body below the anchor, with its side
     let behind = |p: [f32; 3]| -dot(horizontal(sub(p, middle)), forward);
     let side = |p: [f32; 3]| dot(horizontal(sub(p, middle)), left);
@@ -152,7 +168,8 @@ pub fn rig(meshes: &mut [Mesh], used: &[u16], cloaks: &[u16], skeleton: &[Node])
             let p = v.position;
             let down = ((top - p[1]) / BLEND).clamp(0.0, 1.0);
             let back_share = ((behind(p) + SIDES) / (BEHIND + SIDES)).clamp(0.0, 1.0);
-            let b = down * down * (3.0 - 2.0 * down) * back_share;
+            let arm: f32 = v.bones.iter().zip(v.weights).filter(|(b, _)| on_arm.get(**b as usize).copied().unwrap_or(false)).map(|(_, w)| w).sum();
+            let b = down * down * (3.0 - 2.0 * down) * back_share * (1.0 - arm).clamp(0.0, 1.0);
             if b <= 0.0 {
                 continue;
             }
@@ -219,6 +236,7 @@ mod tests {
                 s.push(node(n, if k < 2 { 2 } else { 1 }, [0.0; 3]));
             }
         }
+        s.push(node("L_UpperArm", 3, [0.15, 0.0, 0.0]));
         s
     }
 
@@ -236,7 +254,11 @@ mod tests {
                 verts.push(vertex([-0.15 + 0.05 * j as f32, 1.6 - 0.05 * i as f32, -0.15]));
             }
         }
-        // beside him (at his body's middle, by his arm), then the front flap
+        // on his arm (the skin under it is the upper arm's), half on it, beside him (at his body's middle), then the
+        // front flap
+        let arm = sk.iter().position(|n| n.name == "L_UpperArm").unwrap() as u8;
+        verts.push(Vertex { bones: [arm, 0, 0, 0], ..vertex([0.25, 1.2, -0.1]) });
+        verts.push(Vertex { bones: [arm, 2, 0, 0], weights: [0.5, 0.5, 0.0, 0.0], ..vertex([0.2, 1.1, -0.15]) });
         verts.push(vertex([0.2, 0.9, 0.0]));
         verts.push(vertex([0.1, 0.9, 0.2]));
         let mut meshes = vec![Mesh { material: 0, node: 0, vertices: verts, indices: vec![0, 1, 2] }];
@@ -250,15 +272,18 @@ mod tests {
         assert!(points.iter().all(|p| p[0] > 0.0 && p[2] < 0.0));
         assert!(rig.chains[1].1.iter().all(|p| p[0] < 0.0));
         let v = &meshes[0].vertices;
-        let chain_share = |v: &Vertex| v.bones.iter().zip(v.weights).filter(|(b, _)| **b as usize >= 10).map(|(_, w)| w).sum::<f32>();
+        let chain_share = |v: &Vertex| v.bones.iter().zip(v.weights).filter(|(b, _)| (10..10 + 2 * POINTS).contains(&(**b as usize))).map(|(_, w)| w).sum::<f32>();
         // above the anchor: untouched; at the hem: wholly on the chains, summing to 1; the front flap: untouched
         assert_eq!(chain_share(&v[0]), 0.0);
         let hem = &v[22 * 7 + 6];
         assert!((chain_share(hem) - 1.0).abs() < 1e-5 && (hem.weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         assert_eq!(chain_share(v.last().unwrap()), 0.0);
-        // the cloak beside him goes partly with the back of it
+        // the cloak beside him goes partly with the back of it; on his arm it stays with the arm, by its share there
         let beside = chain_share(&v[v.len() - 2]);
         assert!((0.2..0.35).contains(&beside), "{beside}");
+        assert_eq!(chain_share(&v[v.len() - 4]), 0.0);
+        let half = chain_share(&v[v.len() - 3]);
+        assert!((0.45..0.55).contains(&half), "{half}");
         // a vertex at his back's middle is shared by both chains
         let mid = &v[20 * 7 + 3];
         let left = mid.bones.iter().zip(mid.weights).filter(|(b, _)| (10..10 + POINTS).contains(&(**b as usize))).map(|(_, w)| w).sum::<f32>();

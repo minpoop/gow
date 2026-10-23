@@ -45,9 +45,10 @@ const WIND: f32 = 4.0;
 /// chains from mid-back: the hem 6 cm from rest standing still, 12 cm on average in the gusts, 17 walking, 43 running,
 /// the upper points barely moving ("only the bottom of the cloak is moving"). Now, on chains from his shoulder blades
 /// (bear cloak points), per point top to hem: standing 1 / 5 / 8 cm, in the gusts 6 / 10 / 19 (hem up to 46), walking
-/// at 2 m/s 7 / 13 / 26, running at 6 m/s 21 / 39 / 68 (about 40 degrees).
-const STIFF_TOP: f32 = 0.015;
-const STIFF_HEM: f32 = 0.0015;
+/// at 2 m/s 7 / 13 / 26, running at 6 m/s 21 / 39 / 68 (about 40 degrees). Those were 0.015 / 0.0015 with the cape in
+/// the world (0.1.73-0.1.78); in his own frame (0.1.79 on) see `HEADWIND`.
+const STIFF_TOP: f32 = 0.012;
+const STIFF_HEM: f32 = 0.001;
 const ITERATIONS: usize = 3;
 const STEP_S: f32 = 1.0 / 60.0;
 /// A frame longer than this, or the player moving further than `JUMP_M`, starts the cloak again at rest.
@@ -71,10 +72,13 @@ const ACC_SMOOTH_S: f32 = 0.25;
 /// simulated it in the world, so a start whipped it up like a yanked pendulum and a quick turn flung it round through
 /// the air ("when i walk it bounces way higher than i should be. and when i turn 180 my cape also freaks out"; offline
 /// the hem rose 0.43 m walking and 1.24 m over a half turn, then 0.02 m and 0.04 m without wind).
-const HEADWIND: f32 = 0.5;
-const INERTIA: f32 = 0.4;
-const TURN: f32 = 0.15;
-const TURN_MAX: f32 = 6.0;
+/// 0.1.79's 0.5 / 0.4 / 0.15 (cap 6) with the pull to rest at 0.015 / 0.0015 were "a bit stiff": offline, without
+/// wind, the hem trailed 0.12 m walking and 0.27 m running; now 0.15 and 0.47 (0.1.73's world-space cape, "perfect" in
+/// the player's words, trailed about 0.26 and 0.68), 0.16 m of rise over a half turn walking, jumps under 3.5 cm a frame.
+const HEADWIND: f32 = 0.8;
+const INERTIA: f32 = 0.6;
+const TURN: f32 = 0.25;
+const TURN_MAX: f32 = 8.0;
 /// Bones whose offsets must read as the identity for an array to be written (nothing offsets the root).
 const ROOTS: [&str; 3] = ["Master", "RootPos", "Pelvis"];
 /// The least time between searches (s).
@@ -108,6 +112,9 @@ struct Cape {
     w: f32,
     last_w: f32,
     dw: f32,
+    /// His fastest speed and quickest turn since the last status line.
+    peak_speed: f32,
+    peak_turn: f32,
     /// Times a point was held back from going into him or too far to a side.
     held: u64,
     started: bool,
@@ -235,7 +242,7 @@ fn load(bones: &'static [Bone]) -> Result<Option<Cape>, String> {
         chains.push(Chain { bones: bone_ids, p: rest.clone(), q: rest.clone(), rest, len, clear });
     }
     crate::glog!("cape", "rig: {} chain(s) of {} points from {} ({} cloak vertices), bones {:?}, {} body capsules", chains.len(), chains[0].rest.len(), path.display(), v["vertices"].as_u64().unwrap_or(0), chains.iter().map(|c| c.bones.iter().map(|b| bones[*b].name.as_str()).collect::<Vec<_>>()).collect::<Vec<_>>(), capsules.len());
-    Ok(Some(Cape { chains, roots, caps: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(), back, left, vel: [0.0; 3], last_vel: [0.0; 3], acc: [0.0; 3], yaw: 0.0, w: 0.0, last_w: 0.0, dw: 0.0, held: 0, started: false, last: None, t: 0.0, last_pos: [0.0; 3], frames: 0, writes: 0, failed: 0, next_log: 5.0 }))
+    Ok(Some(Cape { chains, roots, caps: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(), back, left, vel: [0.0; 3], last_vel: [0.0; 3], acc: [0.0; 3], yaw: 0.0, w: 0.0, last_w: 0.0, dw: 0.0, peak_speed: 0.0, peak_turn: 0.0, held: 0, started: false, last: None, t: 0.0, last_pos: [0.0; 3], frames: 0, writes: 0, failed: 0, next_log: 5.0 }))
 }
 
 /// Search for the offset arrays from the player's model item on a thread of our own (as the pose probe does).
@@ -363,6 +370,8 @@ pub fn step() {
     c.last_w = c.w;
     c.yaw = yaw;
     let speed = (c.vel[0] * c.vel[0] + c.vel[2] * c.vel[2]).sqrt();
+    c.peak_speed = c.peak_speed.max(speed);
+    c.peak_turn = c.peak_turn.max(c.w.abs());
     let room = (speed / LEG_ROOM_SPEED).min(1.0);
     let (back, left) = (c.back, c.left);
     let (vel, acc, w, dw) = (c.vel, c.acc, c.w, c.dw);
@@ -480,6 +489,8 @@ pub fn step() {
     if c.t >= c.next_log {
         c.next_log = c.t + LOG_EVERY_S;
         let hem: Vec<String> = c.chains.iter().map(|ch| format!("{:.2}", length(sub(ch.p[ch.p.len() - 1], ch.rest[ch.rest.len() - 1])))).collect();
-        crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; {} holds (kept out of him or from going too far sideways); speed {speed:.1} m/s, turning {:.1} rad/s; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "), c.held, c.w);
+        crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; {} holds (kept out of him or from going too far sideways); fastest {:.1} m/s and quickest turn {:.1} rad/s since the last line; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "), c.held, c.peak_speed, c.peak_turn);
+        c.peak_speed = 0.0;
+        c.peak_turn = 0.0;
     }
 }
