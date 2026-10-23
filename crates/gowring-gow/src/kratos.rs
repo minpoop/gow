@@ -292,6 +292,13 @@ pub struct Skeleton {
 }
 
 impl Skeleton {
+    /// The skeleton mirrored across x, to go with [`Vertices::mirrored_x`]: each matrix turned into its mirror image
+    /// (the x flip on both sides: the entries of the first row and first column but not both change sign).
+    pub fn mirrored_x(&self) -> Skeleton {
+        let flip = |m: &[f32; 16]| -> [f32; 16] { std::array::from_fn(|k| if (k / 4 == 0) != (k % 4 == 0) { -m[k] } else { m[k] }) };
+        Skeleton { local: self.local.iter().map(flip).collect(), inverse_bind: self.inverse_bind.iter().map(flip).collect(), ..self.clone() }
+    }
+
     pub fn parse(b: &[u8]) -> Option<Skeleton> {
         let n = u16_at(b, 0x10)? as usize;
         if n == 0 || n > 8192 {
@@ -695,6 +702,22 @@ pub struct Vertices {
     pub triangles: Vec<[u16; 3]>,
 }
 
+impl Vertices {
+    /// The draw mirrored across x. Ragnarök's model space puts Kratos's left at -x (his `leftarm` maps are on the
+    /// pieces there, his tattoo over the eye there), Elden Ring's puts a character's left at +x; read as they are, his
+    /// whole body came out mirrored (0.1.74: the tattoo over his right eye, the arm wraps on the wrong arms). Positions
+    /// and normals flip, and each triangle is wound the other way so it still faces out.
+    pub fn mirrored_x(mut self) -> Vertices {
+        for p in self.position.iter_mut().chain(self.normal.iter_mut()) {
+            p[0] = -p[0];
+        }
+        for t in self.triangles.iter_mut() {
+            t.swap(1, 2);
+        }
+        self
+    }
+}
+
 fn unorm10(x: u32, k: u32) -> f32 {
     ((x >> (10 * k)) & 1023) as f32 / 1023.0
 }
@@ -990,6 +1013,36 @@ pub fn index_tsv(file: &str, file_len: u64, idx: &SetIndex) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirroring_puts_his_left_at_plus_x_and_keeps_the_faces_outward_and_the_bind_pose_whole() {
+        let v = Vertices { position: vec![[-0.3, 1.4, 0.0], [-0.2, 1.4, 0.0], [-0.3, 1.5, 0.0]], normal: vec![[-1.0, 0.0, 0.0]; 3], triangles: vec![[0, 1, 2]], ..Default::default() };
+        let face = |v: &Vertices| {
+            let [a, b, c] = v.triangles[0].map(|i| v.position[i as usize]);
+            let (u, w) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+            [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]]
+        };
+        let before = face(&v);
+        let m = v.clone().mirrored_x();
+        assert_eq!(m.position[0], [0.3, 1.4, 0.0]);
+        assert_eq!(m.normal[0], [1.0, 0.0, 0.0]);
+        // the triangle's face turns with the mirror (its z side stays), not inside out
+        assert!((face(&m)[2] - before[2]).abs() < 1e-6 && face(&m)[2] != 0.0);
+        // a joint on his left at -x, turned 30 degrees about z, comes out at +x turned the other way, and its inverse
+        // bind still undoes its rest pose
+        let (c, s) = (30f32.to_radians().cos(), 30f32.to_radians().sin());
+        let local = [c, s, 0.0, 0.0, -s, c, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.2, 1.4, 0.05, 1.0];
+        let inverse = [c, -s, 0.0, 0.0, s, c, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -(c * -0.2 + s * 1.4), -(-s * -0.2 + c * 1.4), -0.05, 1.0];
+        let sk = Skeleton { parent: vec![-1], flags: vec![0], name_hash: vec![0], local: vec![local], inverse_bind: vec![inverse] };
+        let m = sk.mirrored_x();
+        assert_eq!((m.local[0][12], m.local[0][13], m.local[0][14]), (0.2, 1.4, 0.05));
+        assert_eq!((m.local[0][0], m.local[0][1], m.local[0][4]), (c, -s, s));
+        let mul = |a: &[f32; 16], b: &[f32; 16]| -> [f32; 16] { std::array::from_fn(|k| (0..4).map(|j| a[j * 4 + k % 4] * b[(k / 4) * 4 + j]).sum()) };
+        let id = mul(&m.inverse_bind[0], &m.local[0]);
+        for k in 0..16 {
+            assert!((id[k] - if k % 5 == 0 { 1.0 } else { 0.0 }).abs() < 1e-5, "{id:?}");
+        }
+    }
 
     #[test]
     fn reference_lists_keep_their_last_entry_whose_name_slot_runs_past_the_chunk() {

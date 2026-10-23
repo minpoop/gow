@@ -83,7 +83,7 @@ impl Outfit {
     /// The materials it dyes black (see [`crate::kratos_look::blacken_laced`]): for the Black Bear Set the cloak's fur
     /// (24), the fur under it (69), the harness's fur (29), the leggings (88), boots (62), the belt (66), the apron (21),
     /// the harness with its shoulder pad (71, 70) and the arm guards and bracers (67, 68), their metal kept and their
-    /// lacing orange as in the set's art.
+    /// lacing gold as in the set's art.
     pub fn dyed(self) -> &'static [u16] {
         match self {
             Outfit::Survival => &[],
@@ -199,7 +199,8 @@ fn kratos_meshes(rs: &[crate::kratos::MeshRecord], records: &[usize], gpu: &[u8]
             }
             &cache[&r.hash]
         };
-        let Some(v) = draw_vertices(res, r) else {
+        // his left to Elden Ring's left (see `Vertices::mirrored_x`; the skeleton is mirrored in `build_parts`)
+        let Some(v) = draw_vertices(res, r).map(crate::kratos::Vertices::mirrored_x) else {
             failed.push(k);
             continue;
         };
@@ -905,6 +906,10 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     let fallback = master_only();
     let skeleton = skeleton.unwrap_or(&fallback);
     note.push_str(&format!("{}, {} bones; ", outfit.name(), skeleton.len()));
+    // his left to Elden Ring's left: his skeleton mirrored with his mesh (each draw as `kratos_meshes` reads it), so
+    // the limbs found by position are his own (until 0.1.74 his right arm went on the player's left)
+    let mirrored = kratos.map(crate::kratos::Skeleton::mirrored_x);
+    let kratos = mirrored.as_ref();
     let retargeted = match kratos {
         Some(k) if skeleton.len() > 1 => match crate::retarget::retarget(k, SCALE, skeleton) {
             Ok(r) => {
