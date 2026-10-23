@@ -80,14 +80,16 @@ impl Outfit {
         }
     }
 
-    /// The materials it dyes black (see [`crate::kratos_look::blacken_laced`]): for the Black Bear Set the cloak's fur
-    /// (24), the fur under it (69), the harness's fur (29), the leggings (88), boots (62), the belt (66), the apron (21),
-    /// the harness with its shoulder pad (71, 70) and the arm guards and bracers (67, 68), their metal kept and their
-    /// lacing gold as in the set's art.
+    /// The materials it dyes black (see [`crate::kratos_look::blacken_laced`]): for the Black Bear Set the fur under the
+    /// cloak (69), the harness's fur (29), the leggings (88), boots (62), the belt (66), the apron (21), the harness with
+    /// its shoulder pad (71, 70) and the arm guards and bracers (67, 68), their metal kept and their lacing gold as in
+    /// the set's art. Not the cloak's fur (24): Ragnarök's own is black already (median brightness 15 of 255, its
+    /// lightest strands 71), and the dye pressed it to 8-26, a flat black without the strands' light tips
+    /// (0.1.66-0.1.76).
     pub fn dyed(self) -> &'static [u16] {
         match self {
             Outfit::Survival => &[],
-            Outfit::BlackBear => &[24, 69, 29, 88, 62, 66, 21, 70, 71, 67, 68],
+            Outfit::BlackBear => &[69, 29, 88, 62, 66, 21, 70, 71, 67, 68],
         }
     }
 
@@ -109,8 +111,9 @@ pub const HEAD_RAISE: f32 = 0.015;
 /// The largest side of a colour map in the part: Ragnarök's own, up to 2048 (the shoulder pad's; 1024 until 0.1.73,
 /// which halved the armour's leather, metal and stitching). In BC1 with its mips a 2048 map is 2.8 MB.
 pub const MAX_TEXTURE: u32 = 2048;
-/// The largest side of a surface (normal and roughness) map (512 until 0.1.73).
-pub const MAX_SURFACE: u32 = 1024;
+/// The largest side of a surface (normal and roughness) map: Ragnarök's own, up to 2048 (the torso's and the shoulder
+/// pad's; 512 until 0.1.73, 1024 until 0.1.76).
+pub const MAX_SURFACE: u32 = 2048;
 
 /// The Kratos materials the body part draws: every material of the outfit's most detailed level, less the see-through
 /// ones.
@@ -1048,7 +1051,7 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(Outfit::BlackBear.parts(), expected.as_slice());
         assert!(Outfit::Survival.dyed().is_empty());
-        assert_eq!(Outfit::BlackBear.dyed(), &[24, 69, 29, 88, 62, 66, 21, 70, 71, 67, 68]);
+        assert_eq!(Outfit::BlackBear.dyed(), &[69, 29, 88, 62, 66, 21, 70, 71, 67, 68]);
         // the bear cloak and its fur take the body's weights and are pushed out of the skin like the leather ones; the
         // apron follows the legs a little over half, as the cloth it replaces
         assert!(CLOTH.iter().any(|c| c.0 == 24) && CLOTH.iter().any(|c| c.0 == 69) && CLOAKS.contains(&24) && FURS.contains(&69));
