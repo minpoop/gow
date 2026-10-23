@@ -12,8 +12,11 @@
 //! not known to the mod, it only carries the result): each chain is a string of points, the first pinned where the rig
 //! puts it, the others under gravity and air drag (a gusting wind, and the air he runs through), pulled back toward
 //! where the cloak hangs at rest (firmly near the top, barely at the hem), kept at their rest spacing and out of his
-//! torso and legs at rest (capsules, never tighter than the cloak sits). Each chain bone's offset then turns the rest
-//! segment below it onto the simulated one about its rest point.
+//! torso and legs at rest (capsules, never tighter than the cloak sits). His limbs' movement is not known either, so
+//! no point goes in front of where it hangs at rest (0.1.72 let the wind from behind and his stopping swing it into
+//! him: "it's phasing through myself"), it keeps more room behind his legs the faster he moves, and it goes only so far
+//! to either side. Each chain bone's offset then turns the rest segment below it onto the simulated one about its rest
+//! point.
 //!
 //! Safety: an array counts only when it reads as the offsets (3x4, the identity for nearly every bone); before each
 //! frame's writes its root bones (Master, RootPos, Pelvis) must still read as the identity, else it is dropped and the
@@ -51,6 +54,15 @@ const RESET_S: f32 = 0.25;
 const JUMP_M: f32 = 3.0;
 /// Capsules the cloak stays out of (at rest): two bones and a radius (m).
 const BODY: [(&str, &str, f32); 5] = [("Pelvis", "Spine2", 0.15), ("L_Thigh", "L_Calf", 0.10), ("L_Calf", "L_Foot", 0.08), ("R_Thigh", "R_Calf", 0.10), ("R_Calf", "R_Foot", 0.08)];
+/// How far each chain point may go to either side of where it hangs at rest, at the hem (m; less toward the top): the
+/// cloak's sides wrap round his hips and lie by his arms.
+const SIDEWAYS: f32 = 0.12;
+/// Room kept behind his legs while he moves, at the hem (m; less toward the top), full from `LEG_ROOM_SPEED` (m/s):
+/// his legs swing back further than the cloak hangs behind them at rest.
+const LEG_ROOM: f32 = 0.15;
+const LEG_ROOM_SPEED: f32 = 4.0;
+/// How quickly his speed is followed (s).
+const SPEED_SMOOTH_S: f32 = 0.3;
 /// Bones whose offsets must read as the identity for an array to be written (nothing offsets the root).
 const ROOTS: [&str; 3] = ["Master", "RootPos", "Pelvis"];
 /// The least time between searches (s).
@@ -73,6 +85,13 @@ struct Cape {
     roots: Vec<usize>,
     /// The body's capsules at rest (model space).
     caps: Vec<(V3, V3)>,
+    /// His back and his left (model space, level).
+    back: V3,
+    left: V3,
+    /// His speed over the ground (m/s, smoothed).
+    speed: f32,
+    /// Times a point was held back from going into him or too far to a side.
+    held: u64,
     started: bool,
     last: Option<Instant>,
     t: f32,
@@ -145,6 +164,15 @@ fn quat(q: [f32; 4]) -> M3 {
     [[1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)], [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)], [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)]]
 }
 
+/// Push `p` by `by` along `dir` (unit) and take away its speed against `dir` (Verlet: `q` is the last position).
+fn hold(p: &mut V3, q: &mut V3, dir: V3, by: f32) {
+    *p = add(*p, scale(dir, by));
+    let against = dot(sub(*p, *q), dir);
+    if against < 0.0 {
+        *q = add(*q, scale(dir, against));
+    }
+}
+
 /// The closest point to `p` on the segment `a`-`b`.
 fn closest_on(p: V3, a: V3, b: V3) -> V3 {
     let ab = sub(b, a);
@@ -167,6 +195,14 @@ fn load(bones: &'static [Bone]) -> Result<Option<Cape>, String> {
     let bind_pos: Vec<V3> = bind.iter().map(|m| [m[0][3] as f32, m[1][3] as f32, m[2][3] as f32]).collect();
     let capsules: Vec<(V3, V3, f32)> = BODY.iter().filter_map(|(a, b, r)| Some((bind_pos[index(a)?], bind_pos[index(b)?], *r))).collect();
     let roots: Vec<usize> = ROOTS.iter().filter_map(|n| index(n)).collect();
+    // his back, away from his toes; his left, by his thighs (as the rig takes them)
+    let at = |n: &str| index(n).map(|i| bind_pos[i]);
+    let level = |v: V3| -> Option<V3> {
+        let l = (v[0] * v[0] + v[2] * v[2]).sqrt();
+        (l > 1e-4).then(|| [v[0] / l, 0.0, v[2] / l])
+    };
+    let back = (|| level(scale(add(sub(at("L_Toe0")?, at("L_Foot")?), sub(at("R_Toe0")?, at("R_Foot")?)), -1.0)))().ok_or("no feet in the skeleton")?;
+    let left = (|| level(sub(at("L_Thigh")?, at("R_Thigh")?)))().ok_or("no thighs in the skeleton")?;
     let mut chains = Vec::new();
     for c in &chains_json {
         let names: Vec<&str> = c["bones"].as_array().map(|a| a.iter().filter_map(|n| n.as_str()).collect()).unwrap_or_default();
@@ -181,7 +217,7 @@ fn load(bones: &'static [Bone]) -> Result<Option<Cape>, String> {
         chains.push(Chain { bones: bone_ids, p: rest.clone(), q: rest.clone(), rest, len, clear });
     }
     crate::glog!("cape", "rig: {} chain(s) of {} points from {} ({} cloak vertices), bones {:?}, {} body capsules", chains.len(), chains[0].rest.len(), path.display(), v["vertices"].as_u64().unwrap_or(0), chains.iter().map(|c| c.bones.iter().map(|b| bones[*b].name.as_str()).collect::<Vec<_>>()).collect::<Vec<_>>(), capsules.len());
-    Ok(Some(Cape { chains, roots, caps: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(), started: false, last: None, t: 0.0, last_pos: [0.0; 3], frames: 0, writes: 0, failed: 0, next_log: 5.0 }))
+    Ok(Some(Cape { chains, roots, caps: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(), back, left, speed: 0.0, held: 0, started: false, last: None, t: 0.0, last_pos: [0.0; 3], frames: 0, writes: 0, failed: 0, next_log: 5.0 }))
 }
 
 /// Search for the offset arrays from the player's model item on a thread of our own (as the pose probe does).
@@ -288,6 +324,12 @@ pub fn step() {
     let to_model = |p: V3| mv(&turn_t, sub(p, pos));
     let caps: Vec<(V3, V3)> = c.caps.iter().map(|(a, b)| (to_world(*a), to_world(*b))).collect();
     let reset = !c.started || dt > RESET_S || length(sub(pos, c.last_pos)) > JUMP_M;
+    let ground = sub(pos, c.last_pos);
+    let speed_now = if reset { 0.0 } else { ((ground[0] * ground[0] + ground[2] * ground[2]).sqrt() / dt.max(1e-3)).min(12.0) };
+    c.speed += (speed_now - c.speed) * (1.0 - (-dt.min(RESET_S) / SPEED_SMOOTH_S).exp());
+    let room = (c.speed / LEG_ROOM_SPEED).min(1.0);
+    let (back, left) = (mv(&turn_m, c.back), mv(&turn_m, c.left));
+    let mut held = 0;
     c.started = true;
     c.last_pos = pos;
     let st = crate::settings::get();
@@ -343,10 +385,26 @@ pub fn step() {
                             chain.p[k] = add(on, scale(out, r / d));
                         }
                     }
+                    // never in front of where it hangs at rest (into his back and legs), with room behind his legs
+                    // while he moves, and only so far to either side (into his hips and arms)
+                    let f = k as f32 / last as f32;
+                    let least = LEG_ROOM * f * room;
+                    let along = dot(sub(chain.p[k], targets[k]), back);
+                    if along < least {
+                        hold(&mut chain.p[k], &mut chain.q[k], back, least - along);
+                        held += 1;
+                    }
+                    let across = dot(sub(chain.p[k], targets[k]), left);
+                    let most = SIDEWAYS * f;
+                    if across.abs() > most {
+                        hold(&mut chain.p[k], &mut chain.q[k], scale(left, -across.signum()), across.abs() - most);
+                        held += 1;
+                    }
                 }
             }
         }
     }
+    c.held += held;
     // each chain bone's offset (rest space): its rest segment turned onto the simulated one about its rest point
     let mut out: Vec<(usize, [f32; 12])> = Vec::new();
     for chain in &c.chains {
@@ -373,6 +431,6 @@ pub fn step() {
     if c.t >= c.next_log {
         c.next_log = c.t + LOG_EVERY_S;
         let hem: Vec<String> = c.chains.iter().map(|ch| format!("{:.2}", length(sub(ch.p[ch.p.len() - 1], to_world(ch.rest[ch.rest.len() - 1]))))).collect();
-        crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "));
+        crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; {} holds (kept out of him or from going too far sideways); speed {:.1} m/s; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "), c.held, c.speed);
     }
 }
