@@ -237,6 +237,40 @@ fn baked(t: &str, kind: char) -> bool {
     stem(t).split("_gen_").nth(1).is_some_and(|g| g.len() == 2 && g.ends_with(kind) && g.as_bytes()[0].is_ascii_digit())
 }
 
+/// A material's references whose names Ragnarök cut off at 32 characters where a baked map's `_gen_<digit><kind>`
+/// would end them (`kratos00_int9_chest_sand_m_gen_0`, `..._leftarm_sand_m_gen`, `..._rightarm_sand_m_ge`,
+/// `kratos_int9_anniversary_legs_gen`): what kind of map each is only its pixels can tell (see [`looks_like_normal`]).
+pub fn cut_off_maps(refs: &[String]) -> Vec<&String> {
+    refs.iter()
+        .filter(|r| r.starts_with("TX_"))
+        .filter(|t| {
+            let s = stem(t);
+            let digit_end = s.len() >= 6 && s.as_bytes()[s.len() - 1].is_ascii_digit() && s[..s.len() - 1].ends_with("_gen_");
+            s.len() >= 32 && (digit_end || ["_g", "_ge", "_gen", "_gen_"].iter().any(|e| s.ends_with(e)))
+        })
+        .collect()
+}
+
+/// Whether an image reads as a tangent-space normal map: red and green about the middle on average, blue near full
+/// (Ragnarök's, as BC7: about 128, 128, 240-252), and not flat. A gloss, occlusion or mask map is grey (red, green and
+/// blue alike) or one channel.
+pub fn looks_like_normal(img: &Image) -> bool {
+    let n = (img.w * img.h).max(1) as f64;
+    let mut sum = [0f64; 3];
+    let mut sq = [0f64; 2];
+    for p in img.rgba.chunks_exact(4) {
+        for k in 0..3 {
+            sum[k] += p[k] as f64;
+        }
+        for k in 0..2 {
+            sq[k] += (p[k] as f64).powi(2);
+        }
+    }
+    let mean = sum.map(|v| v / n);
+    let spread = |k: usize| (sq[k] / n - mean[k] * mean[k]).max(0.0).sqrt();
+    (mean[0] - 128.0).abs() < 20.0 && (mean[1] - 128.0).abs() < 20.0 && mean[2] > 190.0 && (spread(0) > 2.0 || spread(1) > 2.0)
+}
+
 /// The normal map and the gloss map among a material's texture references.
 pub fn surface_maps(refs: &[String]) -> (Option<&String>, Option<&String>) {
     let tx: Vec<&String> = refs.iter().filter(|r| r.starts_with("TX_")).collect();
@@ -496,12 +530,19 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
             }
         }
         let (normal, gloss) = surface_maps(&ref_names);
-        if let Some(n) = normal {
-            match get(n) {
+        // with no normal map by name, one whose name was cut off before its `_gen_0n` (the chest harness's, belt's,
+        // apron's, arm guards' and bracers', torso's and trousers': until 0.1.75 they were drawn flat), by its pixels
+        let normal = match normal {
+            Some(n) => Some((get(n), None)),
+            None => cut_off_maps(&ref_names).into_iter().find_map(|t| get(t).ok().filter(looks_like_normal).map(|img| (Ok(img), Some(stem(t).to_string())))),
+        };
+        if let Some((decoded, cut)) = normal {
+            match decoded {
                 Ok(img) => {
                     let n_img = crate::dds::downscale(&img, max_surface);
                     let g_img = gloss.and_then(|g| get(g).ok()).map(|g| crate::dds::downscale(&g, max_surface));
-                    note.push_str(&format!(", normal {}x{}{}", img.w, img.h, if g_img.is_some() { " and gloss" } else { "" }));
+                    let by_pixels = cut.map(|c| format!(" (by its pixels: {c}, its name cut off)")).unwrap_or_default();
+                    note.push_str(&format!(", normal {}x{}{by_pixels}{}", img.w, img.h, if g_img.is_some() { " and gloss" } else { "" }));
                     look.surface = Some(surface_image(&n_img, g_img.as_ref(), gloss_scale));
                 }
                 Err(e) => note.push_str(&format!(", normal failed ({e:#})")),
@@ -517,6 +558,28 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_normal_map_whose_name_was_cut_off_is_found_by_its_pixels() {
+        let v = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let refs = v(&[
+            "TX_kratos00_int9_leftarm_m_gen_0d_F27AA043D0756684",
+            "TX_kratos00_int9_leftarm_sand_m_gen_253A90D8579FB2A8",
+            "TX_kratos00_int9_rightarm_sand_m_ge_C29031DCDA056828",
+            "TX_kratos00_int9_torso_sand_m_gen_0_D2BD2CF6E501CBF0",
+            "TX_kratos_int9_anniversary_legs_gen_15985B5448511F77",
+            "TX_kratos00_int9_leftarm_m6_leather_E1C093C844939473",
+            "TX_metal01_n_4198919D2DD536E2",
+        ]);
+        assert_eq!(surface_maps(&refs).0, None, "no name says normal");
+        let cut: Vec<&str> = cut_off_maps(&refs).iter().map(|s| s.as_str()).collect();
+        assert_eq!(cut, [refs[1].as_str(), refs[2].as_str(), refs[3].as_str(), refs[4].as_str()]);
+        // a normal map's pixels, a grey gloss map's, a flat one's
+        let image = |px: &[[u8; 4]]| Image { w: px.len() as u32, h: 1, rgba: px.iter().flatten().copied().collect(), format: crate::dds::Format::Bc7 };
+        assert!(looks_like_normal(&image(&[[120, 130, 250, 255], [140, 118, 245, 255], [128, 128, 255, 255]])));
+        assert!(!looks_like_normal(&image(&[[120, 120, 120, 255], [200, 200, 200, 255]])));
+        assert!(!looks_like_normal(&image(&[[128, 128, 255, 255]; 4])));
+    }
 
     #[test]
     fn surfaces_take_the_baked_normal_and_gloss_maps_or_the_heads_second_painted_map() {
