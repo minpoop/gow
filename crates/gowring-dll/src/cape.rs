@@ -1,33 +1,33 @@
-//! Kratos's cloak, swung by the mod: the launcher skins the back of the cloak below mid-back to two chains of the
-//! skeleton's spare bones (`gowring_gow::cape`, the rig in `mod/parts/kratos_cape.json`), and every frame, just before
-//! drawing, this simulates the chains and writes their skinning matrices where the game keeps the player's
-//! (0.1.67's pose probe: two arrays the game fills on alternate frames, from the model item's bone-matrix entity +0x30,
-//! then +0x508 and +0x510, row-major 3x4, the Havok skeleton's order; a write there before drawing is what shows).
+//! Kratos's cloak, swung by the mod. The launcher skins the back of the cloak below mid-back to two chains of helper
+//! bones that hang off his spine and pelvis (`gowring_gow::cape`, the rig in `mod/parts/kratos_cape.json`). The game
+//! keeps a per-bone offset that it applies in rest space under the animation, per bone, not to its children (the pose
+//! probes, 0.1.67-0.1.69: a hand turned about its rest position turned in place, one turned about the origin stretched
+//! away, an upper arm turned without its forearm). So every frame, just before drawing, this simulates the chains and
+//! writes each chain bone's offset: the cloak bends in rest space, and his spine and hips carry it (the bone's own
+//! skinning matrix times our offset). The offsets are not at a fixed address (0.1.67, 0.1.68 and 0.1.69 each found
+//! them elsewhere), so they are searched for as the probe does, on a thread of our own, whenever the player's model
+//! changes.
 //!
-//! The simulation, in world space: each chain is a string of points, the first pinned where the rig puts it on the
-//! anchor bone, the others under gravity and air drag (a gusting wind, and the air he runs through), pulled back toward
-//! where the cloak hangs at rest on the anchor (firmly near the top, barely at the hem), kept at their rest spacing, and
-//! kept out of his torso and legs (capsules between their bones, never tighter than the cloak sits at rest). Each chain
-//! bone then turns the rest segment below it onto the simulated one, following the anchor's own turn.
+//! The simulation, in world space following his body as a whole (his position and turn; his spine's own movement is
+//! not known to the mod, it only carries the result): each chain is a string of points, the first pinned where the rig
+//! puts it, the others under gravity and air drag (a gusting wind, and the air he runs through), pulled back toward
+//! where the cloak hangs at rest (firmly near the top, barely at the hem), kept at their rest spacing and out of his
+//! torso and legs at rest (capsules, never tighter than the cloak sits). Each chain bone's offset then turns the rest
+//! segment below it onto the simulated one about its rest point.
 //!
-//! Safety as in the probe: an array counts only when its entries read as the skeleton's skinning matrices (the chain
-//! bones left out), every write goes through `WriteProcessMemory`, and an entry is written only while it still reads
-//! as a bone's.
+//! Safety: an array counts only when it reads as the offsets (3x4, the identity for nearly every bone); before each
+//! frame's writes its root bones (Master, RootPos, Pelvis) must still read as the identity, else it is dropped and the
+//! search runs again; every write goes through `WriteProcessMemory` and only to an entry that still reads as a bone's.
+//! If nothing is written, the chain bones follow his spine and hips and the cloak looks as it did before.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
-use crate::bonepose::{bind_pose, bone_like, skin_match_except, write_floats};
-use crate::skeleton::{read, read_vec, Bone};
+use crate::bonepose::{bind_pose, bone_like, offsets_like, write_floats, IDENTITY};
+use crate::skeleton::{read, Bone};
 
 type V3 = [f32; 3];
-
-/// Offsets from the model item to the two arrays (see the module doc).
-const ENTITY: usize = crate::pose::MTX43_ARRAY_ENTITY;
-const TO_LIST: usize = 0x30;
-const ARRAYS: [usize; 2] = [0x508, 0x510];
-/// An array counts when this share of the skeleton's links (the chain bones' left out) sit at rest offset.
-const MIN_MATCH: f32 = 0.9;
 
 const GRAVITY: f32 = 9.8;
 /// Velocity kept per 1/60 s step.
@@ -47,8 +47,12 @@ const STEP_S: f32 = 1.0 / 60.0;
 /// A frame longer than this, or the player moving further than `JUMP_M`, starts the cloak again at rest.
 const RESET_S: f32 = 0.25;
 const JUMP_M: f32 = 3.0;
-/// Capsules the cloak stays out of: two bones and a radius (m).
+/// Capsules the cloak stays out of (at rest): two bones and a radius (m).
 const BODY: [(&str, &str, f32); 5] = [("Pelvis", "Spine2", 0.15), ("L_Thigh", "L_Calf", 0.10), ("L_Calf", "L_Foot", 0.08), ("R_Thigh", "R_Calf", 0.10), ("R_Calf", "R_Foot", 0.08)];
+/// Bones whose offsets must read as the identity for an array to be written (nothing offsets the root).
+const ROOTS: [&str; 3] = ["Master", "RootPos", "Pelvis"];
+/// The least time between searches (s).
+const SEARCH_EVERY_S: f32 = 10.0;
 /// Seconds between status lines in the log.
 const LOG_EVERY_S: f32 = 60.0;
 
@@ -64,16 +68,9 @@ struct Chain {
 
 struct Cape {
     chains: Vec<Chain>,
-    anchor: usize,
-    bones: &'static [Bone],
-    bind_pos: Vec<V3>,
-    capsules: Vec<(usize, usize)>,
-    skip: Vec<usize>,
-    /// The arrays' pointers as last read, and whether each checked out (its address, or 0).
-    seen: [usize; 2],
-    good: [usize; 2],
-    /// What we last wrote into each array's first chain bone (to tell which one the game filled this frame).
-    wrote: [[f32; 12]; 2],
+    roots: Vec<usize>,
+    /// The body's capsules at rest (model space).
+    caps: Vec<(V3, V3)>,
     started: bool,
     last: Option<Instant>,
     t: f32,
@@ -81,13 +78,15 @@ struct Cape {
     frames: u64,
     writes: u64,
     failed: u64,
-    fresh: [u64; 2],
     next_log: f32,
 }
 
 static CAPE: Mutex<Option<Cape>> = Mutex::new(None);
 /// The rig was looked for (once a session, once the skeleton is read).
-static LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static LOADED: AtomicBool = AtomicBool::new(false);
+/// The offset arrays to write, the model item they were found from, and when the last search started.
+static ARRAYS: Mutex<(Vec<usize>, usize, Option<Instant>)> = Mutex::new((Vec::new(), 0, None));
+static SEARCHING: AtomicBool = AtomicBool::new(false);
 
 fn add(a: V3, b: V3) -> V3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
@@ -108,16 +107,8 @@ fn length(a: V3) -> f32 {
     dot(a, a).sqrt()
 }
 
-/// A row-major 3x4 applied to a point.
-fn apply(m: &[f32; 12], p: V3) -> V3 {
-    [m[0] * p[0] + m[1] * p[1] + m[2] * p[2] + m[3], m[4] * p[0] + m[5] * p[1] + m[6] * p[2] + m[7], m[8] * p[0] + m[9] * p[1] + m[10] * p[2] + m[11]]
-}
-
 type M3 = [[f32; 3]; 3];
 
-fn rot_of(m: &[f32; 12]) -> M3 {
-    [[m[0], m[1], m[2]], [m[4], m[5], m[6]], [m[8], m[9], m[10]]]
-}
 fn mul3(a: &M3, b: &M3) -> M3 {
     std::array::from_fn(|i| std::array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum()))
 }
@@ -170,78 +161,66 @@ fn load(bones: &'static [Bone]) -> Result<Option<Cape>, String> {
     if chains_json.is_empty() {
         return Ok(None);
     }
-    let anchor = v["anchor"].as_str().and_then(index).ok_or("the rig's anchor is not in the skeleton")?;
     let bind = bind_pose(bones);
     let bind_pos: Vec<V3> = bind.iter().map(|m| [m[0][3] as f32, m[1][3] as f32, m[2][3] as f32]).collect();
-    let capsules: Vec<(usize, usize, f32)> = BODY.iter().filter_map(|(a, b, r)| Some((index(a)?, index(b)?, *r))).collect();
+    let capsules: Vec<(V3, V3, f32)> = BODY.iter().filter_map(|(a, b, r)| Some((bind_pos[index(a)?], bind_pos[index(b)?], *r))).collect();
+    let roots: Vec<usize> = ROOTS.iter().filter_map(|n| index(n)).collect();
     let mut chains = Vec::new();
-    let mut skip = Vec::new();
     for c in &chains_json {
         let names: Vec<&str> = c["bones"].as_array().map(|a| a.iter().filter_map(|n| n.as_str()).collect()).unwrap_or_default();
         let rest: Vec<V3> = c["points"].as_array().map(|a| a.iter().filter_map(|p| Some([p[0].as_f64()? as f32, p[1].as_f64()? as f32, p[2].as_f64()? as f32])).collect()).unwrap_or_default();
         let bone_ids: Vec<usize> = names.iter().map(|n| index(n)).collect::<Option<Vec<_>>>().ok_or("a chain bone is not in the skeleton")?;
-        if bone_ids.len() != rest.len() || rest.len() < 2 || bone_ids.iter().any(|b| *b >= 150 || *b == anchor) {
-            return Err("a chain does not match its points (or names a bone the arrays do not reach)".into());
+        if bone_ids.len() != rest.len() || rest.len() < 2 || bone_ids.iter().any(|b| *b >= bones.len().min(150) || roots.contains(b)) {
+            return Err("a chain does not match its points (or names a bone the offsets do not reach)".into());
         }
         let len: Vec<f32> = (0..rest.len()).map(|k| if k == 0 { 0.0 } else { length(sub(rest[k], rest[k - 1])) }).collect();
         // never pushed further out than the cloak sits at rest
-        let clear: Vec<Vec<f32>> = rest
-            .iter()
-            .map(|p| capsules.iter().map(|(a, b, r)| r.min(length(sub(*p, closest_on(*p, bind_pos[*a], bind_pos[*b]))) - 0.015).max(0.0)).collect())
-            .collect();
-        skip.extend(&bone_ids);
+        let clear: Vec<Vec<f32>> = rest.iter().map(|p| capsules.iter().map(|(a, b, r)| r.min(length(sub(*p, closest_on(*p, *a, *b))) - 0.015).max(0.0)).collect()).collect();
         chains.push(Chain { bones: bone_ids, p: rest.clone(), q: rest.clone(), rest, len, clear });
     }
-    crate::glog!("cape", "rig: {} chain(s) of {} points from {} ({} cloak vertices), anchor {}, {} body capsules", chains.len(), chains[0].rest.len(), path.display(), v["vertices"].as_u64().unwrap_or(0), bones[anchor].name, capsules.len());
-    Ok(Some(Cape {
-        chains,
-        anchor,
-        bones,
-        bind_pos,
-        capsules: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(),
-        skip,
-        seen: [0; 2],
-        good: [0; 2],
-        wrote: [[0.0; 12]; 2],
-        started: false,
-        last: None,
-        t: 0.0,
-        last_pos: [0.0; 3],
-        frames: 0,
-        writes: 0,
-        failed: 0,
-        fresh: [0; 2],
-        next_log: 5.0,
-    }))
+    crate::glog!("cape", "rig: {} chain(s) of {} points from {} ({} cloak vertices), bones {:?}, {} body capsules", chains.len(), chains[0].rest.len(), path.display(), v["vertices"].as_u64().unwrap_or(0), chains.iter().map(|c| c.bones.iter().map(|b| bones[*b].name.as_str()).collect::<Vec<_>>()).collect::<Vec<_>>(), capsules.len());
+    Ok(Some(Cape { chains, roots, caps: capsules.iter().map(|(a, b, _)| (*a, *b)).collect(), started: false, last: None, t: 0.0, last_pos: [0.0; 3], frames: 0, writes: 0, failed: 0, next_log: 5.0 }))
 }
 
-/// The two arrays' addresses this frame, checked when they change (0 for one that is not there or does not check out).
-fn arrays(c: &mut Cape, model_item: usize) -> [usize; 2] {
-    let list = read::<usize>(model_item + ENTITY).and_then(|e| read::<usize>(e + TO_LIST));
-    for (k, off) in ARRAYS.iter().enumerate() {
-        let ptr = list.and_then(|l| read::<usize>(l + off)).unwrap_or(0);
-        if ptr != c.seen[k] {
-            c.seen[k] = ptr;
-            c.good[k] = 0;
-            let n = c.bones.len().min(150);
-            let checked = (ptr != 0).then(|| read_vec::<f32>(ptr, n * 12)).flatten().and_then(|f| skin_match_except(&f, &c.bones[..n], &c.skip));
-            match checked {
-                Some((m, l)) if l > 0 && m as f32 >= MIN_MATCH * l as f32 => {
-                    c.good[k] = ptr;
-                    crate::glog!("cape", "bone array {} at {ptr:#x}: {m}/{l} links at rest offset", k + 1);
-                }
-                other => crate::glog!("cape", "bone array {} at {ptr:#x} does not check out ({other:?}); not written", k + 1),
-            }
-        }
+/// Search for the offset arrays from the player's model item on a thread of our own (as the pose probe does).
+fn search(model_item: usize, bones: &'static [Bone]) {
+    if SEARCHING.swap(true, Ordering::SeqCst) {
+        return;
     }
-    c.good
+    if let Ok(mut a) = ARRAYS.lock() {
+        a.2 = Some(Instant::now());
+    }
+    let spawned = std::thread::Builder::new().name("gowring-cape-search".into()).spawn(move || {
+        let r = std::panic::catch_unwind(|| {
+            let mut roots: Vec<(&'static str, usize)> = Vec::new();
+            if let Some(e) = read::<usize>(model_item + crate::pose::MTX43_ARRAY_ENTITY).filter(|p| *p > 0x10000) {
+                roots.push(("mtx43 array entity", e));
+            }
+            roots.push(("model item", model_item));
+            let t0 = Instant::now();
+            let (found, looked) = crate::pose::find(&roots, crate::bonepose::SEARCH_READS, crate::bonepose::SEARCH_ARRAYS, crate::bonepose::SEARCH_DEPTH);
+            let offsets: Vec<(String, usize)> = found.iter().filter(|f| offsets_like(f, bones)).map(|f| (f.path.clone(), f.address)).collect();
+            crate::glog!("cape", "offset arrays: {} of {} arrays found ({looked} objects, {} ms): {:?}", offsets.len(), found.len(), t0.elapsed().as_millis(), offsets.iter().map(|(p, a)| format!("{p} at {a:#x}")).collect::<Vec<_>>());
+            if let Ok(mut a) = ARRAYS.lock() {
+                a.0 = offsets.into_iter().map(|(_, a)| a).collect();
+                a.1 = model_item;
+            }
+        });
+        if r.is_err() {
+            crate::glog!("cape", "the offset search panicked");
+        }
+        SEARCHING.store(false, Ordering::SeqCst);
+    });
+    if spawned.is_err() {
+        SEARCHING.store(false, Ordering::SeqCst);
+    }
 }
 
 /// Called just before drawing, every frame.
 pub fn step() {
-    if !LOADED.load(std::sync::atomic::Ordering::Relaxed) {
+    if !LOADED.load(Ordering::Relaxed) {
         let Some(bones) = crate::skeleton::bones() else { return };
-        LOADED.store(true, std::sync::atomic::Ordering::Relaxed);
+        LOADED.store(true, Ordering::Relaxed);
         let cape = match load(bones) {
             Ok(Some(c)) => Some(c),
             Ok(None) => {
@@ -257,6 +236,7 @@ pub fn step() {
             *g = cape;
         }
     }
+    let Some(bones) = crate::skeleton::bones() else { return };
     let Ok(mut guard) = CAPE.try_lock() else { return };
     let Some(c) = guard.as_mut() else { return };
     let now = Instant::now();
@@ -275,32 +255,36 @@ pub fn step() {
         Some((model_item, [x, y, z], [o.0, o.1, o.2, o.3]))
     })();
     let Some((model_item, pos, turn)) = player else { return };
-    let good = arrays(c, model_item);
-    if good == [0, 0] {
-        crate::log::once("cape-no-arrays", "cape", "no bone array checks out; the cloak is not swung");
-        return;
-    }
-    // this frame's pose: from the array the game filled (its first chain bone no longer what we wrote there)
-    let n = c.bones.len().min(150);
-    let reads: Vec<Option<Vec<f32>>> = good.iter().map(|a| (*a != 0).then(|| read_vec::<f32>(*a, n * 12)).flatten()).collect();
-    let first = c.chains[0].bones[0];
-    let filled = (0..2).filter(|k| reads[*k].as_ref().is_some_and(|f| f[first * 12..first * 12 + 12] != c.wrote[*k][..])).collect::<Vec<_>>();
-    let src = filled.first().copied().or_else(|| (0..2).find(|k| reads[*k].is_some()));
-    let Some(src) = src else { return };
-    c.fresh[src] += 1;
-    let f = reads[src].as_ref().unwrap();
-    let m = |b: usize| -> [f32; 12] { std::array::from_fn(|i| f[b * 12 + i]) };
-    let anchor = m(c.anchor);
-    if !bone_like(&anchor) {
-        c.failed += 1;
+    // the offset arrays: searched for when the model changes or none is left (at most every few seconds)
+    let arrays = {
+        let Ok(mut a) = ARRAYS.lock() else { return };
+        let stale = a.1 != model_item || a.0.is_empty();
+        let due = a.2.map_or(true, |t| t.elapsed().as_secs_f32() >= SEARCH_EVERY_S);
+        if stale && due {
+            if a.1 != model_item {
+                a.0.clear();
+            }
+            drop(a);
+            search(model_item, bones);
+            return;
+        }
+        // an array whose root bones no longer read as the identity is not the offsets any more
+        let roots = &c.roots;
+        let before = a.0.len();
+        a.0.retain(|addr| roots.iter().all(|r| read::<[f32; 12]>(addr + r * 48).is_some_and(|e| e == IDENTITY)));
+        if a.0.len() < before {
+            crate::glog!("cape", "{} offset array(s) dropped (their root bones changed); {} left", before - a.0.len(), a.0.len());
+        }
+        a.0.clone()
+    };
+    if arrays.is_empty() {
         return;
     }
     let turn_m = quat(turn);
     let turn_t: M3 = std::array::from_fn(|i| std::array::from_fn(|j| turn_m[j][i]));
     let to_world = |p: V3| add(mv(&turn_m, p), pos);
     let to_model = |p: V3| mv(&turn_t, sub(p, pos));
-    // the body's capsules, in world space
-    let caps: Vec<(V3, V3)> = c.capsules.iter().map(|(a, b)| (to_world(apply(&m(*a), c.bind_pos[*a])), to_world(apply(&m(*b), c.bind_pos[*b])))).collect();
+    let caps: Vec<(V3, V3)> = c.caps.iter().map(|(a, b)| (to_world(*a), to_world(*b))).collect();
     let reset = !c.started || dt > RESET_S || length(sub(pos, c.last_pos)) > JUMP_M;
     c.started = true;
     c.last_pos = pos;
@@ -312,7 +296,7 @@ pub fn step() {
     let t0 = c.t;
     c.t += h * steps as f32;
     for chain in c.chains.iter_mut() {
-        let targets: Vec<V3> = chain.rest.iter().map(|r| to_world(apply(&anchor, *r))).collect();
+        let targets: Vec<V3> = chain.rest.iter().map(|r| to_world(*r)).collect();
         if reset {
             chain.p = targets.clone();
             chain.q = targets.clone();
@@ -361,30 +345,23 @@ pub fn step() {
             }
         }
     }
-    // the chain bones' matrices: each rest segment onto its simulated one, after the anchor's own turn
-    let ra = rot_of(&anchor);
+    // each chain bone's offset (rest space): its rest segment turned onto the simulated one about its rest point
     let mut out: Vec<(usize, [f32; 12])> = Vec::new();
     for chain in &c.chains {
         let pm: Vec<V3> = chain.p.iter().map(|p| to_model(*p)).collect();
         let last = chain.rest.len() - 1;
         for k in 0..=last {
             let (a, b) = if k < last { (k, k + 1) } else { (k - 1, k) };
-            let r = mul3(&align(mv(&ra, sub(chain.rest[b], chain.rest[a])), sub(pm[b], pm[a])), &ra);
+            let r = align(sub(chain.rest[b], chain.rest[a]), sub(pm[b], pm[a]));
             let t = sub(pm[k], mv(&r, chain.rest[k]));
             out.push((chain.bones[k], [r[0][0], r[0][1], r[0][2], t[0], r[1][0], r[1][1], r[1][2], t[1], r[2][0], r[2][1], r[2][2], t[2]]));
         }
     }
-    for (k, addr) in good.iter().enumerate() {
-        if *addr == 0 {
-            continue;
-        }
+    for addr in &arrays {
         for (bone, mat) in &out {
             let at = addr + bone * 48;
             if read::<[f32; 12]>(at).is_some_and(|e| bone_like(&e)) && write_floats(at, mat) {
                 c.writes += 1;
-                if *bone == first {
-                    c.wrote[k] = *mat;
-                }
             } else {
                 c.failed += 1;
             }
@@ -393,7 +370,7 @@ pub fn step() {
     c.frames += 1;
     if c.t >= c.next_log {
         c.next_log = c.t + LOG_EVERY_S;
-        let hem: Vec<String> = c.chains.iter().map(|ch| format!("{:.2}", length(sub(ch.p[ch.p.len() - 1], to_world(apply(&anchor, ch.rest[ch.rest.len() - 1])))))).collect();
-        crate::glog!("cape", "{} frames, {} writes, {} failed; pose from array 1/2 {:?}; hems {} m from rest; wind x{wind_scale}", c.frames, c.writes, c.failed, c.fresh, hem.join(", "));
+        let hem: Vec<String> = c.chains.iter().map(|ch| format!("{:.2}", length(sub(ch.p[ch.p.len() - 1], to_world(ch.rest[ch.rest.len() - 1]))))).collect();
+        crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "));
     }
 }

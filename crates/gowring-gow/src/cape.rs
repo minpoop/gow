@@ -1,8 +1,11 @@
-//! Kratos's cloak on Elden Ring's spare bone chains, for gowring.dll to swing (its `cape` module). Elden Ring moves
-//! capes with Havok cloth data in each armour's files, which the mod cannot make; gowring.dll can write the player's
-//! skinning matrices each frame instead (0.1.67's pose probe), so the back of the cloak below mid-back is skinned to
-//! two chains of the skeleton's spare bones (`Xtra_Multipurpose_Bone01_*` on his left, `02_*` on his right, children of
-//! Master that no animation moves), whose matrices the DLL writes from a small simulation of its own.
+//! Kratos's cloak on Elden Ring's helper bones under his spine and pelvis, for gowring.dll to swing (its `cape`
+//! module). Elden Ring moves capes with Havok cloth data in each armour's files, which the mod cannot make. What the
+//! mod can do (the pose probes, 0.1.67-0.1.69): write a per-bone offset the game applies in rest space under the
+//! animation (a bone's skinning matrix becomes its own times the offset, not passed to its children). So the back of
+//! the cloak below mid-back is skinned to two chains of helper bones that hang off his spine and pelvis and that his
+//! mesh uses nowhere else ([`CHAINS`]: the four Mantle bones, the two SpineArmor bones, the pelvis dummies), and the DLL
+//! writes each one's offset from a small simulation of its own: the cloak bends in rest space and his spine and hips
+//! carry it. If the DLL writes nothing, those bones follow his spine and hips and the cloak stays as before.
 //!
 //! The rig: each chain is [`POINTS`] points from the height of the anchor bone ([`ANCHOR`], where the cloak starts to
 //! hang free) down to the hem, each the mean of that side's cloak vertices behind the body at that height (rest pose,
@@ -12,10 +15,11 @@
 
 use crate::erpart::{world_matrices, Mesh, Node};
 
-/// The chains' bone name prefixes: on his left, on his right (`{prefix}01` to `{prefix}08`).
-pub const CHAINS: [&str; 2] = ["Xtra_Multipurpose_Bone01_", "Xtra_Multipurpose_Bone02_"];
+/// The chains, top to hem: on his left, on his right. The upper two of each hang off his spine (Spine1, Spine2), the
+/// lower two off his pelvis, so the cloak's top follows his back and its lower half his hips.
+pub const CHAINS: [[&str; POINTS]; 2] = [["Spine1_Mantle", "SpineArmor1", "Pelvis_Mantle", "L_Thigh_Root_Dummy"], ["Spine2_Mantle", "SpineArmor2", "Pelvis_Dummy", "R_Thigh_Root_Dummy"]];
 /// Points (bones) per chain.
-pub const POINTS: usize = 8;
+pub const POINTS: usize = 4;
 /// The bone the chains hang from: the cloak above its height stays on the torso.
 pub const ANCHOR: &str = "Spine1";
 /// How far below the anchor the cloak is wholly on the chains (m).
@@ -85,7 +89,7 @@ pub fn rig(meshes: &mut [Mesh], used: &[u16], cloaks: &[u16], skeleton: &[Node])
     let left = unit(horizontal(sub(at("L_Thigh")?, at("R_Thigh")?)))?;
     let middle = at("Pelvis")?;
     let top = at(ANCHOR)?[1];
-    let bones: Vec<Vec<u8>> = CHAINS.iter().map(|c| (1..=POINTS).map(|k| index(&format!("{c}{k:02}")).and_then(|i| u8::try_from(i).ok())).collect::<Option<Vec<u8>>>()).collect::<Option<Vec<_>>>()?;
+    let bones: Vec<Vec<u8>> = CHAINS.iter().map(|c| c.iter().map(|n| index(n).and_then(|i| u8::try_from(i).ok())).collect::<Option<Vec<u8>>>()).collect::<Option<Vec<_>>>()?;
     let kratos = |m: &Mesh| used.get(m.material as usize).copied().unwrap_or(u16::MAX);
     // the cloak behind the body below the anchor, with its side
     let behind = |p: [f32; 3]| -dot(horizontal(sub(p, middle)), forward);
@@ -101,7 +105,7 @@ pub fn rig(meshes: &mut [Mesh], used: &[u16], cloaks: &[u16], skeleton: &[Node])
     let spacing = (top - bottom) / (POINTS - 1) as f32;
     // each chain's points: the mean of its side's cloak at each height (a height with none takes its neighbours')
     let mut chains = Vec::new();
-    for (c, prefix) in CHAINS.iter().enumerate() {
+    for (c, chain_bones) in CHAINS.iter().enumerate() {
         let mine = |p: &&[f32; 3]| if c == 0 { side(**p) >= 0.0 } else { side(**p) < 0.0 };
         let mut points: Vec<Option<[f32; 3]>> = (0..POINTS)
             .map(|k| {
@@ -129,7 +133,7 @@ pub fn rig(meshes: &mut [Mesh], used: &[u16], cloaks: &[u16], skeleton: &[Node])
                 };
             }
         }
-        let names = (1..=POINTS).map(|k| format!("{prefix}{k:02}")).collect();
+        let names = chain_bones.iter().map(|n| n.to_string()).collect();
         chains.push((names, points.into_iter().collect::<Option<Vec<_>>>()?));
     }
     // the weights
@@ -192,7 +196,7 @@ mod tests {
         Node { name: name.into(), parent, t, r: [0.0; 3], s: [1.0; 3], flags: 8 }
     }
 
-    /// A skeleton facing +z with his left at +x, the chains under Master.
+    /// A skeleton facing +z with his left at +x, the chain bones (from index 9) under the spine and pelvis.
     fn skeleton() -> Vec<Node> {
         let mut s = vec![node("Master", -1, [0.0; 3]), node("Pelvis", 0, [0.0, 1.0, 0.0]), node("Spine1", 1, [0.0, 0.3, 0.0])];
         for (side, x) in [("L", 0.1), ("R", -0.1)] {
@@ -202,9 +206,8 @@ mod tests {
             s.push(node(&format!("{side}_Toe0"), thigh + 1, [0.0, 0.0, 0.15]));
         }
         for c in CHAINS {
-            for k in 1..=POINTS {
-                let parent = if k == 1 { 0 } else { s.len() as i16 - 1 };
-                s.push(node(&format!("{c}{k:02}"), parent, [0.0; 3]));
+            for (k, n) in c.iter().enumerate() {
+                s.push(node(n, if k < 2 { 2 } else { 1 }, [0.0; 3]));
             }
         }
         s
@@ -229,7 +232,7 @@ mod tests {
         let rig = rig(&mut meshes, &[24], &[24], &sk).expect("a rig");
         assert_eq!(rig.chains.len(), 2);
         let (bones, points) = &rig.chains[0];
-        assert_eq!(bones[0], "Xtra_Multipurpose_Bone01_01");
+        assert_eq!(bones[0], "Spine1_Mantle");
         assert_eq!(points.len(), POINTS);
         // from the anchor's height (1.3 m) down to the hem, on his left (+x) and behind him
         assert!((points[0][1] - 1.3).abs() < 1e-4 && (points[POINTS - 1][1] - 0.5).abs() < 1e-4);
@@ -248,9 +251,9 @@ mod tests {
         assert!((left - 0.5).abs() < 0.05);
         assert!(rig.vertices > 0 && rig.vertices < v.len());
         // the file names the chains
-        assert!(rig.json().contains("\"Xtra_Multipurpose_Bone02_08\""));
+        assert!(rig.json().contains("\"R_Thigh_Root_Dummy\""));
         // no chain bones: no rig
-        let short: Vec<Node> = sk.iter().filter(|n| !n.name.starts_with("Xtra")).cloned().collect();
+        let short: Vec<Node> = sk.iter().filter(|n| !n.name.contains("Mantle")).cloned().collect();
         assert!(rig_none(&short));
     }
 

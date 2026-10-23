@@ -45,9 +45,9 @@ const TO_LIST: usize = 0x30;
 /// A 3x4 entry is a bone's when each row of its 3x3 part is this close to unit length (rotation, scale about 1).
 const ROW_SLACK: f32 = 0.2;
 /// The probe's search: further than the pose capture's (4,000 reads, 8 arrays, 2 pointers), on its own thread.
-const SEARCH_READS: u64 = 200_000;
-const SEARCH_ARRAYS: usize = 48;
-const SEARCH_DEPTH: usize = 4;
+pub(crate) const SEARCH_READS: u64 = 200_000;
+pub(crate) const SEARCH_ARRAYS: usize = 48;
+pub(crate) const SEARCH_DEPTH: usize = 4;
 /// The steps: bone, axis, angle (degrees), about its rest position (else about the origin); each held this long, with
 /// a pause after it (s).
 const STEPS: [(&str, [f32; 3], f32, bool); 3] = [("R_Hand", [0.0, 1.0, 0.0], 90.0, false), ("R_Hand", [0.0, 1.0, 0.0], 90.0, true), ("L_UpperArm", [1.0, 0.0, 0.0], 35.0, true)];
@@ -244,7 +244,7 @@ static FOUND_OFFSETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
 
 /// An array of the offsets' kind: 3x4, at least the skeleton long, the identity for at least 95 % of the skeleton's
 /// bones.
-fn offsets_like(f: &Found, bones: &[Bone]) -> bool {
+pub(crate) fn offsets_like(f: &Found, bones: &[Bone]) -> bool {
     let n = bones.len();
     f.layout == Layout::M34 && f.floats.len() >= n * 12 && f.floats.chunks_exact(12).take(n).filter(|e| e.iter().zip(IDENTITY).all(|(a, b)| (a - b).abs() < 1e-4)).count() * 100 >= n * 95
 }
@@ -254,7 +254,7 @@ fn targets() -> Vec<usize> {
     FOUND_OFFSETS.lock().map(|v| v.clone()).unwrap_or_default()
 }
 
-const IDENTITY: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+pub(crate) const IDENTITY: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
 /// A turn by `deg` about `axis` through `pivot`, row-major 3x4.
 fn turn_about(axis: [f32; 3], deg: f32, pivot: [f32; 3]) -> [f32; 12] {

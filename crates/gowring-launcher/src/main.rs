@@ -296,7 +296,7 @@ const OUTFIT_PROBE_PARTS: [u16; 19] = [230, 235, 224, 205, 206, 207, 208, 209, 2
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 23;
+    const BUILD: u32 = 24;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -318,12 +318,12 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
         .and_then(|v| v.get("black_bear_outfit").and_then(|b| b.as_bool()))
         .unwrap_or(true);
     let outfit = if black_bear { gowring_gow::kratos_part::Outfit::BlackBear } else { gowring_gow::kratos_part::Outfit::Survival };
-    // the cloak on the chains gowring.dll swings: settings.json's "cape_physics" (off unless it says true: experimental)
+    // the cloak on the chains gowring.dll swings: settings.json's "cape_physics" (on unless it says false)
     let cape = std::fs::read_to_string(ctx.local.join("settings.json"))
         .ok()
         .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
         .and_then(|v| v.get("cape_physics").and_then(|b| b.as_bool()))
-        .unwrap_or(false);
+        .unwrap_or(true);
     let stamp = format!("build {BUILD} wad {} pack {} skeleton {fingerprint:016x} outfit {outfit:?} cape {cape}\n", size(&wad), size(&pack));
     let cache = ctx.cache.join("kratos_part");
     let names: Vec<String> = ["bd", "am", "lg", "hd"]
