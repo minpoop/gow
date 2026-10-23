@@ -13,13 +13,14 @@
 //! by its height (the two points it lies between) and its side (both chains near the middle), blended in over [`BLEND`]
 //! below the anchor, and keeps the rest of its own; the four largest are kept.
 //!
-//! The fur over his shoulders and upper arms is draped first: Elden Ring's rest pose holds the arms raised and out
-//! (about 20 degrees below level), so the fur outside the shoulder joint and on top of that arm (shoulder to elbow) is
-//! turned down about the shoulder by up to [`DROP_DEG`], toward where the arm hangs, and that share of its arm weights
-//! goes to the shoulder's clavicle: it hangs from his shoulder and the chains, and the arm moves under it.
-//! 0.1.72-0.1.79 hung it on the chains where the raised arm is, and it stood off his lowered arm like a bell ("there
-//! seems to be like a air pocket here"); 0.1.80 left it on the arm, and with the arm forward it stretched from the
-//! shoulder past his hip ("its now just stretching lower").
+//! The cloak is posed for his arms down first. Elden Ring's rest pose holds the arms raised and out (about 20 degrees
+//! below level), and the cloak, made for Kratos's own rest pose, drapes its sides over them; on the chains it kept that
+//! width with his arms down, its sides standing out from him (0.1.72-0.1.79: "like a air pocket"; 0.1.81: "it still is
+//! sticking out", seen from behind as a box). So each cloak vertex is turned about its arm's shoulder by [`DROP_DEG`]
+//! times its weight on that arm (the weights it copied from the skin under it: the skin there would move so), and those
+//! weights go to the shoulder's clavicle: it hangs from his shoulders and the chains, and the arms move under it.
+//! 0.1.80 left those weights on the arms and the cloak stretched from the shoulder past his hip with an arm forward
+//! ("its now just stretching lower"); 0.1.81 turned only the fur on top of the arms, by where it lay.
 //!
 //! 0.1.70-0.1.71 hung the chains from mid-back (`Spine1`, 1.15 m) with a 0.25 m blend: the top half of the bear cloak
 //! stayed on his torso and arms and only the part below his waist swung ("only the bottom of the cloak is moving"), and
@@ -43,14 +44,9 @@ const BEHIND: f32 = 0.08;
 /// How far in front of the body's middle the cloak's sides start to follow the chains (m): the cloak hanging beside
 /// his arms goes with the back of it.
 const SIDES: f32 = 0.03;
-/// How far the fur on his arms is turned down about the shoulder (degrees, for a vertex wholly on the arm): from the
-/// rest pose's arm, about 20 degrees below level, to about 60, short of where the arm hangs so it stays outside it.
-pub const DROP_DEG: f32 = 40.0;
-/// The fur draped is outside the shoulder joint (from this far inside it, m) and on top of the arm, each over this
-/// ramp (m). By where it lies, not by its weights: the cloak copies the skin's weights under it, and his upper back's
-/// skin is half on the upper arms right up to his spine (0.1.80's rule by weights draped the whole upper cloak).
-const DRAPE_INSIDE: f32 = 0.03;
-const DRAPE_RAMP: f32 = 0.08;
+/// How far the cloak is turned down about a shoulder for his arms down (degrees, for a vertex wholly on that arm):
+/// from the rest pose's arm, about 20 degrees below level, to about 65, short of where an arm hangs.
+pub const DROP_DEG: f32 = 45.0;
 
 /// `v` turned by `angle` (radians) about the unit `axis` (Rodrigues).
 fn turned(v: [f32; 3], axis: [f32; 3], angle: f32) -> [f32; 3] {
@@ -99,10 +95,6 @@ fn horizontal(v: [f32; 3]) -> [f32; 3] {
     [v[0], 0.0, v[2]]
 }
 
-fn scale3(a: [f32; 3], s: f32) -> [f32; 3] {
-    [a[0] * s, a[1] * s, a[2] * s]
-}
-
 fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
@@ -149,51 +141,46 @@ pub fn rig(meshes: &mut [Mesh], used: &[u16], cloaks: &[u16], skeleton: &[Node])
             None
         })
         .collect();
-    // the fur on his arms draped: what lies outside the shoulder joint and on top of the rest pose's arm (shoulder to
-    // elbow) is turned down about the shoulder, toward where the arm hangs, and that share of its arm weights goes to
-    // the clavicle
-    let ends = [(at("L_UpperArm")?, at("L_Elbow")?), (at("R_UpperArm")?, at("R_Elbow")?)];
+    // the cloak posed for his arms down: each vertex turned about its arm's shoulder as far as its weights on that arm
+    // say (as the skin under it, whose weights it copied, would move), and those weights given to the clavicle
+    let shoulders = [at("L_UpperArm")?, at("R_UpperArm")?];
     let clavicles = [index("L_Clavicle").and_then(|i| u8::try_from(i).ok())?, index("R_Clavicle").and_then(|i| u8::try_from(i).ok())?];
     // the turn about his forward axis that takes his left downward
     let lowers_left = if turned(left, forward, 0.1)[1] < 0.0 { 1.0 } else { -1.0 };
-    let smooth = |x: f32| {
-        let x = x.clamp(0.0, 1.0);
-        x * x * (3.0 - 2.0 * x)
-    };
-    let middle_x = at("Pelvis")?;
     let mut draped = 0;
     for m in meshes.iter_mut().filter(|m| cloaks.contains(&kratos(m))) {
         for v in m.vertices.iter_mut() {
-            let s = if dot(horizontal(sub(v.position, middle_x)), left) >= 0.0 { 0 } else { 1 };
-            let (shoulder, elbow) = ends[s];
-            let Some(along) = unit(sub(elbow, shoulder)) else { continue };
-            let up = [0.0, 1.0, 0.0];
-            let Some(above) = unit(sub(up, scale3(along, dot(up, along)))) else { continue };
-            let r = sub(v.position, shoulder);
-            let w = smooth((dot(r, along) + DRAPE_INSIDE) / DRAPE_RAMP) * smooth(dot(r, above) / DRAPE_RAMP);
+            let (mut on_left, mut on_right) = (0.0f32, 0.0f32);
+            for (b, wt) in v.bones.iter().zip(v.weights) {
+                match arm_side.get(*b as usize).copied().flatten() {
+                    Some(true) => on_left += wt,
+                    Some(false) => on_right += wt,
+                    None => {}
+                }
+            }
+            let w = (on_left + on_right).min(1.0);
             if w <= 0.0 {
                 continue;
             }
+            let s = if on_left >= on_right { 0 } else { 1 };
             let angle = DROP_DEG.to_radians() * w * lowers_left * if s == 0 { 1.0 } else { -1.0 };
-            v.position = add3(turned(r, forward, angle), shoulder);
+            let shoulder = shoulders[s];
+            v.position = add3(turned(sub(v.position, shoulder), forward, angle), shoulder);
             v.normal = turned(v.normal, forward, angle);
             let t = turned([v.tangent[0], v.tangent[1], v.tangent[2]], forward, angle);
             v.tangent = [t[0], t[1], t[2], v.tangent[3]];
-            // that share of the arm's weights to the clavicle, one entry per bone
+            // the arm's weights to the clavicle, one entry per bone
             let mut merged: Vec<(u8, f32)> = Vec::new();
             for (b, wt) in v.bones.iter().zip(v.weights) {
                 if wt <= 0.0 {
                     continue;
                 }
-                let parts = if arm_side.get(*b as usize).copied().flatten().is_some() { [(clavicles[s], wt * w), (*b, wt * (1.0 - w))] } else { [(*b, wt), (*b, 0.0)] };
-                for (b, wt) in parts {
-                    match merged.iter_mut().find(|e| e.0 == b) {
-                        Some(e) => e.1 += wt,
-                        None => merged.push((b, wt)),
-                    }
+                let b = if arm_side.get(*b as usize).copied().flatten().is_some() { clavicles[s] } else { *b };
+                match merged.iter_mut().find(|e| e.0 == b) {
+                    Some(e) => e.1 += wt,
+                    None => merged.push((b, wt)),
                 }
             }
-            merged.retain(|e| e.1 > 0.0);
             merged.sort_by(|a, b| b.1.total_cmp(&a.1));
             merged.truncate(4);
             let total: f32 = merged.iter().map(|e| e.1).sum();
@@ -330,9 +317,6 @@ mod tests {
         s.push(node("L_UpperArm", 3, [0.15, 0.0, 0.0]));
         s.push(node("R_Clavicle", 2, [-0.02, 0.0, 0.0]));
         s.push(node("R_UpperArm", 2, [-0.17, 0.0, 0.0]));
-        // the elbows about 20 degrees below level, as in Elden Ring's rest pose
-        s.push(node("L_Elbow", 3, [0.39, -0.0874, 0.0]));
-        s.push(node("R_Elbow", 2, [-0.41, -0.0874, 0.0]));
         s
     }
 
@@ -374,19 +358,24 @@ mod tests {
         let hem = &v[22 * 7 + 6];
         assert!((chain_share(hem) - 1.0).abs() < 1e-5 && (hem.weights.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         assert_eq!(chain_share(v.last().unwrap()), 0.0);
-        // the cloak beside him goes partly with the back of it; on top of his arm (shoulder at 1.3 m, 0.17 out, elbow
-        // 20 degrees below) it is draped: turned down about the shoulder, its arm weight on the clavicle; under the arm
-        // it stays where it is
+        // the cloak beside him goes partly with the back of it; on his arm (shoulder at 1.3 m, 0.17 out) it is posed
+        // for the arm down: turned about the shoulder by its weight there, that weight on the clavicle
         let beside = chain_share(&v[v.len() - 2]);
         assert!((0.2..0.35).contains(&beside), "{beside}");
-        let (on, under) = (&v[v.len() - 4], &v[v.len() - 3]);
-        assert!(on.bones.iter().zip(on.weights).all(|(b, w)| w == 0.0 || *b != arm), "{:?} {:?}", on.bones, on.weights);
-        let (s, c) = DROP_DEG.to_radians().sin_cos();
-        let (x, y) = (0.13f32, 0.06f32);
-        let (x, y) = (0.17 + x * c + y * s, 1.3 - x * s + y * c);
+        let (on, half) = (&v[v.len() - 4], &v[v.len() - 3]);
+        for v in [on, half] {
+            assert!(v.bones.iter().zip(v.weights).all(|(b, w)| w == 0.0 || *b != arm), "{:?} {:?}", v.bones, v.weights);
+        }
+        let down = |p: [f32; 2], deg: f32| {
+            let (s, c) = deg.to_radians().sin_cos();
+            let (x, y) = (p[0] - 0.17, p[1] - 1.3);
+            (0.17 + x * c + y * s, 1.3 - x * s + y * c)
+        };
+        let (x, y) = down([0.3, 1.36], DROP_DEG);
         assert!((on.position[0] - x).abs() < 1e-4 && (on.position[1] - y).abs() < 1e-4, "{:?} vs ({x}, {y})", on.position);
-        assert_eq!(under.position, [0.3, 1.15, -0.05]);
-        assert_eq!(rig.draped, 1);
+        let (x, y) = down([0.3, 1.15], DROP_DEG / 2.0);
+        assert!((half.position[0] - x).abs() < 1e-4 && (half.position[1] - y).abs() < 1e-4, "{:?} vs ({x}, {y})", half.position);
+        assert_eq!(rig.draped, 2);
         // a vertex at his back's middle is shared by both chains
         let mid = &v[20 * 7 + 3];
         let left = mid.bones.iter().zip(mid.weights).filter(|(b, _)| (10..10 + POINTS).contains(&(**b as usize))).map(|(_, w)| w).sum::<f32>();
