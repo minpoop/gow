@@ -237,6 +237,25 @@ struct Probe {
 static PROBE: Mutex<Option<Probe>> = Mutex::new(None);
 static SEARCHING: AtomicBool = AtomicBool::new(false);
 static MODEL_ITEM: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The offset arrays the search found when the path from the model item did not lead to them (0.1.68: "no offset
+/// arrays"), used by the steps instead.
+static FOUND_OFFSETS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// An array of the offsets' kind: 3x4, at least the skeleton long, the identity for at least 95 % of the skeleton's
+/// bones.
+fn offsets_like(f: &Found, bones: &[Bone]) -> bool {
+    let n = bones.len();
+    f.layout == Layout::M34 && f.floats.len() >= n * 12 && f.floats.chunks_exact(12).take(n).filter(|e| e.iter().zip(IDENTITY).all(|(a, b)| (a - b).abs() < 1e-4)).count() * 100 >= n * 95
+}
+
+/// Where the steps write: the arrays the path leads to, else those the search found.
+fn targets() -> Vec<usize> {
+    let by_path: Vec<usize> = offset_arrays(MODEL_ITEM.load(Ordering::SeqCst)).into_iter().filter(|a| *a != 0).collect();
+    if !by_path.is_empty() {
+        return by_path;
+    }
+    FOUND_OFFSETS.lock().map(|v| v.clone()).unwrap_or_default()
+}
 
 const IDENTITY: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
@@ -302,9 +321,14 @@ pub fn start(roots: Vec<(&'static str, usize)>, model_item: usize) {
                     Some((i, turn_about(*axis, *deg, pivot)))
                 })
                 .collect();
-            let arrays = offset_arrays(MODEL_ITEM.load(Ordering::SeqCst));
-            crate::glog!("bonepose", "pose probe: offset arrays {:#x}, {:#x}; {} steps of {STEP_S} s (search written to {})", arrays[0], arrays[1], steps.len(), path.display());
-            if steps.is_empty() || arrays == [0, 0] {
+            let by_path = offset_arrays(MODEL_ITEM.load(Ordering::SeqCst));
+            let found_offsets: Vec<(String, usize)> = found.iter().filter(|f| offsets_like(f, bones)).map(|f| (f.path.clone(), f.address)).collect();
+            if let Ok(mut v) = FOUND_OFFSETS.lock() {
+                *v = found_offsets.iter().map(|(_, a)| *a).collect();
+            }
+            let arrays = targets();
+            crate::glog!("bonepose", "pose probe: offset arrays by path {:#x}, {:#x}; offset-like arrays found {:?}; writing to {:x?}; {} steps of {STEP_S} s (search written to {})", by_path[0], by_path[1], found_offsets.iter().map(|(p, a)| format!("{p} at {a:#x}")).collect::<Vec<_>>(), arrays, steps.len(), path.display());
+            if steps.is_empty() || arrays.is_empty() {
                 crate::overlay::toast("Pose probe: no offset arrays or bones found (debug)");
                 return;
             }
@@ -328,10 +352,7 @@ pub fn start(roots: Vec<(&'static str, usize)>, model_item: usize) {
 /// Write `m` into the entry for `bone` of each offset array (only where the entry reads as a bone's).
 fn write_bone(bone: usize, m: &[f32; 12]) -> (u32, u32) {
     let (mut ok, mut bad) = (0, 0);
-    for a in offset_arrays(MODEL_ITEM.load(Ordering::SeqCst)) {
-        if a == 0 {
-            continue;
-        }
+    for a in targets() {
         let at = a + bone * 48;
         if read::<[f32; 12]>(at).is_some_and(|e| bone_like(&e)) && write_floats(at, m) {
             ok += 1;

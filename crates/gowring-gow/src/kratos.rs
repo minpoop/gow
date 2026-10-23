@@ -498,11 +498,12 @@ pub const DEFAULT_OUTFIT: &[u16] = &[
 /// outfit probe, 0.1.65). Out with them go the `youngkratos` belt and the red cloth with a gold key pattern that hung
 /// in front of it (194-198, materials 60 and 61; 0.1.60-0.1.65 wore them, which left his belly bare from the belt to
 /// the chest, "a beer gut"), the leather cloak and the fur along its strap (236, 213, 215-223), the strap itself (231,
-/// under the harness) and the harness's other shoulder cap (227) and fur (229). The black is a dye
-/// ([`crate::kratos_part::Outfit::dyed`]).
+/// under the harness) and the harness's other shoulder cap (227). The harness's fur (229, material 29: tufts around
+/// the shoulder pad, front to back) stays: without it, 0.1.66-0.1.68 showed bare skin by the pad from behind. The black
+/// is a dye ([`crate::kratos_part::Outfit::dyed`]).
 pub const BLACK_BEAR_OUTFIT: &[u16] = &[
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 200, 201, 203, 204, 205, 206, 207, 208, 209, 214, 224, 228, 230, 234, 235, 238, 239, 240, 241, 243, 251, 263, 264, 265, 267,
-    268, 269, 270, 271, 272, 273, 274, 277, 279, 280,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 200, 201, 203, 204, 205, 206, 207, 208, 209, 214, 224, 228, 229, 230, 234, 235, 238, 239, 240, 241, 243, 251, 263, 264, 265,
+    267, 268, 269, 270, 271, 272, 273, 274, 277, 279, 280,
 ];
 
 /// Parts that are not drawn as Kratos: a capsule and three ellipsoids per body region (244-258, likely shadow or
