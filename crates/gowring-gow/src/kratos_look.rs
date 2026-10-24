@@ -253,7 +253,8 @@ pub fn cut_off_maps(refs: &[String]) -> Vec<&String> {
 
 /// Whether an image reads as a tangent-space normal map: red and green about the middle on average, blue near full
 /// (Ragnarök's, as BC7: about 128, 128, 240-252), and not flat. A gloss, occlusion or mask map is grey (red, green and
-/// blue alike) or one channel.
+/// blue alike) or one channel. A two-channel normal map (BC5: red and green only, the shader works out the rest) has no
+/// blue to show: the bear cloak's fur's lost its name and went unfound until 0.1.86.
 pub fn looks_like_normal(img: &Image) -> bool {
     let n = (img.w * img.h).max(1) as f64;
     let mut sum = [0f64; 3];
@@ -268,7 +269,78 @@ pub fn looks_like_normal(img: &Image) -> bool {
     }
     let mean = sum.map(|v| v / n);
     let spread = |k: usize| (sq[k] / n - mean[k] * mean[k]).max(0.0).sqrt();
-    (mean[0] - 128.0).abs() < 20.0 && (mean[1] - 128.0).abs() < 20.0 && mean[2] > 190.0 && (spread(0) > 2.0 || spread(1) > 2.0)
+    let blue = img.format == crate::dds::Format::Bc5 || mean[2] > 190.0;
+    (mean[0] - 128.0).abs() < 20.0 && (mean[1] - 128.0).abs() < 20.0 && blue && (spread(0) > 2.0 || spread(1) > 2.0)
+}
+
+/// A material's references whose names lost their end: cut off at 32 characters ([`cut_off_maps`]) or after a 16-digit
+/// hash in front (`d93ad7ef339b681c_kratos_fur_ao`, `dc9310dd9c35838f_kratos_muspelhe`).
+pub fn lost_names(refs: &[String]) -> Vec<&String> {
+    let hashed = |t: &&String| {
+        let s = stem(t).as_bytes();
+        s.len() > 17 && s[16] == b'_' && s[..16].iter().all(|c| c.is_ascii_hexdigit())
+    };
+    let mut out = cut_off_maps(refs);
+    for t in refs.iter().filter(|r| r.starts_with("TX_")).filter(hashed) {
+        if !out.iter().any(|o| std::ptr::eq(*o, t)) {
+            out.push(t);
+        }
+    }
+    out
+}
+
+/// A strand material's occlusion map by name (`kratos_fur_ao`, `..._gen_0ao`).
+pub fn occlusion_map(refs: &[String]) -> Option<&String> {
+    refs.iter().filter(|r| r.starts_with("TX_")).find(|t| stem(t).ends_with("_ao") || stem(t).ends_with("_0ao"))
+}
+
+/// Whether an image reads as an occlusion map: one channel (BC4) or grey, mostly light (the strands' tips and the
+/// open fur) with darker parts, not flat. A strand mask or height map is mostly empty, a normal map is not grey.
+pub fn looks_like_occlusion(img: &Image) -> bool {
+    let n = (img.w * img.h).max(1) as f64;
+    let (mut sum, mut sq, mut dark, mut off_grey) = (0f64, 0f64, 0usize, 0f64);
+    for p in img.rgba.chunks_exact(4) {
+        let r = p[0] as f64;
+        sum += r;
+        sq += r * r;
+        dark += (p[0] < 32) as usize;
+        if p[1] != 0 || p[2] != 0 {
+            off_grey += (r - p[1] as f64).abs() + (r - p[2] as f64).abs();
+        }
+    }
+    let mean = sum / n;
+    let spread = (sq / n - mean * mean).max(0.0).sqrt();
+    off_grey / n < 12.0 && (100.0..=245.0).contains(&mean) && (dark as f64) < 0.15 * n && spread > 8.0
+}
+
+/// How strongly an occlusion map darkens the strands it is baked into (1 = as the map says).
+pub const OCCLUSION: f32 = 0.7;
+
+/// Bake `ao` (its red, stretched over the image) into `img`'s colour by `strength`, keeping its alpha. Returns how much
+/// of the colour is kept on average.
+pub fn occlude(img: &mut Image, ao: &Image, strength: f32) -> f32 {
+    let (w, h) = (img.w.max(1) as usize, img.h.max(1) as usize);
+    let (aw, ah) = (ao.w.max(1) as usize, ao.h.max(1) as usize);
+    let mut kept = 0f64;
+    for y in 0..h {
+        for x in 0..w {
+            let a = ao.rgba.get(((y * ah / h) * aw + x * aw / w) * 4).copied().unwrap_or(255) as f32 / 255.0;
+            let f = 1.0 - strength * (1.0 - a);
+            kept += f as f64;
+            let p = &mut img.rgba[(y * w + x) * 4..(y * w + x) * 4 + 3];
+            for c in p.iter_mut() {
+                *c = (*c as f32 * f).round() as u8;
+            }
+        }
+    }
+    (kept / (w * h) as f64) as f32
+}
+
+/// A line of an image's numbers for the build notes: its format and size and the mean of each channel.
+fn pixel_line(name: &str, img: &Image) -> String {
+    let n = (img.w * img.h).max(1) as u64;
+    let mean: [u64; 4] = std::array::from_fn(|k| img.rgba.chunks_exact(4).map(|p| p[k] as u64).sum::<u64>() / n);
+    format!("{name} {:?} {}x{} mean {:?}", img.format, img.w, img.h, mean)
 }
 
 /// The normal map and the gloss map among a material's texture references.
@@ -501,6 +573,28 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                         note.push_str(&format!("{:.0} % drawn after the gain, ", 100.0 * drawn));
                     }
                     note.push_str(&format!("{}x{}, {how}", img.w, img.h));
+                    // Ragnarök's occlusion for the strands (darker toward their roots and under the ones over them),
+                    // baked into the colour: Elden Ring's materials have no place for it. By name, else by its pixels
+                    // among the maps whose names lost their end (with each one's numbers in the notes).
+                    let mut ao = occlusion_map(&ref_names).and_then(|t| get(t).ok().map(|i| (stem(t).to_string(), i, "")));
+                    if ao.is_none() {
+                        let mut line = Vec::new();
+                        for t in lost_names(&ref_names) {
+                            if let Ok(i) = get(t) {
+                                line.push(pixel_line(stem(t), &i));
+                                if ao.is_none() && looks_like_occlusion(&i) {
+                                    ao = Some((stem(t).to_string(), i, " by its pixels"));
+                                }
+                            }
+                        }
+                        if !line.is_empty() {
+                            note.push_str(&format!(", maps with their names cut [{}]", line.join("; ")));
+                        }
+                    }
+                    if let Some((name, ao_img, how)) = ao {
+                        let kept = occlude(&mut img, &ao_img, OCCLUSION);
+                        note.push_str(&format!(", occlusion from {name}{how} ({:.0} % of the colour kept)", 100.0 * kept));
+                    }
                     look.colour = Some(img);
                     look.cut_out = true;
                 }
@@ -579,6 +673,35 @@ mod tests {
         assert!(looks_like_normal(&image(&[[120, 130, 250, 255], [140, 118, 245, 255], [128, 128, 255, 255]])));
         assert!(!looks_like_normal(&image(&[[120, 120, 120, 255], [200, 200, 200, 255]])));
         assert!(!looks_like_normal(&image(&[[128, 128, 255, 255]; 4])));
+        // a two-channel normal map (BC5) has no blue; a BC7 map with none is not a normal map
+        let two = [[120, 130, 0, 255], [140, 118, 0, 255], [128, 128, 0, 255]];
+        assert!(looks_like_normal(&Image { format: crate::dds::Format::Bc5, ..image(&two) }));
+        assert!(!looks_like_normal(&image(&two)));
+    }
+
+    #[test]
+    fn strands_take_their_occlusion_by_name_or_by_its_pixels_baked_into_their_colour() {
+        use crate::dds::Format;
+        let v = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let tufts = v(&["TX_kratos_fur_sand_m_gen_0d_BA6E93C3A6BE0F39", "TX_d93ad7ef339b681c_kratos_fur_ao_D2AF7BC81B8D2465", "TX_kratos_fur_sand_m_gen_1h_8A750DE6DE59D6DB"]);
+        assert_eq!(occlusion_map(&tufts), Some(&tufts[1]));
+        // the bear cloak's fur: no occlusion by name; two names lost their end
+        let cloak = v(&["TX_kratos00_int9_cloakfur_m_gen_0d_B5F3A2AB7A2F0D04", "TX_kratos_muspelheim_ngv03_fur_gen__55AA1335FFF032E9", "TX_dc9310dd9c35838f_kratos_muspelhe_9504F8C1ECFAB994", "TX_black_6934D3AAB56B04B8"]);
+        assert_eq!(occlusion_map(&cloak), None);
+        let lost: Vec<&str> = lost_names(&cloak).iter().map(|s| s.as_str()).collect();
+        assert_eq!(lost, [cloak[1].as_str(), cloak[2].as_str()]);
+        // one channel (BC4) and mostly light: occlusion; mostly empty (a strand mask, a height map), flat, or a normal
+        // map: not
+        let one = |px: &[u8]| Image { w: px.len() as u32, h: 1, rgba: px.iter().flat_map(|r| [*r, 0, 0, 255]).collect(), format: Format::Bc4 };
+        assert!(looks_like_occlusion(&one(&[255, 200, 150, 230, 90, 250])));
+        assert!(!looks_like_occlusion(&one(&[0, 0, 0, 255, 0, 10])));
+        assert!(!looks_like_occlusion(&one(&[200; 4])));
+        assert!(!looks_like_occlusion(&Image { w: 2, h: 1, rgba: vec![120, 130, 250, 255, 140, 118, 245, 255], format: Format::Bc7 }));
+        // baked: the colour darkened by 0.7 of the occlusion, its alpha kept
+        let mut colour = Image { w: 2, h: 1, rgba: vec![100, 100, 100, 200, 100, 100, 100, 50], format: Format::Bc1 };
+        let kept = occlude(&mut colour, &one(&[255, 0]), OCCLUSION);
+        assert_eq!(colour.rgba, vec![100, 100, 100, 200, 30, 30, 30, 50]);
+        assert!((kept - 0.65).abs() < 1e-4);
     }
 
     #[test]
