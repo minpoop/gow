@@ -12,7 +12,12 @@ pub enum Format {
     Bc2,
     Bc3,
     Bc4,
+    /// BC4 of signed values (`BC4_SNORM`): decoded as a mask, its positive half.
+    Bc4S,
     Bc5,
+    /// BC5 of signed values (`BC5_SNORM`): decoded as a normal map, -1..1 as 0..255 with blue worked out from red and
+    /// green.
+    Bc5S,
     Bc6U,
     Bc6S,
     Bc7,
@@ -42,7 +47,9 @@ pub fn decode(b: &[u8]) -> Result<Image> {
         b"DXT3" => Format::Bc2,
         b"DXT5" => Format::Bc3,
         b"ATI1" | b"BC4U" => Format::Bc4,
+        b"BC4S" => Format::Bc4S,
         b"ATI2" | b"BC5U" => Format::Bc5,
+        b"BC5S" => Format::Bc5S,
         b"DX10" => {
             data_at = 148;
             if b.len() < 148 {
@@ -52,8 +59,10 @@ pub fn decode(b: &[u8]) -> Result<Image> {
                 70..=72 => Format::Bc1,
                 73..=75 => Format::Bc2,
                 76..=78 => Format::Bc3,
-                79..=81 => Format::Bc4,
-                82..=84 => Format::Bc5,
+                79 | 80 => Format::Bc4,
+                81 => Format::Bc4S,
+                82 | 83 => Format::Bc5,
+                84 => Format::Bc5S,
                 97..=99 => Format::Bc7,
                 28 | 29 => Format::Rgba8,
                 87 | 91 => Format::Bgra8,
@@ -80,6 +89,7 @@ pub fn decode_raw(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> 
     let (wz, hz) = (w as usize, h as usize);
     let mut px = vec![0u32; wz * hz];
     match format {
+        Format::Bc4S | Format::Bc5S => decode_snorm(format, w, h, data),
         Format::Bc1 | Format::Bc2 | Format::Bc3 | Format::Bc4 | Format::Bc5 | Format::Bc6U | Format::Bc6S | Format::Bc7 => {
             let blocks = wz.div_ceil(4) * hz.div_ceil(4);
             let size = blocks * if matches!(format, Format::Bc1 | Format::Bc4) { 8 } else { 16 };
@@ -119,6 +129,63 @@ pub fn decode_raw(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> 
             Ok(Image { w, h, rgba, format })
         }
     }
+}
+
+/// The texels of a BC4 block of signed values (BC4_SNORM, and each half of BC5_SNORM), row by row, each in -1..=1.
+/// texture2ddecoder reads only unsigned ones: a signed normal map read so has its flat parts (0) at one end and its
+/// slightly tilted ones split between the two (0.1.86: "the way the light is hitting the fur looks off").
+fn snorm_block(b: &[u8]) -> [f32; 16] {
+    let end = |x: u8| (x as i8).max(-127) as f32 / 127.0;
+    let (r0, r1) = (end(b[0]), end(b[1]));
+    let mut pal = [r0, r1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    if r0 > r1 {
+        for i in 1..7 {
+            pal[i + 1] = ((7 - i) as f32 * r0 + i as f32 * r1) / 7.0;
+        }
+    } else {
+        for i in 1..5 {
+            pal[i + 1] = ((5 - i) as f32 * r0 + i as f32 * r1) / 5.0;
+        }
+        pal[6] = -1.0;
+        pal[7] = 1.0;
+    }
+    let bits = u64::from_le_bytes([b[2], b[3], b[4], b[5], b[6], b[7], 0, 0]);
+    std::array::from_fn(|k| pal[((bits >> (3 * k)) & 7) as usize])
+}
+
+/// BC4 or BC5 of signed values: BC4 as a mask (its positive half as 0..255 in red), BC5 as a normal map (red and green
+/// from -1..1 to 0..255, blue worked out from them).
+fn decode_snorm(format: Format, w: u32, h: u32, data: &[u8]) -> Result<Image> {
+    let (wz, hz) = (w as usize, h as usize);
+    let (bw, bh) = (wz.div_ceil(4), hz.div_ceil(4));
+    let step = if format == Format::Bc4S { 8 } else { 16 };
+    if data.len() < bw * bh * step {
+        bail!("texture data truncated: {} < {}", data.len(), bw * bh * step);
+    }
+    let byte = |v: f32| ((v * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8;
+    let mut rgba = vec![0u8; wz * hz * 4];
+    for by in 0..bh {
+        for bx in 0..bw {
+            let blk = &data[(by * bw + bx) * step..];
+            let red = snorm_block(&blk[..8]);
+            let green = (format == Format::Bc5S).then(|| snorm_block(&blk[8..16]));
+            for k in 0..16 {
+                let (x, y) = (bx * 4 + k % 4, by * 4 + k / 4);
+                if x >= wz || y >= hz {
+                    continue;
+                }
+                let px = match green {
+                    Some(g) => {
+                        let (nx, ny) = (red[k], g[k]);
+                        [byte(nx), byte(ny), byte((1.0 - nx * nx - ny * ny).max(0.0).sqrt()), 255]
+                    }
+                    None => [(red[k].max(0.0) * 255.0).round() as u8, 0, 0, 255],
+                };
+                rgba[(y * wz + x) * 4..(y * wz + x) * 4 + 4].copy_from_slice(&px);
+            }
+        }
+    }
+    Ok(Image { w, h, rgba, format })
 }
 
 /// The image shrunk by whole factors of two until its longer side is at most `max_side` (each pixel the average of
@@ -211,5 +278,22 @@ mod tests {
         let mut t = build_test_bc1();
         t.truncate(130);
         assert!(decode(&t).is_err());
+    }
+
+    #[test]
+    fn signed_bc4_and_bc5_read_as_signed() {
+        // BC5_SNORM all 0 (a flat normal): the middle, facing out (read as unsigned: 0, 0, fully tilted)
+        let flat = decode_raw(Format::Bc5S, 4, 4, &[0u8; 16]).unwrap();
+        assert!(flat.rgba.chunks_exact(4).all(|p| p == [128, 128, 255, 255]));
+        // red all -1 (both ends 0x81), green all +1 (both ends 0x7f)
+        let mut b = [0u8; 16];
+        (b[0], b[1], b[8], b[9]) = (0x81, 0x81, 0x7f, 0x7f);
+        let tilted = decode_raw(Format::Bc5S, 4, 4, &b).unwrap();
+        assert_eq!(&tilted.rgba[..4], &[0, 255, 128, 255]);
+        // BC4_SNORM as a mask: its first end (+1) full, its second (0x80, read as -1) empty
+        let mut m = [0u8; 8];
+        (m[0], m[1], m[2]) = (0x7f, 0x80, 0b001_000);
+        let mask = decode_raw(Format::Bc4S, 4, 4, &m).unwrap();
+        assert_eq!((mask.rgba[0], mask.rgba[4]), (255, 0));
     }
 }

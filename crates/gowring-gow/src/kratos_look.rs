@@ -636,7 +636,7 @@ pub fn model_looks(buf: &[u8], es: &[Entry], wad_dir: &Path, mesh_chunk: &str, m
                     let n_img = crate::dds::downscale(&img, max_surface);
                     let g_img = gloss.and_then(|g| get(g).ok()).map(|g| crate::dds::downscale(&g, max_surface));
                     let by_pixels = cut.map(|c| format!(" (by its pixels: {c}, its name cut off)")).unwrap_or_default();
-                    note.push_str(&format!(", normal {}x{}{by_pixels}{}", img.w, img.h, if g_img.is_some() { " and gloss" } else { "" }));
+                    note.push_str(&format!(", normal {}x{} {:?}{by_pixels}{}", img.w, img.h, img.format, if g_img.is_some() { " and gloss" } else { "" }));
                     look.surface = Some(surface_image(&n_img, g_img.as_ref(), gloss_scale));
                 }
                 Err(e) => note.push_str(&format!(", normal failed ({e:#})")),

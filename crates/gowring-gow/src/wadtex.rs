@@ -86,8 +86,11 @@ pub fn format_info(f: u32) -> Option<(Format, usize, u32)> {
         169 | 170 => (Format::Bc1, 8, 4),
         171 | 172 => (Format::Bc2, 16, 4),
         173 | 174 => (Format::Bc3, 16, 4),
-        175 | 176 => (Format::Bc4, 8, 4),
-        177 | 178 => (Format::Bc5, 16, 4),
+        // 176 and 178 are signed (GOWTool's `Gnf.h`: `Bc4_SNorm = 176`, `Bc5_SNorm = 178`)
+        175 => (Format::Bc4, 8, 4),
+        176 => (Format::Bc4S, 8, 4),
+        177 => (Format::Bc5, 16, 4),
+        178 => (Format::Bc5S, 16, 4),
         179 => (Format::Bc6U, 16, 4),
         180 => (Format::Bc6S, 16, 4),
         181 | 182 => (Format::Bc7, 16, 4),
