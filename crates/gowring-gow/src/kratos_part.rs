@@ -960,7 +960,7 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     // the back of the cloak on the spare bone chains gowring.dll swings (see crate::cape), when the cape is on
     let rig = if cape && retargeted.is_some() { crate::cape::rig(&mut meshes, &used, &CLOAKS, skeleton) } else { None };
     match &rig {
-        Some(r) => note.push_str(&format!("cape: {} cloak vertices on {} chains of {}, {} draped off the arms; ", r.vertices, r.chains.len(), crate::cape::POINTS, r.draped)),
+        Some(r) => note.push_str(&format!("cape: {} cloak vertices on {} chain{} of {}, {} draped off the arms; ", r.vertices, r.chains.len(), if r.chains.len() == 1 { "" } else { "s" }, crate::cape::POINTS, r.draped)),
         None => note.push_str(if cape { "cape: no rig (no cloak behind the body, or no chain bones); " } else { "cape: off; " }),
     }
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();

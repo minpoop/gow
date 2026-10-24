@@ -1,5 +1,6 @@
-//! Kratos's cloak, swung by the mod. The launcher skins the back of the cloak below his shoulder blades to two chains
-//! of helper bones that hang off his spine and pelvis (`gowring_gow::cape`, the rig in `mod/parts/kratos_cape.json`).
+//! Kratos's cloak, swung by the mod. The launcher skins the back of the cloak below his shoulder blades to a chain of
+//! helper bones down his back, Elden Ring's Mantle bones on his spine and pelvis (`gowring_gow::cape`, the rig in
+//! `mod/parts/kratos_cape.json`).
 //! The game keeps a per-bone offset that it applies in rest space under the animation, per bone, not to its children
 //! (the pose probes, 0.1.67-0.1.69: a hand turned about its rest position turned in place, one turned about the origin
 //! stretched away, an upper arm turned without its forearm). So every frame, just before drawing, this simulates the
