@@ -84,7 +84,7 @@ const ROOTS: [&str; 3] = ["Master", "RootPos", "Pelvis"];
 /// The least time between searches (s).
 const SEARCH_EVERY_S: f32 = 10.0;
 /// Seconds between status lines in the log.
-const LOG_EVERY_S: f32 = 60.0;
+const LOG_EVERY_S: f32 = 20.0;
 
 struct Chain {
     bones: Vec<usize>,
@@ -133,6 +133,14 @@ static LOADED: AtomicBool = AtomicBool::new(false);
 /// The offset arrays to write, the model item they were found from, and when the last search started.
 static ARRAYS: Mutex<(Vec<usize>, usize, Option<Instant>)> = Mutex::new((Vec::new(), 0, None));
 static SEARCHING: AtomicBool = AtomicBool::new(false);
+/// Switched off and on from the debug key (`debug_cape_key`): off, the chain bones go back to rest and the cloak hangs
+/// as it was built, carried by his bones.
+static ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Switch the swing off or on; true when it is now on.
+pub fn toggle() -> bool {
+    !ENABLED.fetch_xor(true, Ordering::Relaxed)
+}
 
 fn add(a: V3, b: V3) -> V3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
@@ -343,6 +351,21 @@ pub fn step() {
     if arrays.is_empty() {
         return;
     }
+    // switched off: the chain bones back at rest once, then nothing written until it is on again (and starts at rest)
+    if !ENABLED.load(Ordering::Relaxed) {
+        if c.started {
+            for addr in &arrays {
+                for bone in c.chains.iter().flat_map(|ch| ch.bones.iter()) {
+                    let at = addr + bone * 48;
+                    if read::<[f32; 12]>(at).is_some_and(|e| bone_like(&e)) && write_floats(at, &IDENTITY) {
+                        c.writes += 1;
+                    }
+                }
+            }
+            c.started = false;
+        }
+        return;
+    }
     let turn_m = quat(turn);
     let turn_t: M3 = std::array::from_fn(|i| std::array::from_fn(|j| turn_m[j][i]));
     let reset = !c.started || dt > RESET_S || length(sub(pos, c.last_pos)) > JUMP_M;
@@ -492,7 +515,15 @@ pub fn step() {
     c.frames += 1;
     if c.t >= c.next_log {
         c.next_log = c.t + LOG_EVERY_S;
-        let hem: Vec<String> = c.chains.iter().map(|ch| format!("{:.2}", length(sub(ch.p[ch.p.len() - 1], ch.rest[ch.rest.len() - 1])))).collect();
+        // and which way: behind, to his left (minus: his right) and up
+        let hem: Vec<String> = c
+            .chains
+            .iter()
+            .map(|ch| {
+                let d = sub(ch.p[ch.p.len() - 1], ch.rest[ch.rest.len() - 1]);
+                format!("{:.2} (back {:+.2}, left {:+.2}, up {:+.2})", length(d), dot(d, c.back), dot(d, c.left), d[1])
+            })
+            .collect();
         crate::glog!("cape", "{} frames, {} writes, {} failed, into {} offset arrays; hems {} m from rest; {} holds (kept out of him or from going too far sideways); fastest {:.1} m/s and quickest turn {:.1} rad/s since the last line; wind x{wind_scale}", c.frames, c.writes, c.failed, arrays.len(), hem.join(", "), c.held, c.peak_speed, c.peak_turn);
         c.peak_speed = 0.0;
         c.peak_turn = 0.0;

@@ -49,6 +49,7 @@ pub struct Runtime {
     rage_key_down: bool,
     camera_key_down: bool,
     pose_key_down: bool,
+    cape_key_down: bool,
 }
 
 #[derive(Default, Debug)]
@@ -89,6 +90,7 @@ impl Runtime {
             rage_key_down: false,
             camera_key_down: false,
             pose_key_down: false,
+            cape_key_down: false,
         }
     }
 
@@ -255,6 +257,13 @@ impl Runtime {
                 }
             }
             self.pose_key_down = down;
+            let down = function_key_down(st.debug_cape_key);
+            if down && !self.cape_key_down {
+                let on = crate::cape::toggle();
+                crate::glog!("debug", "F{} pressed: cloak swing {}", st.debug_cape_key, if on { "on" } else { "off (the cloak as built)" });
+                crate::overlay::toast(if on { "Cloak swing on (debug)" } else { "Cloak swing off: the cloak as built (debug)" });
+            }
+            self.cape_key_down = down;
         } else {
             CLOSE_UP.store(0, std::sync::atomic::Ordering::Relaxed);
         }

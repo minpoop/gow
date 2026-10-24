@@ -39,6 +39,9 @@ pub struct Settings {
     /// The function key that runs the pose probe (see `bonepose`): his hand and arm turned step by step through the
     /// game's bone offsets, to learn how they combine with his pose.
     pub debug_pose_key: u8,
+    /// The function key that switches the cape's swing off and on while playing (off: the cloak as built, carried by
+    /// his bones), to compare the two.
+    pub debug_cape_key: u8,
     /// Kratos's cloak swings and blows in the wind (the launcher skins it to the bones the DLL moves; applies the next
     /// time Play is pressed).
     pub cape_physics: bool,
@@ -114,6 +117,7 @@ impl Default for Settings {
             debug_rage_key: 10,
             debug_camera_key: 11,
             debug_pose_key: 8,
+            debug_cape_key: 7,
             cape_physics: true,
             cape_wind: 1.0,
             health_stones: true,
@@ -129,7 +133,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 15;
+const FILE_VERSION: u32 = 16;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -207,6 +211,9 @@ fn render(s: &Settings) -> String {
   "debug_pose_key": "F{pkey}",
   "_debug_pose_key": "Keyboard key (F1 to F12) that runs the pose probe, a test for making his cloak move: for a few seconds each, his right hand is turned twice and then his left upper arm, with the step on screen. Say what each step did.",
 
+  "debug_cape_key": "F{cape_key}",
+  "_debug_cape_key": "Keyboard key (F1 to F12) that switches the swing of Kratos's cloak off and on while you play: off, the cloak hangs as it was built and only his back and hips carry it, so you can compare the two.",
+
   "cape_physics": {cape},
   "_cape_physics": "true = the back of Kratos's cloak swings as he moves and blows in the wind (new: it swings with his running and turning, and his back and hips carry it). false = it stays on his back as before. Applies the next time you press Play.",
 
@@ -239,6 +246,7 @@ fn render(s: &Settings) -> String {
         rkey = s.debug_rage_key,
         ckey = s.debug_camera_key,
         pkey = s.debug_pose_key,
+        cape_key = s.debug_cape_key,
         cape = s.cape_physics,
         cwind = s.cape_wind,
         stones = s.health_stones,
@@ -306,6 +314,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     debug_rage_key: 10,
     debug_camera_key: 11,
     debug_pose_key: 8,
+    debug_cape_key: 7,
     cape_physics: true,
     cape_wind: 1.0,
     health_stones: true,
@@ -375,6 +384,9 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     }
     if let Some(k) = v.get("debug_pose_key").and_then(|x| x.as_str()).and_then(fkey) {
         s.debug_pose_key = k;
+    }
+    if let Some(k) = v.get("debug_cape_key").and_then(|x| x.as_str()).and_then(fkey) {
+        s.debug_cape_key = k;
     }
     if let Some(b) = v.get("cape_physics").and_then(|x| x.as_bool()) {
         s.cape_physics = b;
@@ -547,6 +559,7 @@ mod tests {
             debug_rage_key: 12,
             debug_camera_key: 8,
             debug_pose_key: 7,
+            debug_cape_key: 6,
             cape_physics: false,
             cape_wind: 2.5,
             health_stones: false,
