@@ -809,7 +809,15 @@ pub(crate) struct Naming<'a> {
     pub dir: &'a str,
     /// Strand materials drawn with Elden Ring's hair material ([`erpart::HAIR_MTD`]) instead of the cut-out one.
     pub hair: &'a [u16],
+    /// Strand materials that are fur, on the fur's own metal map ([`FUR_METAL`]).
+    pub fur: &'a [u16],
 }
+
+/// How metallic the fur is (Elden Ring's metallic map, 0-255). A surface that is not metal reflects about 4 % of the
+/// light whatever its colour, and over the thousands of strand cards of the bear cloak that turned its near-black fur
+/// (median 15 of 255) a silvery grey under the sky, on either material (0.1.86-0.1.87: "too grey / silvery"). Metal
+/// reflects in its own colour, so the black roots reflect next to nothing while the lighter tips still catch the light.
+pub const FUR_METAL: u8 = 230;
 
 /// How many of a part's materials got their colour map, their surface, and a cut-out colour map (strands).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -827,6 +835,7 @@ pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collect
     let mut textures: Vec<(String, Vec<u8>, u8)> = Vec::new();
     let mut mats = Vec::new();
     let mut counts = LookCounts::default();
+    let mut fur_used = false;
     let tex = naming.tex;
     for m in used {
         let look = looks.get(m);
@@ -853,7 +862,10 @@ pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collect
             }
             None => format!("{tex}_n"),
         };
-        let mut mat = material_in(naming.dir, &format!("{}_m{m}", naming.material), &stem, &format!("{tex}_m"), &normal);
+        let fur = cut && naming.fur.contains(m);
+        fur_used |= fur;
+        let metal = if fur { format!("{tex}_mf") } else { format!("{tex}_m") };
+        let mut mat = material_in(naming.dir, &format!("{}_m{m}", naming.material), &stem, &metal, &normal);
         if cut {
             let (mtd, samplers) = if naming.hair.contains(m) { (erpart::HAIR_MTD, erpart::HAIR_SAMPLERS) } else { (CUT_OUT_MTD, CUT_OUT_SAMPLERS) };
             mat.mtd = mtd.into();
@@ -868,6 +880,9 @@ pub(crate) fn look_materials(naming: &Naming, used: &[u16], looks: &std::collect
     textures.push((format!("{tex}_m"), solid([0, 0, 0]), 0));
     // no gloss map: nearly matte (blue is the shininess); it was 255, the shiniest, until 0.1.65
     textures.push((format!("{tex}_n"), solid([128, 128, crate::kratos_look::MATTE]), 0));
+    if fur_used {
+        textures.push((format!("{tex}_mf"), solid([FUR_METAL; 3]), 0));
+    }
     (mats, textures, counts)
 }
 
@@ -966,7 +981,7 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     let tris: usize = meshes.iter().map(|m| m.indices.len() / 3).sum();
     let tex = format!("kratos_{MODEL_ID}");
     let hair: &[u16] = if hair_fur { &HAIR_FUR } else { &[] };
-    let (mats, textures, LookCounts { coloured, surfaced, strands }) = look_materials(&Naming { tex: &tex, material: "kratos", dir: KRATOS_TEX_DIR, hair }, &used, looks);
+    let (mats, textures, LookCounts { coloured, surfaced, strands }) = look_materials(&Naming { tex: &tex, material: "kratos", dir: KRATOS_TEX_DIR, hair, fur: &HAIR_FUR }, &used, looks);
     let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures));
     note.push_str(&format!("body {} meshes ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {strands} of strands cut out, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
     let on_hair: Vec<u16> = hair.iter().copied().filter(|m| used.contains(m) && looks.get(m).is_some_and(|l| l.cut_out)).collect();
@@ -1111,12 +1126,17 @@ mod tests {
         let mut looks = std::collections::BTreeMap::new();
         looks.insert(3u16, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: 4, h: 4, rgba: vec![200; 64], format: crate::dds::Format::Bc1 }), surface: None, cut_out: false });
         let dir = "N:\\GR\\data\\INTERROOT_win64\\parts\\Weapon\\WP_A_9710\\tex";
-        let (mats, tex, counts) = look_materials(&Naming { tex: "wp_a_9710", material: "WP_A_9710", dir, hair: &[] }, &[3, 5], &looks);
+        let (mats, tex, counts) = look_materials(&Naming { tex: "wp_a_9710", material: "WP_A_9710", dir, hair: &[], fur: &[] }, &[3, 5], &looks);
         assert_eq!(mats.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["WP_A_9710_m3", "WP_A_9710_m5"]);
         assert_eq!(mats[0].textures[0].1, format!("{dir}\\wp_a_9710_m3_a.tif"));
         assert_eq!(mats[1].textures[2].1, format!("{dir}\\wp_a_9710_n.tif"));
         assert_eq!(tex.iter().map(|t| t.0.as_str()).collect::<Vec<_>>(), ["wp_a_9710_m3_a", "wp_a_9710_m5_a", "wp_a_9710_m", "wp_a_9710_n"]);
         assert_eq!(counts, LookCounts { coloured: 1, surfaced: 0, strands: 0 });
+        // fur (a strand material on the fur list) takes the fur's own metal map, the others the shared one
+        looks.insert(5u16, crate::kratos_look::Look { colour: Some(crate::dds::Image { w: 4, h: 4, rgba: vec![20; 64], format: crate::dds::Format::Bc1 }), surface: None, cut_out: true });
+        let (mats, tex, _) = look_materials(&Naming { tex: "kratos", material: "kratos", dir, hair: &[5], fur: &[5] }, &[3, 5], &looks);
+        assert_eq!((mats[0].textures[1].1.as_str(), mats[1].textures[1].1.as_str()), (format!("{dir}\\kratos_m.tif").as_str(), format!("{dir}\\kratos_mf.tif").as_str()));
+        assert_eq!(tex.last().map(|t| t.0.as_str()), Some("kratos_mf"));
         // one draw placed by its caller, tangents from its UVs
         let v = crate::kratos::Vertices { position: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], normal: vec![], uv: [vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], vec![]], influences: vec![], triangles: vec![[0, 1, 2]] };
         let m = draw_mesh(&v, 1, 7, |_, p, n| ([p[0] * 2.0, p[1], p[2]], n, [0; 4], [1.0, 0.0, 0.0, 0.0]));
