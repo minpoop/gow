@@ -155,6 +155,53 @@ impl Runtime {
         }
     }
 
+    /// Where the pose search starts: the character, its model and model item, the item's bone-matrix entity and
+    /// matrices exporter, the model's display and location entities, the behaviour module, its hkbCharacter and that
+    /// one's setup, and the pose importer and anim-skeleton-to-model modifier (ChrIns +0x398 and +0x3a8, eldenring
+    /// 0.14's `hka_pose_importer`, `anim_skeleton_to_model_modifier`).
+    fn pose_roots(&self) -> Vec<(&'static str, usize)> {
+        let read = |a: usize| crate::skeleton::read::<usize>(a).filter(|p| *p > 0x10000);
+        let mut roots: Vec<(&'static str, usize)> = Vec::new();
+        if let Some(m) = self.bridge.player_model_item() {
+            if let Some(e) = read(m + crate::pose::MTX43_ARRAY_ENTITY) {
+                roots.push(("mtx43 array entity", e));
+            }
+            // CSFD4ModelItem +0x650: location_aabb_exporter (CSFD4LocationGxModelMatricesAndAabbExporter)
+            if let Some(e) = read(m + 0x650) {
+                roots.push(("matrices exporter", e));
+            }
+            roots.push(("model item", m));
+        }
+        if let Some(c) = self.bridge.player_chr_model_ins() {
+            roots.push(("chr model", c));
+            // CSModelIns +0x18 model_disp_entity, +0x20 location_entity
+            for (name, off) in [("display entity", 0x18), ("location entity", 0x20)] {
+                if let Some(e) = read(c + off) {
+                    roots.push((name, e));
+                }
+            }
+        }
+        if let Some(b) = self.bridge.player_behavior_module() {
+            roots.push(("behaviour", b));
+            if let Some(c) = read(b + 0x10).and_then(|x| read(x + 0x30)) {
+                roots.push(("hkbCharacter", c));
+                if let Some(setup) = read(c + 0x90) {
+                    roots.push(("character setup", setup));
+                }
+            }
+        }
+        if let Some(chr) = self.bridge.player_chr_ins() {
+            if let Some(p) = read(chr + 0x398) {
+                roots.push(("pose importer", p));
+            }
+            if let Some(p) = read(chr + 0x3a8) {
+                roots.push(("skeleton to model", p));
+            }
+            roots.push(("character", chr));
+        }
+        roots
+    }
+
     pub fn tick(&mut self) {
         // The mod stays inert until Elden Ring has opened the redirected save (see savehook).
         if !crate::savehook::redirected() {
@@ -193,6 +240,9 @@ impl Runtime {
                 crate::filecaps::start_once(b, self.bridge.player_model_item());
             }
         }
+        if let Some(t) = self.entered_at {
+            crate::posefind::tick(t.elapsed().as_secs_f32(), || self.pose_roots());
+        }
         self.observe_for_tests();
         self.upkeep(&frame);
 
@@ -224,37 +274,9 @@ impl Runtime {
             self.camera_key_down = down;
             let down = function_key_down(st.debug_pose_key);
             if down && !self.pose_key_down {
-                // the roots the probe searches from: the model item's bone-matrix entity, the model item, the behaviour
-                // module and its hkbCharacter, and the character's pose importer and anim-skeleton-to-model modifier
-                // (ChrIns +0x398 and +0x3a8, eldenring 0.14's `hka_pose_importer`, `anim_skeleton_to_model_modifier`)
-                let read = |a: usize| crate::skeleton::read::<usize>(a).filter(|p| *p > 0x10000);
-                let mut roots: Vec<(&'static str, usize)> = Vec::new();
-                let model = self.bridge.player_model_item();
-                if let Some(m) = model {
-                    if let Some(e) = read(m + crate::pose::MTX43_ARRAY_ENTITY) {
-                        roots.push(("mtx43 array entity", e));
-                    }
-                    roots.push(("model item", m));
-                }
-                if let Some(b) = self.bridge.player_behavior_module() {
-                    roots.push(("behaviour", b));
-                    if let Some(c) = read(b + 0x10).and_then(|x| read(x + 0x30)) {
-                        roots.push(("hkbCharacter", c));
-                    }
-                }
-                if let Some(chr) = self.bridge.player_chr_ins() {
-                    if let Some(p) = read(chr + 0x398) {
-                        roots.push(("pose importer", p));
-                    }
-                    if let Some(p) = read(chr + 0x3a8) {
-                        roots.push(("skeleton to model", p));
-                    }
-                }
-                crate::glog!("debug", "F{} pressed: pose probe from {} root(s)", st.debug_pose_key, roots.len());
-                match model {
-                    Some(m) if !roots.is_empty() => crate::bonepose::start(roots, m),
-                    _ => crate::overlay::toast("Pose probe: no player model yet (debug)"),
-                }
+                let roots = self.pose_roots();
+                crate::glog!("debug", "F{} pressed: pose search from {} root(s)", st.debug_pose_key, roots.len());
+                crate::posefind::start(roots, "key");
             }
             self.pose_key_down = down;
             let down = function_key_down(st.debug_cape_key);

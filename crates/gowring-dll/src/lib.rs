@@ -17,6 +17,7 @@ mod overlay;
 mod params;
 mod paths;
 mod pose;
+mod posefind;
 mod runtime;
 mod savehook;
 mod settings;

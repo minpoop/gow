@@ -42,14 +42,14 @@ impl Layout {
             Layout::Qs => "hkQsTransform",
         }
     }
-    fn stride(self) -> usize {
+    pub(crate) fn stride(self) -> usize {
         match self {
             Layout::M44 => 16,
             _ => 12,
         }
     }
     /// Does this element look like a bone transform?
-    fn valid(self, f: &[f32]) -> bool {
+    pub(crate) fn valid(self, f: &[f32]) -> bool {
         if f.iter().any(|x| !x.is_finite() || x.abs() > 1e4) {
             return false;
         }

@@ -663,3 +663,23 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
   hinges. Clip names are not linked to the clips yet, so locomotion was picked by motion: idle 0xff610, walk
   1.5 m/s 0x182fbd0, 2.05 m/s 0x18d75f0, run 3 m/s 0x1852180, sprint 6 m/s 0x18b41c0, 7.8 m/s 0x1c8edd0 (offsets
   in the player's ANM_heroa00 chunk). Next: step 2, read Elden Ring's live pose; then retarget onto its skeleton.
+
+## 0.1.89 — step 2: the pose search (2026-10-26)
+- Why: the offset arrays apply in rest space per bone (final = game skinning x offset, 0.1.69), so playing Kratos's
+  decoded motion needs the game's skinning each frame: offset = game skinning^-1 x Kratos's skinning. 0.1.68's probe
+  looked only within 64 bytes of where each pointer led, and found no moving array in the Havok skeleton's order.
+- gowring.dll `posefind`: scans the whole first 8 KB of every object (every 16 bytes) for runs of >= 100 transforms
+  (4x4 / 3x4 / 4x3 / hkQsTransform; a run reaching past the window is read whole, up to 512 entries), 4 pointers deep,
+  300,000 reads, 64 arrays, from more roots (character, chr model and its display / location entities, model item,
+  its bone-matrix entity and matrices exporter +0x650, behaviour module, hkbCharacter and its setup +0x90, pose
+  importer, anim-skeleton-to-model modifier). Then 6 snapshots 200 ms apart; logs each array's size, entries that
+  moved, and its read against the Havok skeleton in order (local / model / skinning) and in any order (translations
+  equal to a bone's rest offset); writes `er_pose_find_<n>.bin` (all snapshots of moving arrays). By itself 30, 90 and
+  150 s into the world and on F8 (`debug_pose_key`, settings version 17 for its note). Read-only, own thread.
+- `bonepose`: the old F8 hand/arm steps and their per-frame hooks (Draw_Pre stage call, the PostPhysics task) removed;
+  the offset helpers the cape uses stay. DLL tests 21/21 under wine (2 new for posefind).
+- Offline: `tools/ragnarok_anim/er_pose_find.py` reads the dumps: in-order scores, and for arrays in another order
+  the order recovered by walking the skeleton (a child's joint where its parent's transform puts it, in every
+  snapshot; siblings at one spot told apart by subtree size). Synthetic check (Havok skeleton, random poses, entries
+  shuffled with 40 identity pads): model space 112/150 bones placed, skinning 108/150, all main bones (pelvis, spine,
+  neck, head, upper arms, thighs) right; the misses are helpers at their parent's joint.

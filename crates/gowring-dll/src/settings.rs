@@ -36,8 +36,8 @@ pub struct Settings {
     pub debug_rage_key: u8,
     /// The function key that steps the close-up camera (chest, nearer, waist, off) for looking at Kratos's model.
     pub debug_camera_key: u8,
-    /// The function key that runs the pose probe (see `bonepose`): his hand and arm turned step by step through the
-    /// game's bone offsets, to learn how they combine with his pose.
+    /// The function key that runs the pose search (see `posefind`): where the game keeps his animated pose, for
+    /// giving Kratos his own movement. It also runs by itself 30, 90 and 150 s into the world.
     pub debug_pose_key: u8,
     /// The function key that switches the cape's swing off and on while playing (off: the cloak as built, carried by
     /// his bones), to compare the two.
@@ -133,7 +133,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 16;
+const FILE_VERSION: u32 = 17;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -209,7 +209,7 @@ fn render(s: &Settings) -> String {
   "_debug_camera_key": "Keyboard key (F1 to F12) that brings the camera close to Kratos, for looking at his model: each press steps chest, nearer, waist, then back to the normal camera. Turn it with the camera stick as usual.",
 
   "debug_pose_key": "F{pkey}",
-  "_debug_pose_key": "Keyboard key (F1 to F12) that runs the pose probe, a test for making his cloak move: for a few seconds each, his right hand is turned twice and then his left upper arm, with the step on screen. Say what each step did.",
+  "_debug_pose_key": "Keyboard key (F1 to F12) that runs the pose search, for giving Kratos his own movement: it looks for where the game keeps his animated pose while you walk or run for a few seconds (it also runs by itself 30, 90 and 150 seconds into the world). Nothing on screen changes; the results go to the log and to er_pose_find files beside it.",
 
   "debug_cape_key": "F{cape_key}",
   "_debug_cape_key": "Keyboard key (F1 to F12) that switches the swing of Kratos's cloak off and on while you play: off, the cloak hangs as it was built and only his back and hips carry it, so you can compare the two.",
@@ -468,7 +468,8 @@ fn migrated_text(text: &str) -> Option<String> {
     }
     // versions 3, 7-13 and 15 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
     // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key; 13: the cape; 15: the
-    // hair material for the fur): re-rendering the file shows them with their notes
+    // hair material for the fur; 16: the cape key; 17 only rewrote the pose key's note, now the pose search):
+    // re-rendering the file shows them with their notes
     Some(render(&s))
 }
 

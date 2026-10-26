@@ -388,7 +388,7 @@ impl ImguiRenderLoop for Overlay {
                 lines.push(format!("F{} (keyboard): summon a tough enemy", st.debug_spawn_key));
                 lines.push(format!("F{} (keyboard): fill Spartan Rage", st.debug_rage_key));
                 lines.push(format!("F{} (keyboard): close-up camera (press again to step, then off)", st.debug_camera_key));
-                lines.push(format!("F{} (keyboard): pose probe (turns his hand, then his arm)", st.debug_pose_key));
+                lines.push(format!("F{} (keyboard): pose search (walk or run for a few seconds)", st.debug_pose_key));
                 lines.push(format!("F{} (keyboard): cloak swing off / on (to compare)", st.debug_cape_key));
             }
             let lines = &lines;

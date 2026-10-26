@@ -170,29 +170,16 @@ pub fn run(hmodule: usize) {
             if let Err(e) = catch_unwind(AssertUnwindSafe(|| apply_camera(&req))) {
                 crate::log::once("camera-panic", "camera_offset", &format!("PANIC: {:?}", e.downcast_ref::<&str>()));
             }
-            if catch_unwind(|| crate::bonepose::on_stage(crate::bonepose::Stage::DrawPre)).is_err() {
-                crate::log::once("bonepose-panic", "bonepose", "PANIC in the pose probe before drawing");
-            }
             if catch_unwind(crate::cape::step).is_err() {
                 crate::log::once("cape-panic", "cape", "PANIC in the cape before drawing");
             }
         },
         CSTaskGroupIndex::Draw_Pre,
     );
-    // the pose probe's write after the characters' physics and cloth (see bonepose)
-    let h3 = cs_task.run_recurring(
-        move |_: &FD4TaskData| {
-            if catch_unwind(|| crate::bonepose::on_stage(crate::bonepose::Stage::PostPhysics)).is_err() {
-                crate::log::once("bonepose-panic-post", "bonepose", "PANIC in the pose probe after physics");
-            }
-        },
-        CSTaskGroupIndex::ChrIns_PostPhysicsSafe,
-    );
     // The handles cancel their tasks on drop; the mod lives as long as the process.
     std::mem::forget(h0);
     std::mem::forget(h1);
     std::mem::forget(h2);
-    std::mem::forget(h3);
     crate::testmode::TASKS_REGISTERED.store(true, std::sync::atomic::Ordering::SeqCst);
     crate::testmode::stage("tasks-registered");
     spawn_heartbeat();
