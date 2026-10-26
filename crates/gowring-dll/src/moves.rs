@@ -177,10 +177,14 @@ pub fn step() {
         crate::glog!("moves", "the game's pose by its offsets: {}", found.join("; "));
         s.wrote = false;
     }
-    let buffers: Vec<Buffer> = s.buffers.iter().filter_map(|b| b.1).collect();
+    let n = s.bones;
+    // only the model's own buffers (the most bones: the skeleton's and the model's extras). 0.1.92 found three more
+    // by 150-bone blocks that the game updated once or never in 40 frames (stale, or another model's), and wrote 143
+    // matrices a frame into them too until the game closed by itself at 3:05
+    let most = s.buffers.iter().filter_map(|b| b.1).map(|b| b.bones).max().unwrap_or(0);
+    let buffers: Vec<Buffer> = s.buffers.iter().filter_map(|b| b.1).filter(|b| b.bones == most && most > n).collect();
     let Some(first) = buffers.first().copied() else { return };
     // standing still? sampled every SAMPLE_S from the first buffer
-    let n = s.bones;
     if let Some(y) = read_vec::<f32>(first.skinning, n * 12).filter(|y| y.iter().all(|x| x.is_finite())) {
         let root = [y[3] as f64, y[7] as f64, y[11] as f64];
         let hands = [own_joint(&y, &s.bind, s.hands[0]), own_joint(&y, &s.bind, s.hands[1])];

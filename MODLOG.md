@@ -814,3 +814,14 @@ The player asked for the idle first, then a test.
 - Test 24ebccdc (0.1.92, 1 run): Melty: failed: the game closed by itself at 3:05 of 10:00 (played 115 s), no-fault
   never reported, the picture only ever dark; the other 7 checks passed. Waiting on the player (crash or not) and
   gowring.log.
+- The player sent three screenshots (Kratos's idle, the game's pose, the rest pose) and gowring.log; no word on
+  whether it crashed. The log stops at 163 s: no fault line, no exit record, heap fine at 30 s.
+  - Rest pose: arms out and down about 45 degrees, fingers straight: Elden Ring's bind. Every bone, the hands and
+    fingers too, takes the offsets; 0.1.91's flat "stretched" hands look like straight fingers.
+  - Kratos's idle: arms down at his sides, hands at his hips, as offline. Axe still where the game's hand holds it.
+  - Trace: the game writes each 181-bone buffer's skinning, and puts its offsets back to the identity, at
+    ChrIns_PostPhysics, the two buffers on alternate frames (19-20 of 40 each); nothing changes them after
+    Draw_Pre, so the hand-IK theory is out. In the first trace (61 s) neither changed in 40 frames (the game not
+    animating him then). The three 150-bone blocks changed once or never: not the model's.
+  - Fix (next build): Kratos's pose goes only into the model's own buffers (the most bones, more than the
+    skeleton's), not the 150-bone blocks it wrote 143 matrices a frame into until the close.
