@@ -784,3 +784,8 @@ The player asked for the idle first, then a test.
   pose now). livepose keeps only `locate`; its timed checks (which switched the cape off) are gone.
 - Known risk: his weapons are placed by the game from its own hand bones, so they may float off his hands while
   the idle plays.
+- Test b8ad34a3 (0.1.91, 1 run): stopped in Melty at 495 s (all 8 checks heard, no crash recorded). The player
+  (screenshot): "the animation is there but both hands are stretched into his legs and the arm on the left is
+  fucked up", "and the axe is floating". Offline (`moves_joint_errors`): every joint's geometry within 9 cm of his
+  own pose (hands 4-7 cm), so the stretching comes from the game side: the block located, or bones that do not
+  take the offsets. Waiting on gowring.log.
