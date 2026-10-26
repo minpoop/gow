@@ -685,3 +685,22 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
   neck, head, upper arms, thighs) right; the misses are helpers at their parent's joint.
 - Test 4e994fef (0.1.89, 1 run): Melty: passed, all 8 checks, ran 10:00, no crash recorded, played 255 s (299
   frames). Waiting on the player's gowring.log and er_pose_find_1-3.bin for the analysis.
+- The player: "no the game ran fine"; sent gowring.log and er_pose_find_1-3.bin. Three rounds (86, 146, 206 s), each
+  64 arrays from 7,800 objects in ~230 ms (116k-190k reads), 18-19 moving. None is the pose:
+  - `entity+0x30` holds six arrays in two buffers: +0x4e8/+0x4f0 (181 x 3x4), +0x4f8/+0x500 (55), +0x508/+0x510 (the
+    offsets: identity but the cape's four bones 28/49/126/129). The 181 and 55 are world-space (about (9.3, 7.1,
+    2.4), the whole character within centimetres) with runs of identical entries (4-23, 24-62 the same matrix); the
+    cape's bones do not show in them, so they are not the final skinning in skeleton order.
+  - `entity+0x7f0` and its neighbours: groups of six moving world transforms (0-5, 54-59, 81-86, 135-140) among
+    identities: attachment points, not bones.
+  - `display entity+0x390+0x3c8`: 468 x 3x4 in map coordinates (310, 15.6, 324), all moving; walking the skeleton
+    through it (any order) explains at most 5 bones of any subtree: not the Havok skeleton's world transforms.
+  - Every hkQsTransform array found (hkbCharacter+0xf8, setup+0x68, chr model+0x158+0x20: the reference pose, 149
+    of 149 in order) is static.
+  - Offline checks: `scratchpad/in_pose89/` (links.py, fixedpt.py, pairs.py, subtrees.py).
+- A flaw in that reasoning: the 181/55 world arrays were ruled out partly because the cape's bones do not show in
+  them. But if the offsets are composited on the GPU (skinning and offsets uploaded apart, multiplied in the vertex
+  shader), the pre-offset animated pose would never show them, so that is not evidence against an array. The 181/55
+  still fail on other grounds (runs of identical entries; counts that are not the 149-bone skeleton's).
+- Open question: where the live animated pose is. Not settled; direction to be agreed with the player before more
+  probe code (the watchpoint idea is dropped).
