@@ -19,6 +19,7 @@ pub mod lz4;
 pub mod diagnose;
 pub mod hudmap;
 pub mod kratos;
+pub mod kratos_anim;
 pub mod kratos_look;
 pub mod kratos_part;
 pub mod oodle;

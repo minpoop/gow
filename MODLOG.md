@@ -755,3 +755,32 @@ animated.py, check.py, bindeq.py, skinmatch.py, nontrivial.py, synth.py).
     skinning on their parents' within 0.0003 both ways. The skinning is before the offsets, for certain.
   - Step 2 done: the live pose is the 181-entry skinning block just before each offset array, Havok order, the
     skeleton's bind; offset = skinning^-1 x the skinning wanted.
+
+## 0.1.91 — step 3 begins: Kratos's own idle while standing still (2026-10-26)
+
+The player asked for the idle first, then a test.
+- Builder: `gowring_gow::kratos_anim`, a Rust port of the research decoder (`dec.py`, `anim.py`): HADO default pose
+  and group ranges (records at HADO+0xc0+10i: slot count at +0, 0 = 256, first slot at +6), slot -> joint by rest
+  match in increasing order, CADO groups, sections, track order, blocks, keys, the four rotation kinds and the
+  constants. Against the Python decoder on the idle (CADO 0xff610, hash 0x2950eb3e, 61 frames at 30 fps): the same
+  slot map (1264 of 1268 slots on joints) and world matrices within 6e-8 (`idle_matches_the_research_decoder`,
+  ignored test on the probe files).
+- Retargeting onto the player skeleton through the mesh's own re-posing (`retarget`, his skeleton mirrored in x,
+  scale 0.92): per Elden Ring bone, the nearest of his joints that weigh on it is its anchor; the bone's skinning
+  (model space) turns as `animated x bind^-1 x moves^-1` of that joint (geometry on it follows him exactly) and its
+  joint goes where its parent's skinning puts it (the first anchored bone of a chain where its own does), so limbs
+  stay joined at the player's proportions; bones with no anchor follow their parent; his root motion (joint 5) is
+  pinned. On the real skeletons: 50 of 150 bones anchored, the pelvis at 0.95 m (rest 0.97), feet planted at their
+  rest height 0.11 m, every bone its rest length (Pelvis and Spine move 2-3 cm off RootPos: the bob); a wide stance,
+  left foot forward, both arms bent in front (`scratchpad/anim_ref/idle_on_er.png`). `kratos_moves.bin` ("GRMV" v1:
+  bones, clips; per clip name, fps, frames x bones x 12 f32). Launcher BUILD 39 (rebuilds once to add it).
+- gowring.dll `moves`: each frame after the cape, for each buffer: offset = Y^-1 x C x K (C = Y[Master], K the
+  clip's model-space skinning, frames interpolated, looped), times the cape's own offset on its four bones (the cape
+  now shares them: `cape::current_offsets`); bones 7-149 in one WriteProcessMemory per buffer, only while Master
+  still reads as the identity. Shown while he stands still in the game's own pose (root < 0.3 m/s, hands < 0.6 m/s
+  in his frame, sampled every 0.2 s, for 0.4 s): in over 0.3 s, out over 0.12 s; F8 switches it (settings v19 for
+  the note). On 0.1.90's real skinning the offsets give exactly C x K (1e-14), upright, feet at the game's ground.
+- The cape's check before writing now reads Master and the two foot IK targets (RootPos and Pelvis carry Kratos's
+  pose now). livepose keeps only `locate`; its timed checks (which switched the cape off) are gone.
+- Known risk: his weapons are placed by the game from its own hand bones, so they may float off his hands while
+  the idle plays.

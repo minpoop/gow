@@ -193,9 +193,6 @@ impl Runtime {
                 crate::filecaps::start_once(b, self.bridge.player_model_item());
             }
         }
-        if let Some(t) = self.entered_at {
-            crate::livepose::tick(t.elapsed().as_secs_f32(), || self.bridge.player_model_item());
-        }
         self.observe_for_tests();
         self.upkeep(&frame);
 
@@ -227,8 +224,9 @@ impl Runtime {
             self.camera_key_down = down;
             let down = function_key_down(st.debug_pose_key);
             if down && !self.pose_key_down {
-                crate::glog!("debug", "F{} pressed: pose check", st.debug_pose_key);
-                crate::livepose::start(self.bridge.player_model_item(), "key");
+                let on = crate::moves::toggle();
+                crate::glog!("debug", "F{} pressed: Kratos's own idle {}", st.debug_pose_key, if on { "on" } else { "off (the game's pose)" });
+                crate::overlay::toast(if on { "Kratos's idle on (debug)" } else { "Kratos's idle off: the game's pose (debug)" });
             }
             self.pose_key_down = down;
             let down = function_key_down(st.debug_cape_key);

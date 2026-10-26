@@ -80,8 +80,9 @@ const HEADWIND: f32 = 0.8;
 const INERTIA: f32 = 0.6;
 const TURN: f32 = 0.25;
 const TURN_MAX: f32 = 8.0;
-/// Bones whose offsets must read as the identity for an array to be written (nothing offsets the root).
-const ROOTS: [&str; 3] = ["Master", "RootPos", "Pelvis"];
+/// Bones whose offsets must read as the identity for an array to be written: the root and the feet's IK targets,
+/// which nothing offsets (Kratos's own moves, `moves`, offset RootPos and Pelvis, so they no longer can be checked).
+const ROOTS: [&str; 3] = ["Master", "L_Foot_Target", "R_Foot_Target"];
 /// The least time between searches (s).
 const SEARCH_EVERY_S: f32 = 10.0;
 /// Seconds between status lines in the log.
@@ -143,14 +144,17 @@ pub fn toggle() -> bool {
     !ENABLED.fetch_xor(true, Ordering::Relaxed)
 }
 
-/// Switch the swing on or off (`livepose` turns it off for a second); true when it was on.
-pub(crate) fn set_enabled(on: bool) -> bool {
-    ENABLED.swap(on, Ordering::Relaxed)
-}
-
 /// The offset arrays found for the player's model (none until the search has run, or with no cape rig).
 pub(crate) fn offset_arrays() -> Vec<usize> {
     ARRAYS.lock().map(|a| a.0.clone()).unwrap_or_default()
+}
+
+/// This frame's chain bone offsets (bone, row-major 3x4), for `moves` to put on top of Kratos's pose; none while the
+/// swing is off.
+static CURRENT: Mutex<Vec<(usize, [f32; 12])>> = Mutex::new(Vec::new());
+
+pub(crate) fn current_offsets() -> Vec<(usize, [f32; 12])> {
+    CURRENT.lock().map(|c| c.clone()).unwrap_or_default()
 }
 
 fn add(a: V3, b: V3) -> V3 {
@@ -364,6 +368,9 @@ pub fn step() {
     }
     // switched off: the chain bones back at rest once, then nothing written until it is on again (and starts at rest)
     if !ENABLED.load(Ordering::Relaxed) {
+        if let Ok(mut cur) = CURRENT.lock() {
+            cur.clear();
+        }
         if c.started {
             for addr in &arrays {
                 for bone in c.chains.iter().flat_map(|ch| ch.bones.iter()) {
@@ -512,6 +519,9 @@ pub fn step() {
             let t = sub(pm[k], mv(&r, chain.rest[k]));
             out.push((chain.bones[k], [r[0][0], r[0][1], r[0][2], t[0], r[1][0], r[1][1], r[1][2], t[1], r[2][0], r[2][1], r[2][2], t[2]]));
         }
+    }
+    if let Ok(mut cur) = CURRENT.lock() {
+        cur.clone_from(&out);
     }
     for addr in &arrays {
         for (bone, mat) in &out {

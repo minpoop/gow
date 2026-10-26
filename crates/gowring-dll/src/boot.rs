@@ -173,6 +173,9 @@ pub fn run(hmodule: usize) {
             if catch_unwind(crate::cape::step).is_err() {
                 crate::log::once("cape-panic", "cape", "PANIC in the cape before drawing");
             }
+            if catch_unwind(crate::moves::step).is_err() {
+                crate::log::once("moves-panic", "moves", "PANIC in Kratos's moves before drawing");
+            }
         },
         CSTaskGroupIndex::Draw_Pre,
     );
@@ -183,7 +186,7 @@ pub fn run(hmodule: usize) {
     crate::testmode::TASKS_REGISTERED.store(true, std::sync::atomic::Ordering::SeqCst);
     crate::testmode::stage("tasks-registered");
     spawn_heartbeat();
-    crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, pose probe @ ChrIns_PostPhysicsSafe, camera and cape @ Draw_Pre)");
+    crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, pose probe @ ChrIns_PostPhysicsSafe, camera, cape and Kratos's moves @ Draw_Pre)");
 }
 
 struct Hudhook;

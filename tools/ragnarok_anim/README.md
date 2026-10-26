@@ -5,7 +5,7 @@ kratos probe). Nothing from the game is in this folder: point `KRATOS_PROBE` at 
 folder, and outputs (`*.pkl`, `*.png`, `*.gif`, all derived from the player's files) go to `RAGNAROK_ANIM_OUT`
 (default: this folder, git-ignored). Run every script with `python3 -I`.
 
-The format is written up in `NOTES.md`. The Rust port for the builder will follow it.
+The format is written up in `NOTES.md`. The builder's Rust port is `crates/gowring-gow/src/kratos_anim.rs` (checked against `anim.py`).
 
 | script | does |
 |---|---|

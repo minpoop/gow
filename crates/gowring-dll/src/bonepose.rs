@@ -82,48 +82,6 @@ pub(crate) fn inverse(m: &[[f64; 4]; 4]) -> Option<[[f64; 4]; 4]> {
     Some(inv)
 }
 
-/// How many of the skeleton's parent-child links sit at their rest offset when `floats` (row-major 3x4) are read as
-/// skinning matrices in the skeleton's order: (matched, links). `None` when the array is shorter than the skeleton.
-pub fn skin_match(floats: &[f32], bones: &[Bone]) -> Option<(usize, usize)> {
-    skin_match_except(floats, bones, &[])
-}
-
-/// [`skin_match`] leaving out the links of the bones in `skip` (bones the mod writes itself, see `cape`).
-pub fn skin_match_except(floats: &[f32], bones: &[Bone], skip: &[usize]) -> Option<(usize, usize)> {
-    if floats.len() < bones.len() * 12 || bones.is_empty() {
-        return None;
-    }
-    let bind = bind_pose(bones);
-    let model: Vec<[[f64; 4]; 4]> = (0..bones.len())
-        .map(|i| {
-            let f = &floats[i * 12..i * 12 + 12];
-            let mut s = [[0.0; 4]; 4];
-            for r in 0..3 {
-                for c in 0..4 {
-                    s[r][c] = f[r * 4 + c] as f64;
-                }
-            }
-            s[3][3] = 1.0;
-            mul(&s, &bind[i])
-        })
-        .collect();
-    let (mut matched, mut links) = (0, 0);
-    for (i, b) in bones.iter().enumerate() {
-        let Some(p) = usize::try_from(b.parent).ok().filter(|p| *p < i) else { continue };
-        if skip.contains(&i) || skip.contains(&p) {
-            continue;
-        }
-        let Some(inv) = inverse(&model[p]) else { continue };
-        links += 1;
-        let local = mul(&inv, &model[i]);
-        let d: f64 = (0..3).map(|k| (local[k][3] - b.t[k] as f64).powi(2)).sum::<f64>().sqrt();
-        if d < 0.01 {
-            matched += 1;
-        }
-    }
-    Some((matched, links))
-}
-
 /// Write `v` at `addr` through `WriteProcessMemory` on our own process (fails cleanly on memory that is not there).
 pub(crate) fn write_floats(addr: usize, v: &[f32]) -> bool {
     use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;

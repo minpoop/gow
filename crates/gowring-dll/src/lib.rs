@@ -14,6 +14,7 @@ mod host;
 mod livepose;
 mod log;
 mod mimir_text;
+mod moves;
 mod overlay;
 mod params;
 mod paths;

@@ -296,7 +296,7 @@ const OUTFIT_PROBE_PARTS: [u16; 22] = [230, 235, 224, 205, 206, 207, 208, 209, 2
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 38;
+    const BUILD: u32 = 39;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {
@@ -338,7 +338,7 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
         .iter()
         .zip([9701, 9702, 9703, 9700])
         .flat_map(|(slot, id)| ["m", "f"].iter().flat_map(move |sex| ["", "_l"].iter().map(move |low| format!("{slot}_{sex}_{id}{low}.partsbnd.dcx"))))
-        .chain([gowring_gow::kratos_part::CAPE_RIG_FILE.to_string()])
+        .chain([gowring_gow::kratos_part::CAPE_RIG_FILE.to_string(), gowring_gow::kratos_anim::MOVES_FILE.to_string()])
         .collect();
     let cached = std::fs::read_to_string(cache.join("stamp.txt")).is_ok_and(|s| s == stamp) && names.iter().all(|n| cache.join(n).exists());
     let t0 = std::time::Instant::now();
@@ -358,7 +358,19 @@ fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
             let wad_dir = pack.parent().unwrap_or(gow).to_path_buf();
             let (looks, look_note) = gowring_gow::kratos_look::outfit_looks(buf, es, &wad_dir, &materials, gowring_gow::kratos_part::STRANDS, gowring_gow::kratos_part::MAX_TEXTURE, gowring_gow::kratos_part::MAX_SURFACE, outfit.dyed());
             ctx.log(&format!("play: Kratos's look in {:.1}s for {} materials: {look_note}", t1.elapsed().as_secs_f32(), materials.len()));
-            let (files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks, outfit, cape, hair_fur)?;
+            let (mut files, note) = build_parts(mesh, mg, gpu, &pack, skeleton.as_deref(), kratos.as_ref(), &looks, outfit, cape, hair_fur)?;
+            // his own moves (gowring_gow::kratos_anim): his Ragnarök clips decoded and put on the player skeleton, for
+            // gowring.dll to play; a file with no clips when they cannot be built
+            let t2 = std::time::Instant::now();
+            let (moves, moves_note) = match (chunk("ANM_heroa00", 1), kratos.as_ref(), skeleton.as_deref()) {
+                (Some(anm), Some(k), Some(er)) if er.len() > 1 => match gowring_gow::kratos_anim::build_moves(anm, k, er, gowring_gow::kratos_part::SCALE) {
+                    Ok(built) => built,
+                    Err(e) => (gowring_gow::kratos_anim::moves_file(er.len(), &[]), format!("could not build them: {e:#}")),
+                },
+                _ => (gowring_gow::kratos_anim::moves_file(0, &[]), "none (no ANM_heroa00 chunk, or no skeleton of his or the player's)".into()),
+            };
+            ctx.log(&format!("play: Kratos's moves in {:.1}s: {moves_note}", t2.elapsed().as_secs_f32()));
+            files.push((gowring_gow::kratos_anim::MOVES_FILE.into(), moves));
             // for the next round: the fur's, strap's and waist pieces' maps, and the cloak, strap, waist and chest pieces
             // with their UVs (`outfit_probe`)
             let probe = ctx.local.join("outfit_probe");
