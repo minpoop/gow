@@ -740,3 +740,5 @@ animated.py, check.py, bindeq.py, skinmatch.py, nontrivial.py, synth.py).
   cape on and off. Dump `er_pose_live_<n>.bin` (the GRPF format, version 2: cape-off range and read times);
   offline `tools/ragnarok_anim/er_pose_live.py` (the same tests, a stick-figure contact sheet). Settings v18 (the
   pose key's note). The host's ChrIns and model-ins accessors, only the search used, are gone.
+- Test 78aa54e9 (0.1.90, 1 run): Melty: passed, all 8 checks, ran 10:00, no crash recorded, played 280 s (300
+  frames). Waiting on the player's gowring.log and er_pose_live_1-3.bin.
