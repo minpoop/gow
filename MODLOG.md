@@ -683,3 +683,5 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
   snapshot; siblings at one spot told apart by subtree size). Synthetic check (Havok skeleton, random poses, entries
   shuffled with 40 identity pads): model space 112/150 bones placed, skinning 108/150, all main bones (pelvis, spine,
   neck, head, upper arms, thighs) right; the misses are helpers at their parent's joint.
+- Test 4e994fef (0.1.89, 1 run): Melty: passed, all 8 checks, ran 10:00, no crash recorded, played 255 s (299
+  frames). Waiting on the player's gowring.log and er_pose_find_1-3.bin for the analysis.
