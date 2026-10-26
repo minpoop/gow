@@ -980,6 +980,56 @@ mod tests {
         assert!(worst < 1e-4, "{worst}");
     }
 
+    /// Where the geometry on each of his joints goes on the Elden Ring bone it weighs on, against where his own
+    /// animation takes it (frame 0): the worst joints, with their bone and whether a pose slot drives them.
+    #[test]
+    #[ignore]
+    fn moves_joint_errors() {
+        let (Ok(anm), Ok(proto), Ok(er)) = (std::env::var("GOWRING_ANM"), std::env::var("GOWRING_GOPROTO"), std::env::var("GOWRING_ER_SKELETON")) else { return };
+        let anm = std::fs::read(anm).unwrap();
+        let sk = Skeleton::parse(&std::fs::read(proto).unwrap()).unwrap();
+        let er = crate::kratos_part::skeleton_nodes(&std::fs::read_to_string(er).unwrap()).unwrap();
+        let hado = Hado::parse(&anm).unwrap();
+        let slots = slot_joints(&hado, &sk).unwrap();
+        let driven: std::collections::HashSet<usize> = slots.iter().flatten().copied().collect();
+        let mirrored = sk.mirrored_x();
+        let scale = crate::kratos_part::SCALE;
+        let r = crate::retarget::retarget(&mirrored, scale, &er).unwrap();
+        let (fps, world) = decode_clip(&anm, find_clip(&anm, CLIPS[0].1).unwrap(), &hado, &sk, &slots).unwrap();
+        let clip = retarget_clip("idle", fps, &world, &mirrored, scale as f64, &r, &er).unwrap();
+        // his own: geometry point p (his bind) goes to pinned animated x bind^-1 x p
+        let n = sk.parent.len();
+        let fix = |m: &M| -> M { let mut o = *m; for k in 1..4 { o[0][k] = -o[0][k]; o[k][0] = -o[k][0]; } for row in o.iter_mut().take(3) { row[3] *= scale as f64; } o };
+        let mut kw: Vec<M> = world[0].iter().map(fix).collect();
+        let mut rw: Vec<M> = Vec::new();
+        for j in 0..n { let l = rows(&mirrored.local[j]); let p = mirrored.parent[j]; rw.push(if p < 0 { l } else { mul(&rw[p as usize], &l) }); }
+        let mut root = rw[ROOT_JOINT]; for row in root.iter_mut().take(3) { row[3] *= scale as f64; }
+        let pin = mul(&root, &invert(&kw[ROOT_JOINT]).unwrap());
+        for m in kw.iter_mut() { *m = mul(&pin, m); }
+        let mut rows_out = Vec::new();
+        for j in 0..n {
+            if !r.deforms[j] { continue; }
+            let mut b = invert(&rows(&mirrored.inverse_bind[j])).unwrap(); for row in b.iter_mut().take(3) { row[3] *= scale as f64; }
+            let p = r.bind_positions[j].map(|x| x as f64);
+            let own = { let m = mul(&kw[j], &invert(&b).unwrap()); [0, 1, 2].map(|k| m[k][0] * p[0] + m[k][1] * p[1] + m[k][2] * p[2] + m[k][3]) };
+            let mv = &r.moves[j];
+            let q: [f64; 3] = std::array::from_fn(|row| mv[0][row] as f64 * p[0] + mv[1][row] as f64 * p[1] + mv[2][row] as f64 * p[2] + mv[3][row] as f64);
+            let bone = r.bone[j] as usize;
+            let s = &clip.frames[0][bone];
+            let ours: [f64; 3] = std::array::from_fn(|k| s[4 * k] as f64 * q[0] + s[4 * k + 1] as f64 * q[1] + s[4 * k + 2] as f64 * q[2] + s[4 * k + 3] as f64);
+            let e = ((own[0] - ours[0]).powi(2) + (own[1] - ours[1]).powi(2) + (own[2] - ours[2]).powi(2)).sqrt();
+            rows_out.push((e, j, er[bone].name.clone(), driven.contains(&j), mirrored.parent[j], own, ours));
+        }
+        rows_out.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for (e, j, b, d, par, own, ours) in rows_out.iter().take(40) {
+            println!("{e:.3} m  joint {j} (parent {par}, {}) on {b}: his {:?} ours {:?}", if *d { "driven" } else { "procedural" }, own.map(|x| (x * 100.0).round() / 100.0), ours.map(|x| (x * 100.0).round() / 100.0));
+        }
+        let mut per_bone: std::collections::BTreeMap<String, (usize, f64)> = Default::default();
+        for (e, _, b, ..) in &rows_out { let x = per_bone.entry(b.clone()).or_default(); x.0 += 1; x.1 = x.1.max(*e); }
+        let mut pb: Vec<_> = per_bone.into_iter().collect(); pb.sort_by(|a, b| b.1 .1.total_cmp(&a.1 .1));
+        println!("per bone (joints, worst m): {:?}", pb.iter().take(20).map(|(b, (c, e))| format!("{b} {c} {e:.2}")).collect::<Vec<_>>());
+    }
+
     /// The moves file from the player's own files, for a look offline: as above plus `GOWRING_ER_SKELETON=
     /// er_skeleton.json GOWRING_MOVES_OUT=file` (`cargo test -p gowring-gow moves_from -- --ignored --nocapture`).
     #[test]
