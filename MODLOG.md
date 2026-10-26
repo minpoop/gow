@@ -811,3 +811,6 @@ The player asked for the idle first, then a test.
   tasks) for 40 frames and logs, per bone group (body, arms, hands, weapons, IK targets), how many reads changed
   since the read before.
 - Launcher BUILD 40 (the anchors).
+- Test 24ebccdc (0.1.92, 1 run): Melty: failed: the game closed by itself at 3:05 of 10:00 (played 115 s), no-fault
+  never reported, the picture only ever dark; the other 7 checks passed. Waiting on the player (crash or not) and
+  gowring.log.
