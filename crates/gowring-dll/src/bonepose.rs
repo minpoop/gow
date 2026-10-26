@@ -7,7 +7,8 @@
 //! them on alternate frames. They are offsets on top of the animated pose, applied in rest (bind) space per bone:
 //! final skinning = the game's skinning x offset, not passed to the bone's children (the right hand turned about its
 //! rest position stayed on the spear; the upper arm turned without the forearm). Their path from the model item moves
-//! between sessions, so they are found by search each time. The animated pose itself is `posefind`'s question.
+//! between sessions, so they are found by search each time. The animated pose they go on is just before them
+//! (`livepose`).
 
 use crate::pose::{Found, Layout};
 use crate::skeleton::Bone;
@@ -47,7 +48,7 @@ pub(crate) fn bind_pose(bones: &[Bone]) -> Vec<[[f64; 4]; 4]> {
     out
 }
 
-fn mul(a: &[[f64; 4]; 4], b: &[[f64; 4]; 4]) -> [[f64; 4]; 4] {
+pub(crate) fn mul(a: &[[f64; 4]; 4], b: &[[f64; 4]; 4]) -> [[f64; 4]; 4] {
     let mut m = [[0.0; 4]; 4];
     for i in 0..4 {
         for j in 0..4 {
@@ -58,7 +59,7 @@ fn mul(a: &[[f64; 4]; 4], b: &[[f64; 4]; 4]) -> [[f64; 4]; 4] {
 }
 
 /// The inverse of an affine 4x4 (3x3 by its adjugate), if its 3x3 part is not singular.
-fn inverse(m: &[[f64; 4]; 4]) -> Option<[[f64; 4]; 4]> {
+pub(crate) fn inverse(m: &[[f64; 4]; 4]) -> Option<[[f64; 4]; 4]> {
     let a = |i: usize, j: usize| m[i][j];
     let det = a(0, 0) * (a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1)) - a(0, 1) * (a(1, 0) * a(2, 2) - a(1, 2) * a(2, 0)) + a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0));
     if det.abs() < 1e-9 {

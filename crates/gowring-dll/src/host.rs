@@ -382,21 +382,6 @@ impl Bridge {
         Some(&**b as *const _ as usize)
     }
 
-    /// The address of the player's `ChrIns`, for the pose probe (fields the eldenring crate keeps private).
-    pub fn player_chr_ins(&self) -> Option<usize> {
-        let wcm = unsafe { WorldChrMan::instance() }.ok()?;
-        let player = wcm.main_player.as_ref()?;
-        Some(&player.chr_ins as *const ChrIns as usize)
-    }
-
-    /// The address of the player's `CSChrModelIns` (its model item, display and location entities), for the pose
-    /// search. Null while the game rebuilds him (see [`model_item_of`]).
-    pub fn player_chr_model_ins(&self) -> Option<usize> {
-        let wcm = unsafe { WorldChrMan::instance() }.ok()?;
-        let player = wcm.main_player.as_ref()?;
-        opt(&player.chr_ins.chr_model_ins).map(|m| m as *const _ as usize)
-    }
-
     /// The address of the player's model item (`CSFD4ModelItem`, which holds its bone matrices), for the pose probe.
     pub fn player_model_item(&self) -> Option<usize> {
         let wcm = unsafe { WorldChrMan::instance() }.ok()?;

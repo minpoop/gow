@@ -143,6 +143,16 @@ pub fn toggle() -> bool {
     !ENABLED.fetch_xor(true, Ordering::Relaxed)
 }
 
+/// Switch the swing on or off (`livepose` turns it off for a second); true when it was on.
+pub(crate) fn set_enabled(on: bool) -> bool {
+    ENABLED.swap(on, Ordering::Relaxed)
+}
+
+/// The offset arrays found for the player's model (none until the search has run, or with no cape rig).
+pub(crate) fn offset_arrays() -> Vec<usize> {
+    ARRAYS.lock().map(|a| a.0.clone()).unwrap_or_default()
+}
+
 fn add(a: V3, b: V3) -> V3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }

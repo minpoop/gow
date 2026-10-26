@@ -33,9 +33,20 @@ def skeleton(path):
 
 
 def read_dump(path):
+    return read_dump_meta(path)[0]
+
+
+def read_dump_meta(path):
+    """(arrays, meta). Version 2 (er_pose_live, 0.1.90 on) adds after the header the first and last+1 snapshot taken
+    with the cape off and each snapshot's ms since the first."""
     b = open(path, 'rb').read()
     assert b[:4] == b'GRPF', b[:4]
     ver, n, snaps = struct.unpack_from('<3I', b, 4); o = 16
+    meta = dict(version=ver, snapshots=snaps)
+    if ver >= 2:
+        off0, off1 = struct.unpack_from('<2I', b, o); o += 8
+        meta['cape_off'] = range(off0, off1)
+        meta['ms'] = list(struct.unpack_from(f'<{snaps}I', b, o)); o += 4 * snaps
     out = []
     for _ in range(n):
         ln, = struct.unpack_from('<I', b, o); o += 4
@@ -45,7 +56,7 @@ def read_dump(path):
         f = np.frombuffer(b, '<f4', count=kept * count * stride, offset=o).reshape(kept, count, stride).astype(float)
         o += kept * count * stride * 4
         out.append(dict(path=name, address=addr, layout=LAYOUTS[layout], count=count, snaps=f))
-    return out
+    return out, meta
 
 
 def matrices(a):

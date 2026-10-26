@@ -16,3 +16,5 @@ The format is written up in `NOTES.md`. The Rust port for the builder will follo
 | `survey.py` | decode all 1,289 clips in ANM_heroa00 and record root speed, turn and loop error |
 | `render.py`, `render_anm.py`, `gif.py` | stick-figure contact sheets and an animated preview |
 | `cado.py`, `groups.py`, `bits.py`, `quat.py`, `skel.py`, `hado.py`, `sent.py`, `hx.py` | parsing helpers |
+| `er_pose_find.py` | Elden Ring side: read gowring.dll's 0.1.89 pose search dumps (`er_pose_find_<n>.bin`) against `er_skeleton.json` |
+| `er_pose_live.py` | Elden Ring side: read its live pose checks (`er_pose_live_<n>.bin`, 0.1.90 on): links at rest, joints, the cape check, a contact sheet |

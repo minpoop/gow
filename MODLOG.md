@@ -704,3 +704,39 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
   still fail on other grounds (runs of identical entries; counts that are not the 149-bone skeleton's).
 - Open question: where the live animated pose is. Not settled; direction to be agreed with the player before more
   probe code (the watchpoint idea is dropped).
+
+## 0.1.89's dumps read again: the live pose found; 0.1.90 — checked in play (2026-10-26)
+
+The player chose a wider read-only search with the cape switched off and on. Reading the dumps again first found
+the pose in them, so 0.1.90 checks it instead of searching (`scratchpad/an90/`: look.py, palette.py, lengths2.py,
+animated.py, check.py, bindeq.py, skinmatch.py, nontrivial.py, synth.py).
+- The "arrays" at `mtx43 array entity+0x30` +0x4e8 / +0x4f8 / +0x508 are three arrays of 181 x 3x4 back to back
+  (call them X, Y, offsets), not runs of 139 / 320 / 265: the run search started 0x17a0 bytes (126 entries) into X,
+  whose entries 0-125 failed its unit-row test, and read across the boundaries. The same in the other buffer
+  (+0x4f0 / +0x500 / +0x510).
+- The model's bind pose is in the dumps too (`entity+0x540+0x70`, 181, static; its inverse at `+0x268`) and equals
+  the skeleton's for all 150 Havok bones, translation and rotation; the other 31 are the model's own. The model's
+  bone order is Havok's.
+- Y is the game's skinning (world x bind^-1, per bone, row-major) in that order: 103 of 107 links at rest (74 of
+  the 78 whose entries differ); the misses are Pelvis and RootRotY (animated translation) and SpineArmor1/2 (the
+  armour). A real pose: in his model space the pelvis 3 cm low, the left hand 0.54 m off its bind at (0.05, 0.99,
+  -0.23) (the two-handed idle), the feet apart front to back; the same idle in all three rounds (he stood still
+  each time), breathing 6-17 mm.
+- Y is before the offsets: the four Mantle bones' entries equal their parents' to 0.0003 while the cape's offsets
+  turned them 3.0-4.7 degrees (0.07-0.08 off the identity). So for step 3, offset = Y^-1 x the skinning wanted,
+  with Y read each frame. (The GPU-composite reading of the note above holds.)
+- Why the searches missed it: runs merged neighbouring arrays; and Y's bone 84 (L_Pectoral) has non-unit rows
+  (the body's scale), which the 2 % unit-row test refused, ending the run before Neck, Head and the right arm
+  (entries 84-125 were never read).
+- Master's bind turns 90 degrees about the vertical: his model space is Master's skinning undone, not its world
+  transform.
+- 0.1.90: `livepose` replaces `posefind` (removed). For each offset array (the cape's, or searched for as the cape
+  does), the block just before it at the smallest bone count at which at least 80 % of at least 30 differing links
+  sit at rest. On a memory image built from the real data ([junk][X][Y][offsets], the unread bones at rest on
+  their parents): n = 181 found; misaligned blocks 21-59 %; X at n = 362 also passes, after Y. Then, 2 s after a
+  toast, 40 reads 100 ms apart of X, Y and the offsets of both buffers, the cape switched off for reads 15-24
+  (`cape::set_enabled`, put back by a guard). The log: links at rest per read, the root's travel, nine joints in
+  model space (off bind, how far they went), and per cape bone its offset and its skinning against its parent's,
+  cape on and off. Dump `er_pose_live_<n>.bin` (the GRPF format, version 2: cape-off range and read times);
+  offline `tools/ragnarok_anim/er_pose_live.py` (the same tests, a stick-figure contact sheet). Settings v18 (the
+  pose key's note). The host's ChrIns and model-ins accessors, only the search used, are gone.
