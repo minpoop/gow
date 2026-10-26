@@ -36,7 +36,8 @@ pub struct Settings {
     pub debug_rage_key: u8,
     /// The function key that steps the close-up camera (chest, nearer, waist, off) for looking at Kratos's model.
     pub debug_camera_key: u8,
-    /// The function key that switches Kratos's own idle (see `moves`) off and on: off, the game's pose.
+    /// The function key that cycles what standing still shows (see `moves`): Kratos's idle, it with the game's arms,
+    /// Elden Ring's rest pose (a check), the game's pose.
     pub debug_pose_key: u8,
     /// The function key that switches the cape's swing off and on while playing (off: the cloak as built, carried by
     /// his bones), to compare the two.
@@ -132,7 +133,7 @@ impl Default for Settings {
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 19;
+const FILE_VERSION: u32 = 20;
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -208,7 +209,7 @@ fn render(s: &Settings) -> String {
   "_debug_camera_key": "Keyboard key (F1 to F12) that brings the camera close to Kratos, for looking at his model: each press steps chest, nearer, waist, then back to the normal camera. Turn it with the camera stick as usual.",
 
   "debug_pose_key": "F{pkey}",
-  "_debug_pose_key": "Keyboard key (F1 to F12) that switches Kratos's own idle off and on: on, he stands the way he does in Ragnarök whenever you stand still; off, the game's own pose.",
+  "_debug_pose_key": "Keyboard key (F1 to F12) that cycles what you see when you stand still: Kratos's own idle (the way he stands in Ragnarök), his idle with the game's arms (so the weapon stays in his hands), Elden Ring's plain rest pose (a check for testing), and the game's own pose.",
 
   "debug_cape_key": "F{cape_key}",
   "_debug_cape_key": "Keyboard key (F1 to F12) that switches the swing of Kratos's cloak off and on while you play: off, the cloak hangs as it was built and only his back and hips carry it, so you can compare the two.",
@@ -467,7 +468,7 @@ fn migrated_text(text: &str) -> Option<String> {
     }
     // versions 3, 7-13 and 15 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
     // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key; 13: the cape; 15: the
-    // hair material for the fur; 16: the cape key; 17-19 only rewrote the pose key's note: the pose search, the pose check, Kratos's idle):
+    // hair material for the fur; 16: the cape key; 17-20 only rewrote the pose key's note: the pose search, the pose check, Kratos's idle, what standing still shows):
     // re-rendering the file shows them with their notes
     Some(render(&s))
 }

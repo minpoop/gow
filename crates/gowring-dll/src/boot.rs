@@ -130,6 +130,7 @@ pub fn run(hmodule: usize) {
     let rt0 = rt.clone();
     let h0 = cs_task.run_recurring(
         move |_: &FD4TaskData| {
+            let _ = catch_unwind(|| crate::moves::trace(0));
             if crate::testmode::H0_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 0 {
                 crate::glog!("boot", "first frame task ran");
             }
@@ -145,6 +146,7 @@ pub fn run(hmodule: usize) {
     let rt2 = rt.clone();
     let h1 = cs_task.run_recurring(
         move |_: &FD4TaskData| {
+            let _ = catch_unwind(|| crate::moves::trace(1));
             if let Ok(mut r) = rt2.try_lock() {
                 let t0 = std::time::Instant::now();
                 let res = catch_unwind(AssertUnwindSafe(|| r.tick()));
@@ -166,6 +168,7 @@ pub fn run(hmodule: usize) {
     );
     let h2 = cs_task.run_recurring(
         move |_: &FD4TaskData| {
+            let _ = catch_unwind(|| crate::moves::trace(3));
             let req = camera_req.lock().map(|g| *g).unwrap_or_default();
             if let Err(e) = catch_unwind(AssertUnwindSafe(|| apply_camera(&req))) {
                 crate::log::once("camera-panic", "camera_offset", &format!("PANIC: {:?}", e.downcast_ref::<&str>()));
@@ -179,6 +182,20 @@ pub fn run(hmodule: usize) {
         },
         CSTaskGroupIndex::Draw_Pre,
     );
+    // the trace of Kratos's moves (`moves::trace`) also reads after physics, after drawing and at the frame's end;
+    // nothing runs there outside a trace
+    let traces: Vec<_> = [(2usize, CSTaskGroupIndex::ChrIns_PostPhysicsSafe), (4, CSTaskGroupIndex::Draw_Post), (5, CSTaskGroupIndex::FrameEnd)]
+        .into_iter()
+        .map(|(point, group)| {
+            cs_task.run_recurring(
+                move |_: &FD4TaskData| {
+                    let _ = catch_unwind(|| crate::moves::trace(point));
+                },
+                group,
+            )
+        })
+        .collect();
+    std::mem::forget(traces);
     // The handles cancel their tasks on drop; the mod lives as long as the process.
     std::mem::forget(h0);
     std::mem::forget(h1);
@@ -186,7 +203,7 @@ pub fn run(hmodule: usize) {
     crate::testmode::TASKS_REGISTERED.store(true, std::sync::atomic::Ordering::SeqCst);
     crate::testmode::stage("tasks-registered");
     spawn_heartbeat();
-    crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, pose probe @ ChrIns_PostPhysicsSafe, camera, cape and Kratos's moves @ Draw_Pre)");
+    crate::glog!("boot", "per-frame tasks registered (params @ FrameBegin, rules @ ChrIns_PreBehaviorSafe, pose probe @ ChrIns_PostPhysicsSafe, camera, cape and Kratos's moves @ Draw_Pre, the moves' trace also @ ChrIns_PostPhysicsSafe, Draw_Post and FrameEnd)");
 }
 
 struct Hudhook;

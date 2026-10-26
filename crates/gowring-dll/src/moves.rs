@@ -11,9 +11,18 @@
 //!
 //! When: the player stands still in the game's own pose (his root moved under 0.3 m/s and his hands under 0.6 m/s in
 //! his own frame, both over the last 0.4 s): the idle blends in over 0.3 s, and out over 0.12 s as soon as he moves,
-//! back to the game's pose. The debug pose key switches it off and on.
+//! back to the game's pose.
+//!
+//! 0.1.91 in play: the idle showed and the body was right, but both hands came out as flat stretched slabs and the
+//! axe floated (the game places weapons from its own hand). Offline, his real mesh under the same pose closes both
+//! hands into fists, so something in the game changes the hands after this step reads them (the hand IK that keeps
+//! two hands on a weapon is one candidate). So the debug pose key now cycles: Kratos's idle; his idle with the game's
+//! own arms (the hands and the weapon where the game puts them); Elden Ring's rest pose (every bone that takes the
+//! offsets snaps to it, any that does not shows); off. And the first time each is shown, a trace reads the game's
+//! skinning and offsets at six points of the frame for 40 frames and logs, per bone group, at which points they
+//! changed.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -32,13 +41,21 @@ const BLEND_IN_S: f32 = 0.3;
 const BLEND_OUT_S: f32 = 0.12;
 const LOG_EVERY_S: f32 = 20.0;
 
-static ENABLED: AtomicBool = AtomicBool::new(true);
+/// What is shown while he stands still (the debug pose key cycles them).
+const MODES: [&str; 4] = ["Kratos's idle", "Kratos's idle with the game's arms", "Elden Ring's rest pose (a check)", "off: the game's pose"];
+const KRATOS: u8 = 0;
+const GAME_ARMS: u8 = 1;
+const REST: u8 = 2;
+const OFF: u8 = 3;
+static MODE: AtomicU8 = AtomicU8::new(KRATOS);
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 static LOADED: AtomicBool = AtomicBool::new(false);
 
-/// Switch Kratos's own idle off or on; true when it is now on.
-pub fn toggle() -> bool {
-    !ENABLED.fetch_xor(true, Ordering::Relaxed)
+/// Go to the next mode; its name.
+pub fn cycle() -> &'static str {
+    let m = (MODE.load(Ordering::Relaxed) + 1) % MODES.len() as u8;
+    MODE.store(m, Ordering::Relaxed);
+    MODES[m as usize]
 }
 
 struct Clip {
@@ -54,6 +71,12 @@ struct State {
     bones: usize,
     bind: Vec<[[f64; 4]; 4]>,
     hands: [usize; 2],
+    /// The bones of both arms (the clavicles and all below them).
+    arms: Vec<bool>,
+    /// The modes already traced, the mode last frame and how long it has been shown in full since.
+    traced: u8,
+    last_mode: u8,
+    full_s: f32,
     /// Located buffers per offset array (None: not found there).
     buffers: Vec<(usize, Option<Buffer>)>,
     last: Option<Instant>,
@@ -124,8 +147,13 @@ pub fn step() {
                     crate::glog!("moves", "no hands in the skeleton; his moves stay off");
                     return;
                 };
+                let mut arms = vec![false; bones.len()];
+                for (i, b) in bones.iter().enumerate() {
+                    let p = usize::try_from(b.parent).ok().filter(|p| *p < i);
+                    arms[i] = b.name == "L_Clavicle" || b.name == "R_Clavicle" || p.is_some_and(|p| arms[p]);
+                }
                 if let Ok(mut s) = STATE.lock() {
-                    *s = Some(State { clip, bones: bones.len(), bind: bind_pose(bones), hands: [l, r], buffers: Vec::new(), last: None, sample: None, calm_for: 0.0, weight: 0.0, time: 0.0, wrote: false, shown_s: 0.0, starts: 0, writes: 0, skipped: 0, t: 0.0, next_log: LOG_EVERY_S });
+                    *s = Some(State { clip, bones: bones.len(), bind: bind_pose(bones), hands: [l, r], arms, traced: 0, last_mode: KRATOS, full_s: 0.0, buffers: Vec::new(), last: None, sample: None, calm_for: 0.0, weight: 0.0, time: 0.0, wrote: false, shown_s: 0.0, starts: 0, writes: 0, skipped: 0, t: 0.0, next_log: LOG_EVERY_S });
                 }
             }
             Err(e) => crate::glog!("moves", "Kratos's moves are off: {e}"),
@@ -169,7 +197,8 @@ pub fn step() {
             }
         }
     }
-    let on = ENABLED.load(Ordering::Relaxed) && s.calm_for >= CALM_S;
+    let mode = MODE.load(Ordering::Relaxed);
+    let on = mode != OFF && s.calm_for >= CALM_S;
     let before = s.weight;
     s.weight = if on { (s.weight + dt / BLEND_IN_S).min(1.0) } else { (s.weight - dt / BLEND_OUT_S).max(0.0) };
     if before == 0.0 && s.weight > 0.0 {
@@ -203,6 +232,9 @@ pub fn step() {
         let data = &s.clip.data;
         let k: Vec<[f32; 12]> = (0..n)
             .map(|bone| {
+                if mode == REST {
+                    return IDENTITY;
+                }
                 let (x, y) = (&data[(a * n + bone) * 12..(a * n + bone) * 12 + 12], &data[(b2 * n + bone) * 12..(b2 * n + bone) * 12 + 12]);
                 std::array::from_fn(|i| x[i] * (1.0 - frac) + y[i] * frac)
             })
@@ -222,6 +254,10 @@ pub fn step() {
             let mut v = Vec::with_capacity((n - FIRST) * 12);
             let mut ok = true;
             for bone in FIRST..n {
+                if mode == GAME_ARMS && s.arms[bone] {
+                    v.extend_from_slice(&IDENTITY);
+                    continue;
+                }
                 let Some(yi) = inverse(&matrix(&y[bone * 12..bone * 12 + 12])) else {
                     ok = false;
                     break;
@@ -245,6 +281,16 @@ pub fn step() {
             }
         }
     }
+    // the trace, once per mode, after it has been shown in full for a second
+    if mode != s.last_mode {
+        s.last_mode = mode;
+        s.full_s = 0.0;
+    }
+    s.full_s = if s.weight >= 1.0 { s.full_s + dt } else { 0.0 };
+    if s.full_s >= 1.0 && s.traced & (1 << mode) == 0 && !TRACING.load(Ordering::Relaxed) {
+        s.traced |= 1 << mode;
+        start_trace(&buffers, bones, MODES[mode as usize]);
+    }
     if s.t >= s.next_log {
         s.next_log = s.t + LOG_EVERY_S;
         crate::glog!(
@@ -257,7 +303,81 @@ pub fn step() {
             if s.calm_for >= CALM_S { "standing" } else { "not standing" },
             s.writes,
             s.skipped,
-            if ENABLED.load(Ordering::Relaxed) { "on" } else { "switched off (debug key)" }
+            MODES[mode as usize]
         );
+    }
+}
+
+/// The points of the frame the trace reads at (see `boot`).
+const POINTS: [&str; 6] = ["FrameBegin", "PreBehavior", "PostPhysics", "Draw_Pre", "Draw_Post", "FrameEnd"];
+const GROUPS: [(&str, &[&str]); 5] = [
+    ("body", &["Pelvis", "Spine2", "Head"]),
+    ("arms", &["L_UpperArm", "L_Forearm", "R_UpperArm", "R_Forearm"]),
+    ("hands", &["L_Hand", "L_Finger1", "L_Finger11", "R_Hand", "R_Finger1", "R_Finger11"]),
+    ("weapons", &["L_Weapon", "R_Weapon"]),
+    ("IK targets", &["L_Hand_Target", "R_Hand_Target"]),
+];
+const TRACE_FRAMES: u32 = 40;
+
+static TRACING: AtomicBool = AtomicBool::new(false);
+static TRACE: Mutex<Option<Trace>> = Mutex::new(None);
+
+struct Trace {
+    label: String,
+    buffers: Vec<Buffer>,
+    n: usize,
+    groups: Vec<Vec<usize>>,
+    /// Per buffer: the skinning and offsets as last read.
+    last: Vec<Option<(Vec<f32>, Vec<f32>)>>,
+    /// Per buffer, per point, per group: the reads in which the skinning (and the offsets) had changed since the read
+    /// before.
+    skin: Vec<[[u32; 5]; 6]>,
+    offs: Vec<[[u32; 5]; 6]>,
+    frames: u32,
+}
+
+fn start_trace(buffers: &[Buffer], bones: &[Bone], label: &str) {
+    let groups = GROUPS.iter().map(|(_, names)| names.iter().filter_map(|n| bones.iter().position(|b| b.name == *n)).collect()).collect();
+    if let Ok(mut t) = TRACE.lock() {
+        *t = Some(Trace { label: label.into(), buffers: buffers.to_vec(), n: bones.len(), groups, last: vec![None; buffers.len()], skin: vec![[[0; 5]; 6]; buffers.len()], offs: vec![[[0; 5]; 6]; buffers.len()], frames: 0 });
+        TRACING.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Called at each of [`POINTS`] (its index) every frame; reads only while a trace runs.
+pub fn trace(point: usize) {
+    if !TRACING.load(Ordering::Relaxed) {
+        return;
+    }
+    let Ok(mut guard) = TRACE.try_lock() else { return };
+    let Some(t) = guard.as_mut() else { return };
+    let n = t.n;
+    for (i, b) in t.buffers.iter().enumerate() {
+        let (Some(y), Some(o)) = (read_vec::<f32>(b.skinning, n * 12), read_vec::<f32>(b.offsets, n * 12)) else { continue };
+        if let Some((py, po)) = &t.last[i] {
+            for (g, bones) in t.groups.iter().enumerate() {
+                let changed = |a: &[f32], c: &[f32]| bones.iter().any(|k| a[k * 12..k * 12 + 12].iter().zip(&c[k * 12..k * 12 + 12]).any(|(x, z)| (x - z).abs() > 1e-6));
+                if changed(&y, py) {
+                    t.skin[i][point][g] += 1;
+                }
+                if changed(&o, po) {
+                    t.offs[i][point][g] += 1;
+                }
+            }
+        }
+        t.last[i] = Some((y, o));
+    }
+    if point == POINTS.len() - 1 {
+        t.frames += 1;
+        if t.frames >= TRACE_FRAMES {
+            let mut lines = Vec::new();
+            for (i, b) in t.buffers.iter().enumerate() {
+                let fmt = |c: &[[u32; 5]; 6]| GROUPS.iter().enumerate().map(|(g, (name, _))| format!("{name} {}", (0..6).map(|p| c[p][g].to_string()).collect::<Vec<_>>().join("/"))).collect::<Vec<_>>().join(", ");
+                lines.push(format!("buffer {} ({} bones, skinning {:#x}): skinning changed {}; offsets changed {}", i + 1, b.bones, b.skinning, fmt(&t.skin[i]), fmt(&t.offs[i])));
+            }
+            crate::glog!("moves", "trace while showing {} ({} frames; counts at {}):\n    {}", t.label, t.frames, POINTS.join("/"), lines.join("\n    "));
+            TRACING.store(false, Ordering::Relaxed);
+            *guard = None;
+        }
     }
 }

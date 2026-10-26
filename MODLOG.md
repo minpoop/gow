@@ -789,3 +789,25 @@ The player asked for the idle first, then a test.
   fucked up", "and the axe is floating". Offline (`moves_joint_errors`): every joint's geometry within 9 cm of his
   own pose (hands 4-7 cm), so the stretching comes from the game side: the block located, or bones that do not
   take the offsets. Waiting on gowring.log.
+- The player's gowring.log: 6 offset arrays this session (two by 181-bone skinning, four by 150-bone blocks, at
+  `entity+0xb0+0x1a8+0x558/0x678/0x798` and `entity+0x450+...`: perhaps one per part), all located, written ~6
+  times a frame, none skipped. Zoomed screenshot: stance, torso, cloak and legs right; both hands flat stretched
+  slabs at his hips. Offline on his real mesh (an earlier offline build, `anim_ref/meshskin.py`): both hands close
+  into fists, 32 stretched triangles in all. The model's 31 extra bones all sit at the origin (no duplicate hands).
+- Two anchors fixed anyway: an anchor must be cleanly driven (it and its ancestors from pose slots), else its first
+  such ancestor; the arms had been anchored on helpers under the upper arm (1431/1447) and elbow (1065/1104), whose
+  motion happened to match in this clip. Now 319/936/1064 and 329/955/1103, clavicles 322/339, thigh twists on the
+  thighs. The bind for anchors comes from his rest pose composed down (main chain joints may carry no skin).
+
+## 0.1.92 — what breaks the hands: modes and a frame trace (2026-10-26)
+
+- Suspect: the game changes the hands after Draw_Pre (the hand IK that keeps both hands on a two-handed weapon;
+  `L/R_Hand_Target` hang from Spine2), so the offsets meet a different hand than the one they were made for.
+- F8 cycles what standing still shows: Kratos's idle; it with the game's arms (clavicles down: offsets left at the
+  identity, so the hands and weapon stay where the game puts them); Elden Ring's rest pose (K = identity: final =
+  C, a check that every bone takes the offsets); off. Settings v20 (the key's note).
+- The first time each mode shows in full for a second, a trace reads every buffer's skinning and offsets at
+  FrameBegin, PreBehavior, PostPhysics (new task), Draw_Pre (before the mod writes), Draw_Post and FrameEnd (new
+  tasks) for 40 frames and logs, per bone group (body, arms, hands, weapons, IK targets), how many reads changed
+  since the read before.
+- Launcher BUILD 40 (the anchors).

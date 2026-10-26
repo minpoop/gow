@@ -755,11 +755,13 @@ pub struct Clip {
     pub fps: f32,
     pub frames: Vec<Vec<[f32; 12]>>,
     pub note: String,
+    /// Per Elden Ring bone, the joint of his it follows.
+    pub anchors: Vec<Option<usize>>,
 }
 
 /// His world transforms (`world`, as [`decode_clip`] gives them) on the Elden Ring skeleton `er`, through his re-posing
 /// `r` (made for `mirrored`, his skeleton mirrored as the parts are) at `scale`.
-pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton, scale: f64, r: &Retarget, er: &[Node]) -> Result<Clip> {
+pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton, scale: f64, r: &Retarget, er: &[Node], driven: &[bool]) -> Result<Clip> {
     let n = mirrored.parent.len();
     if world.first().map(|w| w.len()) != Some(n) || r.moves.len() != n {
         bail!("the clip, the skeleton and the re-posing disagree on the joint count");
@@ -776,11 +778,19 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
         }
         o
     };
-    let bind: Vec<M> = mirrored
-        .inverse_bind
+    // his rest pose (bind) from his rest transforms composed down the hierarchy, translations scaled: it equals the
+    // inverse binds for the joints that carry skin (817 of 826 to 1e-3), and is there for the chain joints that carry
+    // none
+    let mut rest_world: Vec<M> = Vec::with_capacity(n);
+    for j in 0..n {
+        let l = rows(&mirrored.local[j]);
+        let p = mirrored.parent[j];
+        rest_world.push(if p < 0 { l } else { mul(&rest_world[p as usize], &l) });
+    }
+    let bind: Vec<M> = rest_world
         .iter()
-        .map(|ib| {
-            let mut w = invert(&rows(ib)).unwrap_or(I4);
+        .map(|m| {
+            let mut w = *m;
             for row in w.iter_mut().take(3) {
                 row[3] *= scale;
             }
@@ -790,32 +800,35 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
     let unmove: Vec<M> = r.moves.iter().map(|m| invert(&std::array::from_fn(|row| std::array::from_fn(|c| m[c][row] as f64))).unwrap_or(I4)).collect();
     let unbind: Vec<M> = bind.iter().map(|m| invert(m).unwrap_or(I4)).collect();
     // his root at rest in every frame: the game moves the character
-    let mut rest_world: Vec<M> = Vec::with_capacity(n);
-    for j in 0..n {
-        let l = rows(&mirrored.local[j]);
-        let p = mirrored.parent[j];
-        rest_world.push(if p < 0 { l } else { mul(&rest_world[p as usize], &l) });
-    }
-    // (the mirrored skeleton's rest, so only scaled)
-    let root_rest = {
-        let mut m = rest_world[ROOT_JOINT.min(n - 1)];
-        for row in m.iter_mut().take(3) {
-            row[3] *= scale;
-        }
-        m
-    };
+    let root_rest = bind[ROOT_JOINT.min(n - 1)];
     // the Elden Ring side
     let ew: Vec<M> = world_matrices(er).iter().map(|c| std::array::from_fn(|row| std::array::from_fn(|k| c[k][row] as f64))).collect();
     let nb = er.len();
     let joint_rest: Vec<[f64; 3]> = ew.iter().map(|m| [m[0][3], m[1][3], m[2][3]]).collect();
-    // each bone's anchor: the nearest (in the new pose) of his moving joints that weigh on it
+    // each bone's anchor: the nearest (in the new pose) of his moving joints that weigh on it ...
     let moved_pos = |j: usize| -> [f64; 3] {
         let m = &r.moves[j];
         let p = r.bind_positions[j].map(|x| x as f64);
         std::array::from_fn(|row| m[0][row] as f64 * p[0] + m[1][row] as f64 * p[1] + m[2][row] as f64 * p[2] + m[3][row] as f64)
     };
     let dist = |a: [f64; 3], b: [f64; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt();
-    let anchor: Vec<Option<usize>> = (0..nb).map(|b| (0..n).filter(|j| r.deforms[*j] && r.bone[*j] as usize == b).min_by(|x, y| dist(moved_pos(*x), joint_rest[b]).total_cmp(&dist(moved_pos(*y), joint_rest[b])))).collect();
+    // ... taken up to its first joint that the clip drives cleanly (it and every joint above it from a pose slot): the
+    // others are moved in Ragnarök by its rig program, which is not run, and some carry an ambiguous slot's values
+    // (0.1.91 anchored both upper arms on such a helper: the arms came apart)
+    let mut clean = vec![false; n];
+    for j in 0..n {
+        let p = mirrored.parent[j];
+        clean[j] = driven.get(j).copied().unwrap_or(false) && (p < 0 || clean[p as usize]);
+    }
+    let cleanly = |mut j: usize| -> Option<usize> {
+        loop {
+            if clean[j] {
+                return Some(j);
+            }
+            j = usize::try_from(mirrored.parent[j]).ok()?;
+        }
+    };
+    let anchor: Vec<Option<usize>> = (0..nb).map(|b| (0..n).filter(|j| r.deforms[*j] && r.bone[*j] as usize == b).min_by(|x, y| dist(moved_pos(*x), joint_rest[b]).total_cmp(&dist(moved_pos(*y), joint_rest[b]))).and_then(cleanly)).collect();
     let mut frames = Vec::with_capacity(world.len());
     let mut pelvis_y = (f64::MAX, f64::MIN);
     let pelvis = er.iter().position(|b| b.name == "Pelvis");
@@ -854,7 +867,7 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
     }
     let anchored = anchor.iter().filter(|a| a.is_some()).count();
     let note = format!("{name}: {} frames at {fps} fps, {anchored} of {nb} bones on his joints, pelvis {:.2}-{:.2} m (rest {:.2})", frames.len(), pelvis_y.0, pelvis_y.1, pelvis.map_or(0.0, |p| joint_rest[p][1]));
-    Ok(Clip { name: name.into(), fps, frames, note })
+    Ok(Clip { name: name.into(), fps, frames, note, anchors: anchor })
 }
 
 /// Whether any bone above `b` (it included) has an anchor: then `b`'s children take their joints from its skinning.
@@ -899,6 +912,10 @@ pub fn build_moves(anm: &[u8], kratos: &Skeleton, er: &[Node], scale: f32) -> Re
     let slots = slot_joints(&hado, kratos)?;
     let mirrored = kratos.mirrored_x();
     let r = crate::retarget::retarget(&mirrored, scale, er)?;
+    let mut driven = vec![false; kratos.parent.len()];
+    for j in slots.iter().flatten() {
+        driven[*j] = true;
+    }
     let mut clips = Vec::new();
     let mut notes = Vec::new();
     for (name, hash) in CLIPS {
@@ -907,7 +924,7 @@ pub fn build_moves(anm: &[u8], kratos: &Skeleton, er: &[Node], scale: f32) -> Re
             continue;
         };
         let (fps, world) = decode_clip(anm, base, &hado, kratos, &slots).with_context(|| format!("{name} at {base:#x}"))?;
-        let clip = retarget_clip(name, fps, &world, &mirrored, scale as f64, &r, er)?;
+        let clip = retarget_clip(name, fps, &world, &mirrored, scale as f64, &r, er, &driven)?;
         notes.push(clip.note.clone());
         clips.push(clip);
     }
@@ -996,7 +1013,13 @@ mod tests {
         let scale = crate::kratos_part::SCALE;
         let r = crate::retarget::retarget(&mirrored, scale, &er).unwrap();
         let (fps, world) = decode_clip(&anm, find_clip(&anm, CLIPS[0].1).unwrap(), &hado, &sk, &slots).unwrap();
-        let clip = retarget_clip("idle", fps, &world, &mirrored, scale as f64, &r, &er).unwrap();
+        let flags: Vec<bool> = (0..sk.parent.len()).map(|j| driven.contains(&j)).collect();
+        let clip = retarget_clip("idle", fps, &world, &mirrored, scale as f64, &r, &er, &flags).unwrap();
+        for (b, a) in clip.anchors.iter().enumerate() {
+            if let Some(j) = a {
+                println!("anchor {} <- joint {j} (parent {}) {}", er[b].name, mirrored.parent[*j], if driven.contains(j) { "driven" } else { "PROCEDURAL" });
+            }
+        }
         // his own: geometry point p (his bind) goes to pinned animated x bind^-1 x p
         let n = sk.parent.len();
         let fix = |m: &M| -> M { let mut o = *m; for k in 1..4 { o[0][k] = -o[0][k]; o[k][0] = -o[k][0]; } for row in o.iter_mut().take(3) { row[3] *= scale as f64; } o };

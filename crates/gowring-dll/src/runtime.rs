@@ -224,9 +224,9 @@ impl Runtime {
             self.camera_key_down = down;
             let down = function_key_down(st.debug_pose_key);
             if down && !self.pose_key_down {
-                let on = crate::moves::toggle();
-                crate::glog!("debug", "F{} pressed: Kratos's own idle {}", st.debug_pose_key, if on { "on" } else { "off (the game's pose)" });
-                crate::overlay::toast(if on { "Kratos's idle on (debug)" } else { "Kratos's idle off: the game's pose (debug)" });
+                let mode = crate::moves::cycle();
+                crate::glog!("debug", "F{} pressed: standing still shows {mode}", st.debug_pose_key);
+                crate::overlay::toast(&format!("Standing still: {mode} (debug)"));
             }
             self.pose_key_down = down;
             let down = function_key_down(st.debug_cape_key);
