@@ -742,3 +742,16 @@ animated.py, check.py, bindeq.py, skinmatch.py, nontrivial.py, synth.py).
   pose key's note). The host's ChrIns and model-ins accessors, only the search used, are gone.
 - Test 78aa54e9 (0.1.90, 1 run): Melty: passed, all 8 checks, ran 10:00, no crash recorded, played 280 s (300
   frames). Waiting on the player's gowring.log and er_pose_live_1-3.bin.
+- The player: sent gowring.log and er_pose_live_1-4.bin (three timed checks at 80, 140, 200 s and one on F8 at
+  323 s), no crash reported. He moved this time (up to 6-7 m/s, turns up to 22 rad/s). Every check found both
+  buffers at 181 bones, at the same addresses all session; a third offset array the cape found
+  (`entity+0x50+0xf8+0x30+0x678`) has no skinning before it.
+  - Links at rest while moving: 124-141 of the 149 differing. Over 160 reads the misses are only bones meant to
+    slide: Pelvis and RootRotY (always), Spine (126), SpineArmor1/2, L/R ShoulderArmor, L/R Pectoral, L/R Axilla
+    (the body's shape and armour), R_Weapon / L_Weapon, the Xtra_Multipurpose chains. No limb bone ever.
+  - Real motion: the root travelled 3.8-5.1 m per check; in his model space the head went up to 1.3 m, the hands
+    1.4 m, the feet 1.25 m (lunges, a roll, swings: an90/out/er_pose_live_*_1.png).
+  - The cape check: its four bones' offsets up to 52-74 degrees with the cape on, exactly the identity off; their
+    skinning on their parents' within 0.0003 both ways. The skinning is before the offsets, for certain.
+  - Step 2 done: the live pose is the 181-entry skinning block just before each offset array, Havok order, the
+    skeleton's bind; offset = skinning^-1 x the skinning wanted.
