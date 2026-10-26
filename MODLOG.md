@@ -652,3 +652,14 @@ camera, HUD, Mimir). Rules are tested headless in `gowring-core` against a simul
 - `kratos_part::FUR_METAL` 230: the fur materials (`Naming::fur`, `HAIR_FUR` [24, 29]; weapons none) take their own metal map `<tex>_mf` (solid 230) instead of the shared `<tex>_m` (0): F0 = lerp(0.04, albedo, 0.9), about 0.009 at the black roots, 0.06 at the lightest tips. Body BUILD 38. The player should set "hair_fur" back to true (the default).
 - Test bcae631f (0.1.88, 1 run; "hair_fur" back on: launcher.log "fur on Elden Ring's hair material: [24, 29]", built in 9.6 s): the collar and the shoulder pad's fur came out deep black with the strands' tips and edges catching the light, no grey wash (the player's front screenshot). Melty: closed before the end; no-fault: AV at ntdll+0x2730d (the closing chain, eldenring.exe+0x1ed97a0 in its stack).
 - The player: "it looks good". The better-fur work (option 3) is done: the hair material (0.1.78), the fur's own colour (0.1.77), Ragnarök's occlusion on the tufts (0.1.86) and the fur mostly metal (0.1.88). Still open: whether the cloak goes back to two chains (0.1.85's one chain was for a cause that turned out not to be it).
+- Kratos's movement, step 1 (decode Ragnarök animation offline): done. Research decoder in `tools/ragnarok_anim/`
+  (Python, reads the probe's copy of the player's files; nothing from the game committed; format in its
+  `NOTES.md`). The clips (CADO) are keyframe-reduced, quantized and split into time blocks per bone group; the
+  pose layout (which slot is which skeleton joint) comes from the HADO object in ANM_heroa00, matched to the
+  goProto skeleton by rest pose. Three rotation encodings (reference quaternion + small delta, a two-quaternion
+  frame around a delta, and absolute smallest-three) plus raw and constant tracks. Checks: every block of all
+  1,289 gameplay clips and the 22 streamed sets decodes and ends inside its padding (16,222 blocks); in the run
+  both feet plant at exactly the rest ankle (0.09 m) and toe (0.03 m) heights, alternating; knees bend as clean
+  hinges. Clip names are not linked to the clips yet, so locomotion was picked by motion: idle 0xff610, walk
+  1.5 m/s 0x182fbd0, 2.05 m/s 0x18d75f0, run 3 m/s 0x1852180, sprint 6 m/s 0x18b41c0, 7.8 m/s 0x1c8edd0 (offsets
+  in the player's ANM_heroa00 chunk). Next: step 2, read Elden Ring's live pose; then retarget onto its skeleton.

@@ -1,0 +1,6 @@
+# derived from the player's own files: never commit
+*.pkl
+*.png
+*.gif
+kratos_probe/
+__pycache__/
