@@ -828,7 +828,138 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
             j = usize::try_from(mirrored.parent[j]).ok()?;
         }
     };
-    let anchor: Vec<Option<usize>> = (0..nb).map(|b| (0..n).filter(|j| r.deforms[*j] && r.bone[*j] as usize == b).min_by(|x, y| dist(moved_pos(*x), joint_rest[b]).total_cmp(&dist(moved_pos(*y), joint_rest[b]))).and_then(cleanly)).collect();
+    // ... rather, of those (each taken up to its first cleanly driven joint), the one whose motion carries the points
+    // of all of them closest to where their own motion takes them, over a few frames: nearest by position alone
+    // anchored a finger bone on a fingertip whose middle phalanx then followed the tip (0.1.91-0.1.92: the left
+    // hand's fingers stretched 7 cm, the hand flattened)
+    let pinned = |w: &Vec<M>| -> Vec<M> {
+        let mut kw: Vec<M> = w.iter().map(fix).collect();
+        let pin = mul(&root_rest, &invert(&kw[ROOT_JOINT.min(n - 1)]).unwrap_or(I4));
+        for m in kw.iter_mut() {
+            *m = mul(&pin, m);
+        }
+        kw
+    };
+    let samples: Vec<Vec<M>> = [0, world.len() / 3, 2 * world.len() / 3].iter().map(|f| pinned(&world[(*f).min(world.len() - 1)])).collect();
+    let motion = |kw: &[M], j: usize| mul(&mul(&kw[j], &unbind[j]), &unmove[j]);
+    let apply = |m: &M, p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|row| m[row][0] * p[0] + m[row][1] * p[1] + m[row][2] * p[2] + m[row][3]) };
+    let anchor: Vec<Option<usize>> = (0..nb)
+        .map(|b| {
+            let members: Vec<usize> = (0..n).filter(|j| r.deforms[*j] && r.bone[*j] as usize == b).collect();
+            let mut options: Vec<usize> = members.iter().filter_map(|j| cleanly(*j)).collect();
+            options.sort_unstable();
+            options.dedup();
+            let cost = |c: usize| -> f64 {
+                samples.iter().map(|kw| { let g = motion(kw, c); members.iter().map(|k| { let q = moved_pos(*k); dist(apply(&g, q), apply(&motion(kw, *k), q)) }).sum::<f64>() }).sum()
+            };
+            options.into_iter().min_by(|x, y| cost(*x).total_cmp(&cost(*y)))
+        })
+        .collect();
+    // the fingers, chain by chain: each Elden Ring finger (FingerN, FingerN1, FingerN2) on one of his finger chains
+    // (from his hand joint down, cleanly driven joints), the one whose joints line up with its own best in the new pose.
+    // Bone by bone, a finger's middle bone took his fingertip (the little finger folded back 170 degrees), the thumb's
+    // second its third, and no finger's last bone had one at all (0.1.91-0.1.92)
+    let mut anchor = anchor;
+    let moved_rest = |j: usize| -> [f64; 3] {
+        let m = &r.moves[j];
+        let p = [bind[j][0][3], bind[j][1][3], bind[j][2][3]];
+        std::array::from_fn(|row| m[0][row] as f64 * p[0] + m[1][row] as f64 * p[1] + m[2][row] as f64 * p[2] + m[3][row] as f64)
+    };
+    let mut kids: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for j in 0..n {
+        if let Ok(p) = usize::try_from(mirrored.parent[j]) {
+            if clean[j] {
+                kids[p].push(j);
+            }
+        }
+    }
+    let below = |j: usize| -> usize {
+        let mut stack = vec![j];
+        let mut c = 0;
+        while let Some(k) = stack.pop() {
+            c += 1;
+            stack.extend(kids[k].iter().copied());
+        }
+        c
+    };
+    let mut fingers_note = Vec::new();
+    for side in ["L", "R"] {
+        let Some(hand) = er.iter().position(|b| b.name == format!("{side}_Hand")).and_then(|h| anchor[h]) else { continue };
+        // his finger chains: from each cleanly driven child of the hand with at least two joints below it
+        let chains: Vec<Vec<usize>> = kids[hand]
+            .iter()
+            .filter(|c| below(**c) >= 3)
+            .map(|c| {
+                let mut chain = vec![*c];
+                let mut j = *c;
+                while let Some(next) = kids[j].iter().copied().max_by_key(|k| below(*k)) {
+                    chain.push(next);
+                    j = next;
+                }
+                chain
+            })
+            .collect();
+        // each finger on a chain of its own: the assignment with the least misfit over all five
+        let fingers: Vec<(usize, Vec<usize>)> = (0..5)
+            .map(|f| (f, ["", "1", "2"].iter().filter_map(|k| er.iter().position(|b| b.name == format!("{side}_Finger{f}{k}"))).collect::<Vec<usize>>()))
+            .filter(|(_, bones)| !bones.is_empty())
+            .collect();
+        // the last bone on the joint before the tip: a finger's metacarpal is left out, the thumb's kept (by position
+        // alone the little finger started a joint too far down, its knuckle bent 123 degrees)
+        let fit = |bones: &[usize], chain: &[usize]| -> Option<(f64, usize)> {
+            let start = chain.len().checked_sub(bones.len() + 1)?;
+            Some((bones.iter().enumerate().map(|(i, b)| dist(joint_rest[*b], moved_rest(chain[start + i]))).sum(), start))
+        };
+        let mut best: Option<(f64, Vec<usize>)> = None;
+        let mut pick = vec![usize::MAX; fingers.len()];
+        fn search(k: usize, used: &mut Vec<bool>, pick: &mut Vec<usize>, cost: f64, costs: &[Vec<Option<f64>>], best: &mut Option<(f64, Vec<usize>)>) {
+            if k == pick.len() {
+                if best.as_ref().is_none_or(|b| cost < b.0) {
+                    *best = Some((cost, pick.clone()));
+                }
+                return;
+            }
+            for c in 0..used.len() {
+                if let (false, Some(x)) = (used[c], costs[k][c]) {
+                    used[c] = true;
+                    pick[k] = c;
+                    search(k + 1, used, pick, cost + x, costs, best);
+                    used[c] = false;
+                }
+            }
+        }
+        let costs: Vec<Vec<Option<f64>>> = fingers.iter().map(|(_, bones)| chains.iter().map(|c| fit(bones, c).map(|x| x.0)).collect()).collect();
+        if chains.len() >= fingers.len() {
+            search(0, &mut vec![false; chains.len()], &mut pick, 0.0, &costs, &mut best);
+        }
+        if let Some((_, pick)) = best {
+            for ((f, bones), c) in fingers.iter().zip(pick) {
+                let chain = &chains[c];
+                let Some((cost, start)) = fit(bones, chain) else { continue };
+                for (i, b) in bones.iter().enumerate() {
+                    anchor[*b] = Some(chain[start + i]);
+                }
+                fingers_note.push(format!("{side}{f} {}+{start} ({:.1} cm)", chain[0], 100.0 * cost / bones.len() as f64));
+            }
+        }
+    }
+    // the forearms' twist bones: each takes its share of the hand's twist about the forearm (by where it sits from
+    // elbow to wrist), as Elden Ring's rig does and Ragnarök's rig program did for his own twist joints. Following the
+    // elbow alone (0.1.91-0.1.92), every forearm vertex by the wrist stayed put while the hand turned, and the wrists
+    // wrung flat ("stretched flat into his legs")
+    let index = |name: &str| er.iter().position(|b| b.name == name);
+    let mut twists: Vec<(usize, usize, usize, f64)> = Vec::new(); // (twist bone, forearm, hand, share)
+    for side in ["L", "R"] {
+        let (Some(fa), Some(hand)) = (index(&format!("{side}_Forearm")), index(&format!("{side}_Hand"))) else { continue };
+        let axis = sub3(joint_rest[hand], joint_rest[fa]);
+        let len2 = dot3(axis, axis);
+        for name in ["ForeArmTwist", "ForeArmTwist1"] {
+            let Some(t) = index(&format!("{side}_{name}")) else { continue };
+            if len2 > 1e-8 && er[t].parent as usize == fa {
+                twists.push((t, fa, hand, (dot3(sub3(joint_rest[t], joint_rest[fa]), axis) / len2).clamp(0.0, 1.0)));
+            }
+        }
+    }
     let mut frames = Vec::with_capacity(world.len());
     let mut pelvis_y = (f64::MAX, f64::MIN);
     let pelvis = er.iter().position(|b| b.name == "Pelvis");
@@ -859,6 +990,9 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
             };
             skin.push(s);
         }
+        for &(t, fa, hand, share) in &twists {
+            skin[t] = twisted(&skin[fa], &skin[hand], sub3(joint_rest[hand], joint_rest[fa]), share, joint_rest[t]);
+        }
         if let Some(p) = pelvis {
             let y = skin[p][1][0] * joint_rest[p][0] + skin[p][1][1] * joint_rest[p][1] + skin[p][1][2] * joint_rest[p][2] + skin[p][1][3];
             pelvis_y = (pelvis_y.0.min(y), pelvis_y.1.max(y));
@@ -866,8 +1000,39 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
         frames.push(skin.iter().map(|m| std::array::from_fn(|k| m[k / 4][k % 4] as f32)).collect());
     }
     let anchored = anchor.iter().filter(|a| a.is_some()).count();
-    let note = format!("{name}: {} frames at {fps} fps, {anchored} of {nb} bones on his joints, pelvis {:.2}-{:.2} m (rest {:.2})", frames.len(), pelvis_y.0, pelvis_y.1, pelvis.map_or(0.0, |p| joint_rest[p][1]));
+    let note = format!("{name}: {} frames at {fps} fps, {anchored} of {nb} bones on his joints (fingers {}), pelvis {:.2}-{:.2} m (rest {:.2})", frames.len(), fingers_note.join(", "), pelvis_y.0, pelvis_y.1, pelvis.map_or(0.0, |p| joint_rest[p][1]));
     Ok(Clip { name: name.into(), fps, frames, note, anchors: anchor })
+}
+
+fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// A twist bone's skinning: its parent's (`limb`), turned by `share` of the twist of `next` (the bone the limb ends
+/// at) relative to it about the limb's rest axis; its joint stays where the limb's skinning puts it.
+fn twisted(limb: &M, next: &M, axis: [f64; 3], share: f64, joint: [f64; 3]) -> M {
+    let l = dot3(axis, axis).sqrt();
+    let a = axis.map(|x| x / l);
+    // the relative turn (rest space): limb^-1 x next, rotation only
+    let rel = mul(&invert(limb).unwrap_or(I4), next);
+    let q = mat2quat(&rel);
+    let along = q[0] * a[0] + q[1] * a[1] + q[2] * a[2];
+    let angle = 2.0 * along.atan2(q[3]);
+    let half = angle * share / 2.0;
+    let part = qmat([a[0] * half.sin(), a[1] * half.sin(), a[2] * half.sin(), half.cos()]);
+    let mut turn = I4;
+    for r in 0..3 {
+        turn[r][..3].copy_from_slice(&part[r]);
+    }
+    // about the twist bone's rest joint, then the limb's skinning
+    for r in 0..3 {
+        turn[r][3] = joint[r] - (turn[r][0] * joint[0] + turn[r][1] * joint[1] + turn[r][2] * joint[2]);
+    }
+    mul(limb, &turn)
 }
 
 /// Whether any bone above `b` (it included) has an anchor: then `b`'s children take their joints from its skinning.

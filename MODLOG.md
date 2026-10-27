@@ -825,3 +825,24 @@ The player asked for the idle first, then a test.
     animating him then). The three 150-bone blocks changed once or never: not the model's.
   - Fix (next build): Kratos's pose goes only into the model's own buffers (the most bones, more than the
     skeleton's), not the 150-bone blocks it wrote 143 matrices a frame into until the close.
+- The player: "i closed it" (no crash) "and the hands are still bad", then "its stretched flat into his legs", with
+  their built body part (`bd_m_9701.partsbnd.dcx`, 200,089 vertices) for an offline look. Shaded close-ups
+  (`anim_ref/handshade.py`; the dot renders had hidden it): both hands flat, fingers sticking out, a spike. Not
+  the wrists (the hand turns 13-23 degrees against the forearm, wrist skin within 4-6 mm of the hand's motion;
+  forearm twist bones now take their share of that twist anyway). The fingers: L_Finger41 bent 170 degrees on its
+  parent, the thumbs' Finger0 0 (rigid with the hand): Elden Ring's three bones per finger had been paired one by
+  one with his four or five joints by position (a middle bone on his fingertip, the thumb's second bone on its
+  third, no last bone at all). His hand: four fingers metacarpal -> proximal -> middle -> distal -> tip (1156-1159
+  -> 1290.. -> 1363.. -> 1416.. -> 1448..), the thumb 1160 -> 1294 -> 1367 -> 1420, all driven.
+
+## 0.1.93 — his hands: fingers by chain (2026-10-27)
+
+- Builder: each Elden Ring finger (FingerN, FingerN1, FingerN2) on one of his finger chains (cleanly driven joints
+  from his hand down), the last bone on the joint before the tip (a finger's metacarpal left out, the thumb's
+  kept), the chains assigned one to one by least misfit (by position alone the little finger started a joint too
+  far down, then took the ring finger's chain). Thumbs on 1160 / 1207 from their base, fingers on 1156-1159 /
+  1203-1206 from the proximal. Bends in frame 0: knuckles 30-65 degrees, tips 40-106, nothing backwards; both hands
+  close into fists on the player's own model. Anchors elsewhere: the joint whose motion carries all the skin on
+  the bone best (over three frames), taken up to its first cleanly driven joint. 60 of 150 bones on his joints.
+- gowring.dll: writes only into the model's own buffers (the most bones), not the 150-bone blocks.
+- Launcher BUILD 41.
