@@ -27,7 +27,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::bonepose::{bind_pose, inverse, mul, write_floats, IDENTITY};
-use crate::livepose::{locate, matrix, Buffer};
+use crate::livepose::{bone_count, locate, matrix, Buffer};
 use crate::skeleton::{read, read_vec, Bone};
 
 /// The first bone written (RootPos): Master and the IK targets before it are left at the identity.
@@ -298,14 +298,16 @@ pub fn step() {
         return;
     }
     // found again when the arrays change, and every 2 s while none reads as the model's own (more bones than the
-    // skeleton: its extras): in 0.1.94 a block 31 entries short read as a 150-bone pose just after loading, and nothing
-    // played all session
+    // skeleton: its extras); the bone count from the gap between the two buffers (0.1.94 and 0.1.95 searched for it,
+    // and took blocks 31 and 14 entries short just after loading)
     let unsure = !s.buffers.iter().any(|b| b.1.is_some_and(|b| b.bones > bones.len()));
     if s.buffers.iter().map(|b| b.0).ne(arrays.iter().copied()) || (unsure && s.t >= s.relocate_at) {
         s.relocate_at = s.t + 2.0;
-        s.buffers = arrays.iter().map(|a| (*a, locate(*a, bones, &s.bind))).collect();
+        let count = bone_count(&arrays);
+        s.buffers = arrays.iter().map(|a| (*a, locate(*a, count, bones, &s.bind))).collect();
         let found: Vec<String> = s.buffers.iter().map(|(a, b)| b.map_or(format!("{a:#x}: none"), |b| format!("{a:#x}: skinning at {:#x}, {} bones", b.skinning, b.bones))).collect();
-        crate::glog!("moves", "the game's pose by its offsets: {}", found.join("; "));
+        let by = count.map_or("searched (not two buffers a whole number of entries apart)".to_string(), |n| format!("{n} bones by the buffers' gap"));
+        crate::glog!("moves", "the game's pose by its offsets ({by}): {}", found.join("; "));
         s.wrote = false;
     }
     let n = s.bones;

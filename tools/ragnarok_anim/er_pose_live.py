@@ -42,11 +42,20 @@ def links_at_rest(y, bind, bones):
     return at, links
 
 
-def locate(mem, base, offsets, bones, bind):
-    """livepose.rs's search on a memory image `mem` starting at address `base`: (skinning address, bone count), the
-    smallest bone count whose block scores within 5 % of the best (the most differing links at rest)."""
+def bone_count(arrays):
+    """livepose.rs's: the model's bone count from its two buffers' offset arrays, a third of the gap in entries."""
+    if len(arrays) != 2: return None
+    gap = abs(arrays[0] - arrays[1])
+    return gap // (3 * ENTRY) if gap % (3 * ENTRY) == 0 else None
+
+
+def locate(mem, base, offsets, bones, bind, count=None):
+    """livepose.rs's search on a memory image `mem` starting at address `base`: (skinning address, bone count). With
+    `count` (`bone_count`) only that count; else the smallest whose block scores within 5 % of the best (the most
+    differing links at rest)."""
     n0 = len(bones); scored = []
-    for n in range(n0, MAX_BONES + 1):
+    if count is not None and not n0 <= count <= MAX_BONES: return None
+    for n in ([count] if count is not None else range(n0, MAX_BONES + 1)):
         at = offsets - n * ENTRY
         if at < base: break
         y = np.frombuffer(mem, '<f4', count=n0 * 12, offset=at - base)

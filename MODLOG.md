@@ -879,3 +879,13 @@ recorded c0000005 in ntdll at 6:23 (ntdll+0x2730d, the known closing chain) and 
 - 0.1.95's test (1 run): his moves now write, but every clip shows him crumpled (bent over, head by the floor; the
   player's screenshots). The player closed the game at 6:04; Melty's c0000005 in ntdll at 6:52 is the closing chain.
   In 0.1.90's dumps the array before the skinning equals it exactly (40 snapshots), so locating either one is harmless.
+
+## 0.1.96 — the bone count from the buffers' gap (2026-10-28)
+
+0.1.95's log: "skinning at ..., 167 bones" for both buffers (offset arrays entity+0x30+0x508 / +0x510 at
+0x7ff4210d3eb0 / 0x7ff4210da480): the best-scoring search took a block 14 entries short just after loading (in its
+first trace that block did not change once in 40 frames), so every bone read its neighbour's skinning and the moves
+came out crumpled. The two offset arrays were 0x65d0 bytes (543 entries, 3 x 181) apart in 0.1.90, 0.1.92 and 0.1.95.
+- gowring.dll `livepose::bone_count`: the gap between the two offset arrays over 3 entries; `locate` tries only that
+  count when there is one (searching as before otherwise), and `moves` keeps locating every 2 s until it reads.
+- tools/ragnarok_anim/er_pose_live.py mirrors it.

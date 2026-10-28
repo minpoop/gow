@@ -71,13 +71,21 @@ fn links_at_rest(y: &[f32], bind: &[[[f64; 4]; 4]], bones: &[Bone]) -> (usize, u
     (at_rest, links)
 }
 
-/// The skinning before the offset array at `offsets`: the block of `n` entries just before it, for the `n` (the model's
-/// bone count) at which it reads best as skinning: the most of its differing links at their rest offset, the smallest
-/// `n` of those within 5 % of the best (the array before it can read as well). The smallest `n` that merely passed
-/// was taken until 0.1.94, where a block 31 entries short passed with him standing still just after loading, and
-/// nothing played (it read as a 150-bone model, which `moves` will not write).
-pub(crate) fn locate(offsets: usize, bones: &[Bone], bind: &[[[f64; 4]; 4]]) -> Option<Buffer> {
-    let scored: Vec<(usize, usize, usize)> = (bones.len()..=MAX_BONES)
+/// The skinning before the offset array at `offsets`: the block of `n` entries just before it, `n` being the model's
+/// bone count. With `count` (from the gap between the two buffers' offset arrays: each buffer is three arrays of `n`
+/// entries back to back) only that `n` is tried; without it, the `n` at which the block reads best as skinning (the
+/// most of its differing links at their rest offset; the smallest `n` within 5 % of the best).
+///
+/// Searching alone went wrong in play: 0.1.94 took a block 31 entries short (150 bones, which `moves` will not
+/// write), 0.1.95 one 14 short (167 bones: each bone read its neighbour's skinning, and Kratos came out crumpled), both
+/// read just after loading. The buffers were 543 entries (3 x 181) apart in 0.1.90, 0.1.92 and 0.1.95.
+pub(crate) fn locate(offsets: usize, count: Option<usize>, bones: &[Bone], bind: &[[[f64; 4]; 4]]) -> Option<Buffer> {
+    let range = match count {
+        Some(n) if (bones.len()..=MAX_BONES).contains(&n) => n..=n,
+        Some(_) => return None,
+        None => bones.len()..=MAX_BONES,
+    };
+    let scored: Vec<(usize, usize, usize)> = range
         .filter_map(|n| {
             let at = offsets.checked_sub(n * ENTRY)?;
             let y = read_vec::<f32>(at, bones.len() * 12)?;
@@ -90,4 +98,12 @@ pub(crate) fn locate(offsets: usize, bones: &[Bone], bind: &[[[f64; 4]; 4]]) -> 
         .collect();
     let best = scored.iter().map(|s| s.2).max()?;
     scored.iter().find(|s| s.2 as f64 >= 0.95 * best as f64).map(|&(n, at, _)| Buffer { skinning: at, bones: n, offsets })
+}
+
+/// The model's bone count from its two buffers' offset arrays (`a` and `b`, either order): a third of the gap between
+/// them, in entries, when they are two and the gap divides evenly.
+pub(crate) fn bone_count(arrays: &[usize]) -> Option<usize> {
+    let [a, b] = arrays else { return None };
+    let gap = a.abs_diff(*b);
+    (gap % (3 * ENTRY) == 0).then_some(gap / (3 * ENTRY))
 }
