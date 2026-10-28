@@ -863,3 +863,5 @@ The player asked for more than one animation before the next test.
   (0.7-1.5x); 0.25 s fades between clips, the stride's phase kept between walk, run and sprint; loops without their
   repeated last frame. The game's animation id comes from the rules tick (`host`). Settings v21 (the key's note).
 - Launcher BUILD 42.
+- Release: Melty refused the changelog at 20,138 characters (its limit is 20,000); trimmed to 18,966 (the 0.1.92
+  diagnostic and the old pose-probe notes, both outdated) and resubmitted: 0.1.94 is a draft.
