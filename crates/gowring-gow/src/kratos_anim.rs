@@ -27,9 +27,10 @@ use crate::retarget::Retarget;
 
 /// The file gowring.dll reads beside the parts.
 pub const MOVES_FILE: &str = "kratos_moves.bin";
-/// The clips built: name and CADO hash (u32 at base + 6). The idle: 61 frames, 2 s, the first gameplay clip of
-/// `ANM_heroa00` (picked by motion offline: `survey.py`).
-pub const CLIPS: [(&str, u32); 1] = [("idle", 0x2950_eb3e)];
+/// The clips built: name and CADO hash (u32 at base + 6), all in `ANM_heroa00` and picked by motion offline
+/// (`survey.py`): the idle (61 frames, 2 s, the first gameplay clip), and his forward walk (1.5 m/s, 68 frames), run
+/// (3.0 m/s, 45) and sprint (6.0 m/s, 36), loops.
+pub const CLIPS: [(&str, u32); 4] = [("idle", 0x2950_eb3e), ("walk", 0x6290_eb3e), ("run", 0x47d0_eb3e), ("sprint", 0x4dc0_eb3e)];
 /// His root-motion joint.
 const ROOT_JOINT: usize = 5;
 
@@ -753,6 +754,8 @@ pub fn decode_clip(anm: &[u8], base: usize, hado: &Hado, sk: &Skeleton, slots: &
 pub struct Clip {
     pub name: String,
     pub fps: f32,
+    /// How fast his root moves over the clip, along the ground (m/s): 0 for the idle.
+    pub speed: f32,
     pub frames: Vec<Vec<[f32; 12]>>,
     pub note: String,
     /// Per Elden Ring bone, the joint of his it follows.
@@ -1001,7 +1004,7 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
     }
     let anchored = anchor.iter().filter(|a| a.is_some()).count();
     let note = format!("{name}: {} frames at {fps} fps, {anchored} of {nb} bones on his joints (fingers {}), pelvis {:.2}-{:.2} m (rest {:.2})", frames.len(), fingers_note.join(", "), pelvis_y.0, pelvis_y.1, pelvis.map_or(0.0, |p| joint_rest[p][1]));
-    Ok(Clip { name: name.into(), fps, frames, note, anchors: anchor })
+    Ok(Clip { name: name.into(), fps, speed: 0.0, frames, note, anchors: anchor })
 }
 
 fn sub3(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
@@ -1047,17 +1050,18 @@ fn has_anchor_above(er: &[Node], anchor: &[Option<usize>], b: usize) -> bool {
     false
 }
 
-/// The moves file: "GRMV", u32 version 1, u32 bones, u32 clips; per clip u32 name length, the name, f32 fps, u32
-/// frames, then per frame per bone 12 f32 (row-major 3x4 skinning in model space).
+/// The moves file: "GRMV", u32 version 2, u32 bones, u32 clips; per clip u32 name length, the name, f32 fps, f32
+/// speed (version 2), u32 frames, then per frame per bone 12 f32 (row-major 3x4 skinning in model space).
 pub fn moves_file(bones: usize, clips: &[Clip]) -> Vec<u8> {
     let mut out = b"GRMV".to_vec();
-    for v in [1u32, bones as u32, clips.len() as u32] {
+    for v in [2u32, bones as u32, clips.len() as u32] {
         out.extend(v.to_le_bytes());
     }
     for c in clips {
         out.extend((c.name.len() as u32).to_le_bytes());
         out.extend(c.name.as_bytes());
         out.extend(c.fps.to_le_bytes());
+        out.extend(c.speed.to_le_bytes());
         out.extend((c.frames.len() as u32).to_le_bytes());
         for f in &c.frames {
             for m in f {
@@ -1088,10 +1092,26 @@ pub fn build_moves(anm: &[u8], kratos: &Skeleton, er: &[Node], scale: f32) -> Re
             notes.push(format!("{name}: no clip {hash:#010x}"));
             continue;
         };
-        let (fps, world) = decode_clip(anm, base, &hado, kratos, &slots).with_context(|| format!("{name} at {base:#x}"))?;
-        let clip = retarget_clip(name, fps, &world, &mirrored, scale as f64, &r, er, &driven)?;
-        notes.push(clip.note.clone());
-        clips.push(clip);
+        // a clip that does not build is left out (the others still play)
+        let built = decode_clip(anm, base, &hado, kratos, &slots).and_then(|(fps, world)| {
+            let mut clip = retarget_clip(name, fps, &world, &mirrored, scale as f64, &r, er, &driven)?;
+            // his root's travel along the ground over the loop, scaled as he is
+            let (a, b) = (world.first().map(|w| w[ROOT_JOINT]), world.last().map(|w| w[ROOT_JOINT]));
+            if let (Some(a), Some(b)) = (a, b) {
+                let d = ((b[0][3] - a[0][3]).powi(2) + (b[2][3] - a[2][3]).powi(2)).sqrt() * scale as f64;
+                let secs = (world.len().max(2) - 1) as f64 / fps.max(1.0) as f64;
+                clip.speed = (d / secs) as f32;
+            }
+            clip.note = format!("{} at {:.2} m/s", clip.note, clip.speed);
+            Ok(clip)
+        });
+        match built {
+            Ok(clip) => {
+                notes.push(clip.note.clone());
+                clips.push(clip);
+            }
+            Err(e) => notes.push(format!("{name}: {e:#}")),
+        }
     }
     let mapped = slots.iter().filter(|s| s.is_some()).count();
     Ok((moves_file(er.len(), &clips), format!("{mapped} of {} pose slots on his joints; {}", slots.len(), notes.join("; "))))

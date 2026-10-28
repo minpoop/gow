@@ -225,8 +225,8 @@ impl Runtime {
             let down = function_key_down(st.debug_pose_key);
             if down && !self.pose_key_down {
                 let mode = crate::moves::cycle();
-                crate::glog!("debug", "F{} pressed: standing still shows {mode}", st.debug_pose_key);
-                crate::overlay::toast(&format!("Standing still: {mode} (debug)"));
+                crate::glog!("debug", "F{} pressed: {mode}", st.debug_pose_key);
+                crate::overlay::toast(&format!("{mode} (debug)"));
             }
             self.pose_key_down = down;
             let down = function_key_down(st.debug_cape_key);

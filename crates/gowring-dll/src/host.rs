@@ -457,6 +457,7 @@ impl Bridge {
             let ta = &chr.modules.time_act;
             // `read_idx` is the slot of the animation last played or updated
             let last = &ta.anim_queue[ta.read_idx as usize % ta.anim_queue.len()];
+            crate::moves::set_game_anim(last.anim_id);
             if last.anim_id != self.anim_seen.0 && last.anim_id > 0 {
                 self.anim_seen.0 = last.anim_id;
                 *self.anim_tally.entry(last.anim_id).or_default() += 1;

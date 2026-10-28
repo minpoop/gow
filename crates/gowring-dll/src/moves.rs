@@ -1,28 +1,28 @@
-//! Kratos's own moves in play (step 3 of giving him his movement): his Ragnarök idle, decoded and retargeted onto the
-//! player skeleton by the launcher (`gowring_gow::kratos_anim`, `kratos_moves.bin` beside the parts), shown while the
-//! player stands still.
+//! Kratos's own moves in play (step 3 of giving him his movement): his Ragnarök idle, walk, run and sprint, decoded and
+//! retargeted onto the player skeleton by the launcher (`gowring_gow::kratos_anim`, `kratos_moves.bin` beside the
+//! parts), shown over the game's pose.
 //!
-//! Each frame, just before drawing (after the cape), for each of the game's two buffers: the game's skinning `Y`
+//! Each frame, just before drawing (after the cape), for each of the model's two buffers: the game's skinning `Y`
 //! (`livepose`, just before the offsets) and the clip's skinning in model space `K`; the character is where the
 //! root's skinning puts him (`C = Y[Master]`), so the skinning wanted is `C x K` and the offset that shows it, in rest
 //! space under the game's pose, is `Y^-1 x C x K` (for the cape's bones, times the cape's own offset on top). The
 //! bones from RootPos up are written in one write per buffer; Master and the feet's IK targets are left alone (the
 //! cape checks them before writing).
 //!
-//! When: the player stands still in the game's own pose (his root moved under 0.3 m/s and his hands under 0.6 m/s in
-//! his own frame, both over the last 0.4 s): the idle blends in over 0.3 s, and out over 0.12 s as soon as he moves,
-//! back to the game's pose.
+//! When (`choose`): his walk, run or sprint (the one nearest the player's speed, played at that speed over its own)
+//! while the game plays a forward walk, run or dash loop; else his idle while the player stands still (his root under
+//! 0.3 m/s and his hands under 0.6 m/s in his own frame, over the last 0.4 s); else the game's pose (rolls, attacks,
+//! jumps, anything else). In over 0.3 s, out over 0.12 s, a 0.25 s fade between clips (the stride carried over
+//! between walk, run and sprint).
 //!
-//! 0.1.91 in play: the idle showed and the body was right, but both hands came out as flat stretched slabs and the
-//! axe floated (the game places weapons from its own hand). Offline, his real mesh under the same pose closes both
-//! hands into fists, so something in the game changes the hands after this step reads them (the hand IK that keeps
-//! two hands on a weapon is one candidate). So the debug pose key now cycles: Kratos's idle; his idle with the game's
-//! own arms (the hands and the weapon where the game puts them); Elden Ring's rest pose (every bone that takes the
-//! offsets snaps to it, any that does not shows); off. And the first time each is shown, a trace reads the game's
-//! skinning and offsets at six points of the frame for 40 frames and logs, per bone group, at which points they
-//! changed.
+//! 0.1.91-0.1.92 in play: the hands came out stretched flat; that was the retargeting's fingers (fixed in 0.1.93,
+//! `kratos_anim`), and the axe floats (the game places weapons from its own hand). The debug pose key cycles: Kratos's
+//! moves; them with the game's own arms (the hands and the weapon where the game puts them); Elden Ring's rest pose (a
+//! check that every bone takes the offsets); off. The first time each is shown, a trace reads the game's skinning
+//! and offsets at six points of the frame for 40 frames and logs, per bone group, at which points they changed
+//! (0.1.92: the game writes both at ChrIns_PostPhysics, nothing after the mod).
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -39,10 +39,24 @@ const CALM_S: f32 = 0.4;
 const SAMPLE_S: f32 = 0.2;
 const BLEND_IN_S: f32 = 0.3;
 const BLEND_OUT_S: f32 = 0.12;
+/// His walk, run and sprint show while the game plays a walk, run or dash loop (its moves 020xxx and 022xxx: rolls
+/// are 027xxx, jumps 202xxx, attacks 03xxxx) at this speed along the ground or more, the way he faces (the travel at
+/// most about 45 degrees off his forward, model space -z, his clips' own).
+const LOCO_SPEED: f64 = 0.4;
+const LOCO_MOVES: [i32; 2] = [20, 22];
+const FORWARD: f64 = 0.7;
+/// Once in one of them: kept while the travel stays within about 70 degrees of his forward (a turn while running
+/// drags it off for a moment; 0.1.90's reads at 3.5-7 m/s ran at 0.98-1.00 along -z), and another taken only when it
+/// is this much nearer his speed (m/s), so neither flickers.
+const FORWARD_KEEP: f64 = 0.35;
+const SPEED_MARGIN: f64 = 0.3;
+/// Between two clips; a walk, run or sprint plays at the player's speed over its own, within these.
+const FADE_S: f32 = 0.25;
+const RATE: (f32, f32) = (0.7, 1.5);
 const LOG_EVERY_S: f32 = 20.0;
 
-/// What is shown while he stands still (the debug pose key cycles them).
-const MODES: [&str; 4] = ["Kratos's idle", "Kratos's idle with the game's arms", "Elden Ring's rest pose (a check)", "off: the game's pose"];
+/// What is shown (the debug pose key cycles them).
+const MODES: [&str; 4] = ["Kratos's moves", "Kratos's moves with the game's arms", "Elden Ring's rest pose (a check)", "off: the game's pose"];
 const KRATOS: u8 = 0;
 const GAME_ARMS: u8 = 1;
 const REST: u8 = 2;
@@ -50,6 +64,8 @@ const OFF: u8 = 3;
 static MODE: AtomicU8 = AtomicU8::new(KRATOS);
 static STATE: Mutex<Option<State>> = Mutex::new(None);
 static LOADED: AtomicBool = AtomicBool::new(false);
+/// The animation the game plays on the player (`aCCC_MMMMMM` as CCC x 1,000,000 + MMMMMM), from the rules tick.
+static GAME_ANIM: AtomicI32 = AtomicI32::new(-1);
 
 /// Go to the next mode; its name.
 pub fn cycle() -> &'static str {
@@ -58,16 +74,46 @@ pub fn cycle() -> &'static str {
     MODES[m as usize]
 }
 
+/// The game's current animation on the player (see `host`).
+pub fn set_game_anim(id: i32) {
+    GAME_ANIM.store(id, Ordering::Relaxed);
+}
+
 struct Clip {
     name: String,
     fps: f32,
+    /// How fast his root moves over it (m/s; 0 for the idle).
+    speed: f32,
     frames: usize,
     /// frames x bones x 12 (row-major 3x4 skinning in model space).
     data: Vec<f32>,
 }
 
+impl Clip {
+    /// A loop: its last frame is its first.
+    fn length(&self) -> f32 {
+        (self.frames.max(2) - 1) as f32 / self.fps
+    }
+
+    /// The skinning of each bone at `phase` (0-1 over the loop), between the two frames around it.
+    fn pose(&self, phase: f32, n: usize) -> Vec<[f32; 12]> {
+        let f = phase.rem_euclid(1.0) * (self.frames.max(2) - 1) as f32;
+        let a = (f.floor() as usize).min(self.frames - 1);
+        let (b, t) = ((a + 1).min(self.frames - 1), f - a as f32);
+        (0..n)
+            .map(|bone| {
+                let (x, y) = (&self.data[(a * n + bone) * 12..(a * n + bone) * 12 + 12], &self.data[(b * n + bone) * 12..(b * n + bone) * 12 + 12]);
+                std::array::from_fn(|i| x[i] * (1.0 - t) + y[i] * t)
+            })
+            .collect()
+    }
+}
+
 struct State {
-    clip: Clip,
+    clips: Vec<Clip>,
+    idle: Option<usize>,
+    /// The walk, run and sprint, slowest first.
+    loco: Vec<usize>,
     bones: usize,
     bind: Vec<[[f64; 4]; 4]>,
     hands: [usize; 2],
@@ -83,12 +129,19 @@ struct State {
     /// The last motion sample: when, the root's world position and the hands in his own frame.
     sample: Option<(Instant, [f64; 3], [[f64; 3]; 2])>,
     calm_for: f32,
+    /// From the last sample: his speed along the ground, and how close to his forward it is (cosine).
+    speed: f64,
+    forward: f64,
     weight: f32,
-    time: f32,
+    /// The clip shown and where in it (0-1); the one it fades from, where in that, and how far the fade is.
+    current: Option<usize>,
+    phase: f32,
+    previous: Option<(usize, f32)>,
+    fade: f32,
     /// Whether the last frame wrote the pose (so stopping restores the offsets once).
     wrote: bool,
     // for the log
-    shown_s: f32,
+    shown_s: Vec<f32>,
     starts: u32,
     writes: u64,
     skipped: u64,
@@ -96,33 +149,49 @@ struct State {
     next_log: f32,
 }
 
-/// The moves file (`gowring_gow::kratos_anim::moves_file`): its first clip, if it is for this skeleton.
-fn load(bones: &[Bone]) -> Result<Clip, String> {
+/// The moves file (`gowring_gow::kratos_anim::moves_file`, version 1 or 2): its clips, if it is for this skeleton.
+fn load(bones: &[Bone]) -> Result<Vec<Clip>, String> {
     let path = crate::paths::get().home.join("mod").join("parts").join("kratos_moves.bin");
     let b = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let u32_at = |o: usize| b.get(o..o + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap()));
-    if b.get(..4) != Some(b"GRMV") || u32_at(4) != Some(1) {
-        return Err("not a version 1 moves file".into());
+    let f32_at = |o: usize| b.get(o..o + 4).map(|s| f32::from_le_bytes(s.try_into().unwrap()));
+    let version = u32_at(4).unwrap_or(0);
+    if b.get(..4) != Some(b"GRMV") || !(1..=2).contains(&version) {
+        return Err("not a version 1 or 2 moves file".into());
     }
-    let (n, clips) = (u32_at(8).unwrap_or(0) as usize, u32_at(12).unwrap_or(0) as usize);
+    let (n, count) = (u32_at(8).unwrap_or(0) as usize, u32_at(12).unwrap_or(0) as usize);
     if n != bones.len() {
         return Err(format!("made for {n} bones, the skeleton has {}", bones.len()));
     }
-    if clips == 0 {
+    if count == 0 {
         return Err("no clips in it (the launcher could not build them)".into());
     }
-    let len = u32_at(16).ok_or("cut short")? as usize;
-    let name = String::from_utf8_lossy(b.get(20..20 + len).ok_or("cut short")?).into_owned();
-    let o = 20 + len;
-    let fps = f32::from_le_bytes(b.get(o..o + 4).ok_or("cut short")?.try_into().unwrap());
-    let frames = u32_at(o + 4).ok_or("cut short")? as usize;
-    let floats = frames * n * 12;
-    let raw = b.get(o + 8..o + 8 + 4 * floats).ok_or("cut short")?;
-    let data: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
-    if frames == 0 || !(1.0..=240.0).contains(&fps) || data.iter().any(|x| !x.is_finite()) {
-        return Err(format!("a clip of {frames} frames at {fps} fps, or with bad values"));
+    let mut clips = Vec::new();
+    let mut o = 16;
+    for _ in 0..count.min(16) {
+        let len = u32_at(o).ok_or("cut short")? as usize;
+        let name = String::from_utf8_lossy(b.get(o + 4..o + 4 + len).ok_or("cut short")?).into_owned();
+        o += 4 + len;
+        let fps = f32_at(o).ok_or("cut short")?;
+        o += 4;
+        let speed = if version >= 2 {
+            o += 4;
+            f32_at(o - 4).ok_or("cut short")?
+        } else {
+            0.0
+        };
+        let frames = u32_at(o).ok_or("cut short")? as usize;
+        o += 4;
+        let floats = frames * n * 12;
+        let raw = b.get(o..o + 4 * floats).ok_or("cut short")?;
+        o += 4 * floats;
+        let data: Vec<f32> = raw.chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        if frames < 2 || !(1.0..=240.0).contains(&fps) || !(0.0..=20.0).contains(&speed) || data.iter().any(|x| !x.is_finite()) {
+            return Err(format!("{name}: {frames} frames at {fps} fps and {speed} m/s, or bad values"));
+        }
+        clips.push(Clip { name, fps, speed, frames, data });
     }
-    Ok(Clip { name, fps, frames, data })
+    Ok(clips)
 }
 
 /// Bone `b`'s joint in his own frame (the root's skinning undone) in skinning `y`.
@@ -135,13 +204,35 @@ fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
+/// The clip to show now, if any: a walk, run or sprint (by speed, the nearest) while the game plays a forward walk,
+/// run or dash loop; else the idle while he stands still.
+fn choose(s: &State, mode: u8) -> Option<usize> {
+    if mode == OFF {
+        return None;
+    }
+    let anim = GAME_ANIM.load(Ordering::Relaxed);
+    let moving = anim >= 0 && LOCO_MOVES.contains(&((anim % 1_000_000) / 1000));
+    let off = |c: usize| (s.clips[c].speed as f64 - s.speed).abs();
+    let shown = s.current.filter(|c| s.loco.contains(c) && s.weight > 0.0);
+    let forward = if shown.is_some() { FORWARD_KEEP } else { FORWARD };
+    if mode != REST && moving && s.speed >= LOCO_SPEED && s.forward >= forward && !s.loco.is_empty() {
+        let nearest = s.loco.iter().copied().min_by(|a, b| off(*a).total_cmp(&off(*b)))?;
+        return Some(match shown {
+            Some(c) if off(c) <= off(nearest) + SPEED_MARGIN => c,
+            _ => nearest,
+        });
+    }
+    (s.calm_for >= CALM_S).then_some(s.idle).flatten()
+}
+
 /// Called just before drawing, every frame, after the cape.
 pub fn step() {
     let Some(bones) = crate::skeleton::bones() else { return };
     if !LOADED.swap(true, Ordering::Relaxed) {
         match load(bones) {
-            Ok(clip) => {
-                crate::glog!("moves", "Kratos's {} ({} frames at {} fps) for {} bones; shown while he stands still", clip.name, clip.frames, clip.fps, bones.len());
+            Ok(clips) => {
+                let list: Vec<String> = clips.iter().map(|c| format!("{} ({} frames at {} fps, {:.2} m/s)", c.name, c.frames, c.fps, c.speed)).collect();
+                crate::glog!("moves", "Kratos's moves for {} bones: {}", bones.len(), list.join(", "));
                 let index = |n: &str| bones.iter().position(|b| b.name == n);
                 let (Some(l), Some(r)) = (index("L_Hand"), index("R_Hand")) else {
                     crate::glog!("moves", "no hands in the skeleton; his moves stay off");
@@ -152,8 +243,41 @@ pub fn step() {
                     let p = usize::try_from(b.parent).ok().filter(|p| *p < i);
                     arms[i] = b.name == "L_Clavicle" || b.name == "R_Clavicle" || p.is_some_and(|p| arms[p]);
                 }
+                let idle = clips.iter().position(|c| c.name == "idle");
+                let mut loco: Vec<usize> = (0..clips.len()).filter(|i| clips[*i].speed > 0.1).collect();
+                loco.sort_by(|a, b| clips[*a].speed.total_cmp(&clips[*b].speed));
+                let shown_s = vec![0.0; clips.len()];
                 if let Ok(mut s) = STATE.lock() {
-                    *s = Some(State { clip, bones: bones.len(), bind: bind_pose(bones), hands: [l, r], arms, traced: 0, last_mode: KRATOS, full_s: 0.0, buffers: Vec::new(), last: None, sample: None, calm_for: 0.0, weight: 0.0, time: 0.0, wrote: false, shown_s: 0.0, starts: 0, writes: 0, skipped: 0, t: 0.0, next_log: LOG_EVERY_S });
+                    *s = Some(State {
+                        clips,
+                        idle,
+                        loco,
+                        bones: bones.len(),
+                        bind: bind_pose(bones),
+                        hands: [l, r],
+                        arms,
+                        traced: 0,
+                        last_mode: KRATOS,
+                        full_s: 0.0,
+                        buffers: Vec::new(),
+                        last: None,
+                        sample: None,
+                        calm_for: 0.0,
+                        speed: 0.0,
+                        forward: 0.0,
+                        weight: 0.0,
+                        current: None,
+                        phase: 0.0,
+                        previous: None,
+                        fade: 1.0,
+                        wrote: false,
+                        shown_s,
+                        starts: 0,
+                        writes: 0,
+                        skipped: 0,
+                        t: 0.0,
+                        next_log: LOG_EVERY_S,
+                    });
                 }
             }
             Err(e) => crate::glog!("moves", "Kratos's moves are off: {e}"),
@@ -184,7 +308,8 @@ pub fn step() {
     let most = s.buffers.iter().filter_map(|b| b.1).map(|b| b.bones).max().unwrap_or(0);
     let buffers: Vec<Buffer> = s.buffers.iter().filter_map(|b| b.1).filter(|b| b.bones == most && most > n).collect();
     let Some(first) = buffers.first().copied() else { return };
-    // standing still? sampled every SAMPLE_S from the first buffer
+    // how he moves, sampled every SAMPLE_S from the first buffer: standing still (his root and hands), his speed along
+    // the ground and its direction in his own frame
     if let Some(y) = read_vec::<f32>(first.skinning, n * 12).filter(|y| y.iter().all(|x| x.is_finite())) {
         let root = [y[3] as f64, y[7] as f64, y[11] as f64];
         let hands = [own_joint(&y, &s.bind, s.hands[0]), own_joint(&y, &s.bind, s.hands[1])];
@@ -194,6 +319,13 @@ pub fn step() {
                     let span = now.duration_since(at).as_secs_f64();
                     let calm = dist(root, p) / span < CALM_SPEED && dist(l, h[0]) / span < CALM_HANDS && dist(r, h[1]) / span < CALM_HANDS;
                     s.calm_for = if calm { s.calm_for + span as f32 } else { 0.0 };
+                    // the travel into his frame (the root's skinning turned back; a scale in it does not matter)
+                    let v = [root[0] - p[0], root[1] - p[1], root[2] - p[2]];
+                    let c = matrix(&y[..12]);
+                    let local: [f64; 3] = std::array::from_fn(|k| (0..3).map(|r| c[r][k] * v[r]).sum::<f64>());
+                    let ground = (local[0] * local[0] + local[2] * local[2]).sqrt();
+                    s.speed = dist([v[0], 0.0, v[2]], [0.0; 3]) / span;
+                    s.forward = if ground > 1e-6 { -local[2] / ground } else { 0.0 };
                     s.sample = Some((now, root, [l, r]));
                 }
                 None => s.sample = Some((now, root, [l, r])),
@@ -202,16 +334,42 @@ pub fn step() {
         }
     }
     let mode = MODE.load(Ordering::Relaxed);
-    let on = mode != OFF && s.calm_for >= CALM_S;
+    let target = choose(s, mode);
     let before = s.weight;
-    s.weight = if on { (s.weight + dt / BLEND_IN_S).min(1.0) } else { (s.weight - dt / BLEND_OUT_S).max(0.0) };
-    if before == 0.0 && s.weight > 0.0 {
-        s.time = 0.0;
-        s.starts += 1;
+    s.weight = if target.is_some() { (s.weight + dt / BLEND_IN_S).min(1.0) } else { (s.weight - dt / BLEND_OUT_S).max(0.0) };
+    if let Some(t) = target {
+        if before == 0.0 || s.current.is_none() {
+            // a fresh start: straight into the clip
+            s.current = Some(t);
+            s.phase = 0.0;
+            s.previous = None;
+            s.fade = 1.0;
+            s.starts += 1;
+        } else if s.current != Some(t) {
+            // into another clip: fade from the one shown; between his walk, run and sprint the stride carries on
+            let from = s.current.unwrap_or(t);
+            let both_loco = s.loco.contains(&from) && s.loco.contains(&t);
+            s.previous = Some((from, s.phase));
+            s.fade = 0.0;
+            s.current = Some(t);
+            if !both_loco {
+                s.phase = 0.0;
+            }
+        }
     }
+    let rate = |c: &Clip, speed: f64| if c.speed > 0.1 { ((speed / c.speed as f64) as f32).clamp(RATE.0, RATE.1) } else { 1.0 };
     if s.weight > 0.0 {
-        s.shown_s += dt;
-        s.time = (s.time + dt) % (s.clip.frames as f32 / s.clip.fps);
+        if let Some(c) = s.current {
+            s.shown_s[c] += dt;
+            s.phase = (s.phase + dt * rate(&s.clips[c], s.speed) / s.clips[c].length()).rem_euclid(1.0);
+        }
+        if let Some((p, ph)) = s.previous {
+            s.previous = Some((p, (ph + dt * rate(&s.clips[p], s.speed) / s.clips[p].length()).rem_euclid(1.0)));
+            s.fade = (s.fade + dt / FADE_S).min(1.0);
+            if s.fade >= 1.0 {
+                s.previous = None;
+            }
+        }
     }
     let cape: Vec<(usize, [f32; 12])> = crate::cape::current_offsets();
     if s.weight == 0.0 {
@@ -228,21 +386,22 @@ pub fn step() {
             }
             s.wrote = false;
         }
-    } else {
-        // the clip's frame (between two, looped) and the offsets that show it
-        let f = s.time * s.clip.fps;
-        let (a, frac) = (f.floor() as usize % s.clip.frames, f.fract());
-        let b2 = (a + 1) % s.clip.frames;
-        let data = &s.clip.data;
-        let k: Vec<[f32; 12]> = (0..n)
-            .map(|bone| {
-                if mode == REST {
-                    return IDENTITY;
+        s.current = None;
+    } else if let Some(cur) = s.current {
+        // the clip's pose (faded from the one before), and the offsets that show it
+        let k: Vec<[f32; 12]> = if mode == REST {
+            vec![IDENTITY; n]
+        } else {
+            let now_pose = s.clips[cur].pose(s.phase, n);
+            match s.previous {
+                Some((p, ph)) => {
+                    let was = s.clips[p].pose(ph, n);
+                    let t = s.fade;
+                    now_pose.iter().zip(&was).map(|(a, b)| std::array::from_fn(|i| b[i] * (1.0 - t) + a[i] * t)).collect()
                 }
-                let (x, y) = (&data[(a * n + bone) * 12..(a * n + bone) * 12 + 12], &data[(b2 * n + bone) * 12..(b2 * n + bone) * 12 + 12]);
-                std::array::from_fn(|i| x[i] * (1.0 - frac) + y[i] * frac)
-            })
-            .collect();
+                None => now_pose,
+            }
+        };
         let w = s.weight as f64;
         for b in &buffers {
             let Some(y) = read_vec::<f32>(b.skinning, n * 12).filter(|y| y.iter().all(|x| x.is_finite())) else {
@@ -297,14 +456,20 @@ pub fn step() {
     }
     if s.t >= s.next_log {
         s.next_log = s.t + LOG_EVERY_S;
+        let shown: Vec<String> = s.clips.iter().zip(&s.shown_s).map(|(c, t)| format!("{} {t:.1} s", c.name)).collect();
+        let anim = GAME_ANIM.load(Ordering::Relaxed);
         crate::glog!(
             "moves",
-            "{}: shown {:.1} s ({} times) since the start, weight now {:.2}, {} still; {} writes, {} skipped; {}",
-            s.clip.name,
-            s.shown_s,
+            "shown since the start: {} ({} starts); now {} at weight {:.2}; the game plays a{:03}_{:06}, he moves {:.2} m/s ({:.2} forward), {}; {} writes, {} skipped; {}",
+            shown.join(", "),
             s.starts,
+            s.current.map_or("nothing", |c| s.clips[c].name.as_str()),
             s.weight,
-            if s.calm_for >= CALM_S { "standing" } else { "not standing" },
+            anim.max(0) / 1_000_000,
+            anim.max(0) % 1_000_000,
+            s.speed,
+            s.forward,
+            if s.calm_for >= CALM_S { "standing still" } else { "not standing still" },
             s.writes,
             s.skipped,
             MODES[mode as usize]

@@ -846,3 +846,20 @@ The player asked for the idle first, then a test.
   the bone best (over three frames), taken up to its first cleanly driven joint. 60 of 150 bones on his joints.
 - gowring.dll: writes only into the model's own buffers (the most bones), not the 150-bone blocks.
 - Launcher BUILD 41.
+
+## 0.1.94 — his walk, run and sprint (2026-10-28)
+
+The player asked for more than one animation before the next test.
+- Builder: CLIPS idle 0x2950eb3e, walk 0x6290eb3e (68 frames, 1.50 m/s), run 0x47d0eb3e (45, 3.00), sprint
+  0x4dc0eb3e (36, 6.00); speeds from his root's travel over the loop (x 0.92: 1.38, 2.76, 5.52 m/s). A clip that
+  does not build is left out. Moves file version 2 (a speed per clip). Offline on the player's model: alternating
+  strides, both feet planting at their rest height 0.11 m, the torso leaning more the faster; the run's arms swing
+  with open hands, nothing stretched (`anim_ref/loco.png`, `body_run.png`).
+- gowring.dll `moves`: all clips; `choose` takes the walk, run or sprint nearest the player's speed while the game
+  plays a walk, run or dash loop (its moves 020xxx / 022xxx; rolls 027xxx, jumps 202xxx, attacks 03xxxx, from the
+  player_anim tallies of 0.1.90-0.1.92) at 0.4 m/s or more within ~45 degrees of his forward (model -z: 0.1.90's
+  reads at 3.5-7 m/s ran at 0.98-1.00 along it), else the idle when still, else the game's pose. Hysteresis: kept
+  within ~70 degrees once shown, another taken only 0.3 m/s nearer. Played at the player's speed over the clip's
+  (0.7-1.5x); 0.25 s fades between clips, the stride's phase kept between walk, run and sprint; loops without their
+  repeated last frame. The game's animation id comes from the rules tick (`host`). Settings v21 (the key's note).
+- Launcher BUILD 42.
