@@ -71,16 +71,23 @@ fn links_at_rest(y: &[f32], bind: &[[[f64; 4]; 4]], bones: &[Bone]) -> (usize, u
     (at_rest, links)
 }
 
-/// The skinning before the offset array at `offsets`: the block of `n` entries just before it, for the smallest `n`
-/// (the model's bone count) at which it reads as skinning. A misaligned block puts few of its differing links at rest.
+/// The skinning before the offset array at `offsets`: the block of `n` entries just before it, for the `n` (the model's
+/// bone count) at which it reads best as skinning: the most of its differing links at their rest offset, the smallest
+/// `n` of those within 5 % of the best (the array before it can read as well). The smallest `n` that merely passed
+/// was taken until 0.1.94, where a block 31 entries short passed with him standing still just after loading, and
+/// nothing played (it read as a 150-bone model, which `moves` will not write).
 pub(crate) fn locate(offsets: usize, bones: &[Bone], bind: &[[[f64; 4]; 4]]) -> Option<Buffer> {
-    (bones.len()..=MAX_BONES).find_map(|n| {
-        let at = offsets.checked_sub(n * ENTRY)?;
-        let y = read_vec::<f32>(at, bones.len() * 12)?;
-        if y.iter().any(|x| !x.is_finite()) {
-            return None;
-        }
-        let (at_rest, links) = links_at_rest(&y, bind, bones);
-        (links >= MIN_LINKS && at_rest as f64 >= MATCH * links as f64).then_some(Buffer { skinning: at, bones: n, offsets })
-    })
+    let scored: Vec<(usize, usize, usize)> = (bones.len()..=MAX_BONES)
+        .filter_map(|n| {
+            let at = offsets.checked_sub(n * ENTRY)?;
+            let y = read_vec::<f32>(at, bones.len() * 12)?;
+            if y.iter().any(|x| !x.is_finite()) {
+                return None;
+            }
+            let (at_rest, links) = links_at_rest(&y, bind, bones);
+            (links >= MIN_LINKS && at_rest as f64 >= MATCH * links as f64).then_some((n, at, at_rest))
+        })
+        .collect();
+    let best = scored.iter().map(|s| s.2).max()?;
+    scored.iter().find(|s| s.2 as f64 >= 0.95 * best as f64).map(|&(n, at, _)| Buffer { skinning: at, bones: n, offsets })
 }

@@ -147,6 +147,7 @@ struct State {
     skipped: u64,
     t: f32,
     next_log: f32,
+    relocate_at: f32,
 }
 
 /// The moves file (`gowring_gow::kratos_anim::moves_file`, version 1 or 2): its clips, if it is for this skeleton.
@@ -277,6 +278,7 @@ pub fn step() {
                         skipped: 0,
                         t: 0.0,
                         next_log: LOG_EVERY_S,
+                        relocate_at: 0.0,
                     });
                 }
             }
@@ -295,7 +297,12 @@ pub fn step() {
         crate::log::once("moves-no-offsets", "moves", "no offset arrays yet (the cape finds them); his moves wait");
         return;
     }
-    if s.buffers.iter().map(|b| b.0).ne(arrays.iter().copied()) {
+    // found again when the arrays change, and every 2 s while none reads as the model's own (more bones than the
+    // skeleton: its extras): in 0.1.94 a block 31 entries short read as a 150-bone pose just after loading, and nothing
+    // played all session
+    let unsure = !s.buffers.iter().any(|b| b.1.is_some_and(|b| b.bones > bones.len()));
+    if s.buffers.iter().map(|b| b.0).ne(arrays.iter().copied()) || (unsure && s.t >= s.relocate_at) {
+        s.relocate_at = s.t + 2.0;
         s.buffers = arrays.iter().map(|a| (*a, locate(*a, bones, &s.bind))).collect();
         let found: Vec<String> = s.buffers.iter().map(|(a, b)| b.map_or(format!("{a:#x}: none"), |b| format!("{a:#x}: skinning at {:#x}, {} bones", b.skinning, b.bones))).collect();
         crate::glog!("moves", "the game's pose by its offsets: {}", found.join("; "));

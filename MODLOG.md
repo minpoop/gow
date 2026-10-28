@@ -865,3 +865,14 @@ The player asked for more than one animation before the next test.
 - Launcher BUILD 42.
 - Release: Melty refused the changelog at 20,138 characters (its limit is 20,000); trimmed to 18,966 (the 0.1.92
   diagnostic and the old pose-probe notes, both outdated) and resubmitted: 0.1.94 is a draft.
+
+## 0.1.95 — the pose locator takes the best fit (2026-10-28)
+
+0.1.94's test (1 run): the player saw none of the animations. Its log: "moves the game's pose by its offsets:
+...: skinning at ..., 150 bones" for both buffers. `livepose::locate` took the smallest bone count whose block passed
+(80 % of its differing links at rest), and with him standing still just after loading the block 31 entries short
+(n = 150) passed; `moves` writes only buffers with more bones than the skeleton, so nothing was written. Melty also
+recorded c0000005 in ntdll at 6:23 (ntdll+0x2730d, the known closing chain) and the game closing at 5:06.
+- gowring.dll `livepose::locate`: scores every n from the skeleton's count to 400 by links at rest and takes the
+  smallest within 5 % of the best. `moves`: locates again every 2 s while no buffer has more bones than the skeleton.
+- tools/ragnarok_anim/er_pose_live.py: `locate` mirrors it.

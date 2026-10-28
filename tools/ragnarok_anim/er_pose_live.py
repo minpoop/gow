@@ -43,16 +43,20 @@ def links_at_rest(y, bind, bones):
 
 
 def locate(mem, base, offsets, bones, bind):
-    """livepose.rs's search on a memory image `mem` starting at address `base`: (skinning address, bone count)."""
-    n0 = len(bones)
+    """livepose.rs's search on a memory image `mem` starting at address `base`: (skinning address, bone count), the
+    smallest bone count whose block scores within 5 % of the best (the most differing links at rest)."""
+    n0 = len(bones); scored = []
     for n in range(n0, MAX_BONES + 1):
         at = offsets - n * ENTRY
-        if at < base: return None
+        if at < base: break
         y = np.frombuffer(mem, '<f4', count=n0 * 12, offset=at - base)
         if not np.all(np.isfinite(y)): continue
         r, links = links_at_rest(y, bind, bones)
-        if links >= MIN_LINKS and r >= MATCH * links: return at, n
-    return None
+        if links >= MIN_LINKS and r >= MATCH * links: scored.append((n, at, r))
+    if not scored: return None
+    best = max(s[2] for s in scored)
+    n, at, _ = next(s for s in scored if s[2] >= 0.95 * best)
+    return at, n
 
 
 def sheet(world, names, frames, title, out):
