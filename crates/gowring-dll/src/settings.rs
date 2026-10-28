@@ -67,6 +67,10 @@ pub struct Settings {
     /// While Kratos two-hands, the Guardian Shield is put away (his left hand switched to an empty weapon slot) instead
     /// of hanging on his back; it comes out with the guard.
     pub hide_stowed_shield: bool,
+    /// Testing aid: which of Kratos's weapons draw nothing (they keep their moves): 0 none, 1 all but the Leviathan
+    /// Axe, 2 all four. To tell his hands from a weapon model at them (0.1.97: rods at his left hand in every pose
+    /// mode, his rest pose included). Applies the next time the game starts; 1 for now, while that is looked into.
+    pub debug_empty_hands: u8,
 }
 
 /// The six runic slots: (settings key, weapon, heavy?, the weapon's own pick).
@@ -128,12 +132,16 @@ impl Default for Settings {
             hair_fur: true,
             two_hand_by_default: true,
             hide_stowed_shield: true,
+            debug_empty_hands: 1,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 21;
+const FILE_VERSION: u32 = 22;
+
+/// The values of `debug_empty_hands`, in order.
+pub const EMPTY_HANDS: [&str; 3] = ["off", "except_axe", "all"];
 
 /// The settings file's text for these values, with a plain-language note under every key.
 fn render(s: &Settings) -> String {
@@ -211,6 +219,9 @@ fn render(s: &Settings) -> String {
   "debug_pose_key": "F{pkey}",
   "_debug_pose_key": "Keyboard key (F1 to F12) that cycles Kratos's own moves: his Ragnarök idle, walk, run and sprint; the same with the game's arms (so the weapon stays in his hands); Elden Ring's plain rest pose (a check for testing); and the game's own animation.",
 
+  "debug_empty_hands": "{empty}",
+  "_debug_empty_hands": "Testing aid: \"off\" = all of Kratos's weapons show. \"except_axe\" = the Blades of Chaos, the Draupnir Spear and the Guardian Shield draw nothing (they still work), so only the Leviathan Axe shows. \"all\" = none of his weapons draw. To see his hands without a weapon model at them. Applies the next time the game starts.",
+
   "debug_cape_key": "F{cape_key}",
   "_debug_cape_key": "Keyboard key (F1 to F12) that switches the swing of Kratos's cloak off and on while you play: off, the cloak hangs as it was built and only his back and hips carry it, so you can compare the two.",
 
@@ -247,6 +258,7 @@ fn render(s: &Settings) -> String {
         ckey = s.debug_camera_key,
         pkey = s.debug_pose_key,
         cape_key = s.debug_cape_key,
+        empty = EMPTY_HANDS[s.debug_empty_hands.min(2) as usize],
         cape = s.cape_physics,
         cwind = s.cape_wind,
         stones = s.health_stones,
@@ -325,6 +337,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     hair_fur: true,
     two_hand_by_default: true,
     hide_stowed_shield: true,
+    debug_empty_hands: 1,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -399,6 +412,9 @@ pub fn parse(text: &str) -> Result<Settings, String> {
     flag(&v, "hair_fur", &mut s.hair_fur);
     flag(&v, "two_hand_by_default", &mut s.two_hand_by_default);
     flag(&v, "hide_stowed_shield", &mut s.hide_stowed_shield);
+    if let Some(i) = v.get("debug_empty_hands").and_then(|x| x.as_str()).and_then(|x| EMPTY_HANDS.iter().position(|e| *e == x.trim())) {
+        s.debug_empty_hands = i as u8;
+    }
     num(&v, "debug_enemy_health", 100.0, 100000.0, &mut s.debug_enemy_health);
     num(&v, "debug_enemy_damage_multiplier", 1.0, 10.0, &mut s.debug_enemy_damage_multiplier);
     for (i, (key, ..)) in RUNIC_SLOTS.iter().enumerate() {
@@ -571,6 +587,7 @@ mod tests {
             hair_fur: false,
             two_hand_by_default: false,
             hide_stowed_shield: false,
+            debug_empty_hands: 2,
         };
         assert_eq!(parse(&render(&s)).unwrap(), s);
     }

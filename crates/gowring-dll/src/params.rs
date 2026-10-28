@@ -507,6 +507,29 @@ pub fn apply() -> Result<Carriers, String> {
             notes.push(place_second_model(repo, weapon, carriers.get(weapon).and_then(|r| r.first().copied())));
         }
     }
+    // ---- testing aid: weapons that draw nothing (`debug_empty_hands`), with the unarmed row's model (what the game shows
+    // for an empty hand), so a weapon model at his hand can be told from his hand ----------------------------------------
+    let empty = crate::settings::get().debug_empty_hands;
+    if empty > 0 {
+        match repo.get::<EquipParamWeapon>(110000).map(|r| r.equip_model_id()) {
+            Some(none) => {
+                let mut hidden = Vec::new();
+                for (weapon, _) in WEAPON_MODELS {
+                    if empty == 1 && weapon == "leviathan_axe" {
+                        continue;
+                    }
+                    for row in carriers.get(weapon).cloned().unwrap_or_default() {
+                        if let Some(r) = repo.get_mut::<EquipParamWeapon>(row) {
+                            r.set_equip_model_id(none);
+                        }
+                    }
+                    hidden.push(weapon);
+                }
+                notes.push(format!("debug_empty_hands \"{}\": {hidden:?} show the unarmed model {none}", crate::settings::EMPTY_HANDS[empty.min(2) as usize]));
+            }
+            None => notes.push("debug_empty_hands: no unarmed row 110000; every weapon shows".into()),
+        }
+    }
     // ---- the ten starting classes become Kratos ----------------------------------------------------------------------------
     let (axe, blades, spear, shield) = (rows["leviathan_axe"] as i32, rows["blades_of_chaos"] as i32, rows["draupnir_spear"] as i32, rows["guardian_shield"] as i32);
     let vigor = gowring_core::Data::get().loadout.vigor.clamp(1, 99) as u8;

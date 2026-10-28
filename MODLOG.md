@@ -915,3 +915,14 @@ helpers under his chest joint 193 (1000, 362, 986, 362), the neck on one under h
   walking: upright, shoulders level, head clear of the fur. They report the hands still stretched; offline on their
   part (unchanged since 0.1.88) the hands close on the grip in the game's own pose (0.1.90's dump, a few ring and
   little finger triangles stretched) and hang open in his walk. Asked for close-ups in each F8 view.
+
+## 0.1.98 — empty hands, a testing aid (2026-10-28)
+
+The player's close-ups on 0.1.97 (second test run): long parallel rods with smeared texture and a dark flat blade
+come out of his left hand in "Elden Ring's rest pose (a check)", where every body bone's skinning is the root's, so
+the body draws as built (offline: normal hands); seen beside the hanging shield in another view. They look like a
+weapon model at the game's left hand (the Blades of Chaos' second blade, or the shield), not his fingers. The player
+asked for an empty-hand setting.
+- gowring.dll settings v22 `debug_empty_hands`: "off", "except_axe" (the default for now), "all". `params`: the
+  hidden weapons' carrier rows show the unarmed row 110000's model (what the game draws for an empty hand); they keep
+  their moves and the kit stays equipped. Applies when the game starts.
