@@ -846,28 +846,95 @@ pub fn retarget_clip(name: &str, fps: f32, world: &[Vec<M>], mirrored: &Skeleton
     let samples: Vec<Vec<M>> = [0, world.len() / 3, 2 * world.len() / 3].iter().map(|f| pinned(&world[(*f).min(world.len() - 1)])).collect();
     let motion = |kw: &[M], j: usize| mul(&mul(&kw[j], &unbind[j]), &unmove[j]);
     let apply = |m: &M, p: [f64; 3]| -> [f64; 3] { std::array::from_fn(|row| m[row][0] * p[0] + m[row][1] * p[1] + m[row][2] * p[2] + m[row][3]) };
-    let anchor: Vec<Option<usize>> = (0..nb)
-        .map(|b| {
-            let members: Vec<usize> = (0..n).filter(|j| r.deforms[*j] && r.bone[*j] as usize == b).collect();
-            let mut options: Vec<usize> = members.iter().filter_map(|j| cleanly(*j)).collect();
-            options.sort_unstable();
-            options.dedup();
-            let cost = |c: usize| -> f64 {
-                samples.iter().map(|kw| { let g = motion(kw, c); members.iter().map(|k| { let q = moved_pos(*k); dist(apply(&g, q), apply(&motion(kw, *k), q)) }).sum::<f64>() }).sum()
-            };
-            options.into_iter().min_by(|x, y| cost(*x).total_cmp(&cost(*y)))
-        })
-        .collect();
-    // the fingers, chain by chain: each Elden Ring finger (FingerN, FingerN1, FingerN2) on one of his finger chains
-    // (from his hand joint down, cleanly driven joints), the one whose joints line up with its own best in the new pose.
-    // Bone by bone, a finger's middle bone took his fingertip (the little finger folded back 170 degrees), the thumb's
-    // second its third, and no finger's last bone had one at all (0.1.91-0.1.92)
-    let mut anchor = anchor;
     let moved_rest = |j: usize| -> [f64; 3] {
         let m = &r.moves[j];
         let p = [bind[j][0][3], bind[j][1][3], bind[j][2][3]];
         std::array::from_fn(|row| m[0][row] as f64 * p[0] + m[1][row] as f64 * p[1] + m[2][row] as f64 * p[2] + m[3][row] as f64)
     };
+    // ... and first, of those, the ones that carry the most of the skin of the bones below it (in his hierarchy), never
+    // its parent bone's anchor or one above that, with his skin-carrying joints between the two; of those carrying
+    // the most, the nearest to the bone's own joint. His chest joint has
+    // dozens of helpers that move with the arms and the breath, and the least-error pick alone took them for the spine
+    // and the left clavicle (0.1.96 in play: his spine bent at one bone, Spine1, Spine2 and the left clavicle never
+    // turned, his chest swung with his arms, and the neck followed a helper on his left shoulder)
+    let mut er_below = vec![Vec::new(); nb];
+    for b in 0..nb {
+        let mut p = er[b].parent;
+        while let Ok(a) = usize::try_from(p) {
+            if a >= nb {
+                break;
+            }
+            er_below[a].push(b);
+            p = er[a].parent;
+        }
+    }
+    let above = |c: usize, mut k: usize| -> bool {
+        loop {
+            if k == c {
+                return true;
+            }
+            match usize::try_from(mirrored.parent[k]) {
+                Ok(p) => k = p,
+                Err(_) => return false,
+            }
+        }
+    };
+    let mut anchor: Vec<Option<usize>> = vec![None; nb];
+    for b in 0..nb {
+        // the Elden Ring skeleton lists parents first
+        let mut up = usize::try_from(er[b].parent).ok().filter(|p| *p < b);
+        let mut parent_anchor = None;
+        while let Some(p) = up {
+            if anchor[p].is_some() {
+                parent_anchor = anchor[p];
+                break;
+            }
+            up = usize::try_from(er[p].parent).ok().filter(|q| *q < p);
+        }
+        let allowed = |c: usize| parent_anchor.map_or(true, |a| !above(c, a));
+        let members: Vec<usize> = (0..n).filter(|j| r.deforms[*j] && r.bone[*j] as usize == b).collect();
+        // a bone none of his skin goes to (the root's) keeps none: it follows its parent
+        if members.is_empty() {
+            continue;
+        }
+        let mut options: Vec<usize> = members.iter().filter_map(|j| cleanly(*j)).collect();
+        options.sort_unstable();
+        options.dedup();
+        let lower: Vec<usize> = (0..n).filter(|j| r.deforms[*j] && er_below[b].contains(&(r.bone[*j] as usize))).collect();
+        let carries = |c: usize| lower.iter().filter(|k| above(c, **k)).count();
+        let cost = |c: usize| -> f64 {
+            samples.iter().map(|kw| { let g = motion(kw, c); members.iter().map(|k| { let q = moved_pos(*k); dist(apply(&g, q), apply(&motion(kw, *k), q)) }).sum::<f64>() }).sum()
+        };
+        let fair: Vec<usize> = options.iter().copied().filter(|c| allowed(*c)).collect();
+        // with the skin-carrying joints between the parent bone's anchor and the skin below (his own chain, which
+        // carries no skin of this bone's when the nearest-bone weighting gave it to the next bone up or down)
+        let mut cands = fair.clone();
+        for k in &lower {
+            let mut j = cleanly(*k);
+            while let Some(c) = j.filter(|c| allowed(*c)) {
+                if r.deforms[c] {
+                    cands.push(c);
+                }
+                j = usize::try_from(mirrored.parent[c]).ok();
+            }
+        }
+        cands.sort_unstable();
+        cands.dedup();
+        let most = cands.iter().map(|c| carries(*c)).max().unwrap_or(0);
+        let to_joint = |c: usize| dist(moved_rest(c), joint_rest[b]);
+        anchor[b] = if most > 0 {
+            // of those carrying the most (his pelvis, spine, chest joints all carry the arms), the nearest to the bone's
+            // joint
+            cands.into_iter().filter(|c| carries(*c) == most).min_by(|x, y| to_joint(*x).total_cmp(&to_joint(*y)))
+        } else {
+            let pool = if fair.is_empty() { options } else { fair };
+            pool.into_iter().min_by(|x, y| cost(*x).total_cmp(&cost(*y)))
+        };
+    }
+    // the fingers, chain by chain: each Elden Ring finger (FingerN, FingerN1, FingerN2) on one of his finger chains
+    // (from his hand joint down, cleanly driven joints), the one whose joints line up with its own best in the new pose.
+    // Bone by bone, a finger's middle bone took his fingertip (the little finger folded back 170 degrees), the thumb's
+    // second its third, and no finger's last bone had one at all (0.1.91-0.1.92)
     let mut kids: Vec<Vec<usize>> = vec![Vec::new(); n];
     for j in 0..n {
         if let Ok(p) = usize::try_from(mirrored.parent[j]) {
@@ -1240,6 +1307,45 @@ mod tests {
 
     /// The moves file from the player's own files, for a look offline: as above plus `GOWRING_ER_SKELETON=
     /// er_skeleton.json GOWRING_MOVES_OUT=file` (`cargo test -p gowring-gow moves_from -- --ignored --nocapture`).
+    /// The torso's and shoulders' bones: the joints whose skin goes to each, whether the clip drives each and its
+    /// ancestors (clean), and the chain above each bone's anchor, with heights.
+    #[test]
+    #[ignore]
+    fn torso_anchors() {
+        let (Ok(anm), Ok(proto), Ok(er)) = (std::env::var("GOWRING_ANM"), std::env::var("GOWRING_GOPROTO"), std::env::var("GOWRING_ER_SKELETON")) else { return };
+        let anm = std::fs::read(anm).unwrap();
+        let sk = Skeleton::parse(&std::fs::read(proto).unwrap()).unwrap();
+        let er = crate::kratos_part::skeleton_nodes(&std::fs::read_to_string(er).unwrap()).unwrap();
+        let hado = Hado::parse(&anm).unwrap();
+        let slots = slot_joints(&hado, &sk).unwrap();
+        let mirrored = sk.mirrored_x();
+        let r = crate::retarget::retarget(&mirrored, crate::kratos_part::SCALE, &er).unwrap();
+        let n = sk.parent.len();
+        let mut driven = vec![false; n];
+        for j in slots.iter().flatten() {
+            driven[*j] = true;
+        }
+        let mut clean = vec![false; n];
+        for j in 0..n {
+            let p = mirrored.parent[j];
+            clean[j] = driven[j] && (p < 0 || clean[p as usize]);
+        }
+        let (fps, world) = decode_clip(&anm, find_clip(&anm, CLIPS[0].1).unwrap(), &hado, &sk, &slots).unwrap();
+        let clip = retarget_clip("idle", fps, &world, &mirrored, crate::kratos_part::SCALE as f64, &r, &er, &driven).unwrap();
+        let tag = |j: usize| format!("{j}{}{} y{:.2}", if driven[j] { "d" } else { "" }, if clean[j] { "c" } else { "" }, r.bind_positions[j][1]);
+        for name in ["Pelvis", "Spine", "Spine1", "Spine2", "Neck", "Head", "L_Clavicle", "R_Clavicle", "L_UpperArm", "R_UpperArm", "L_Forearm", "L_Hand", "L_Thigh", "L_Calf"] {
+            let b = er.iter().position(|x| x.name == name).unwrap();
+            let members: Vec<String> = (0..n).filter(|j| r.deforms[*j] && r.bone[*j] as usize == b).map(tag).collect();
+            let mut chain = Vec::new();
+            let mut j = clip.anchors[b];
+            while let Some(k) = j {
+                chain.push(tag(k));
+                j = usize::try_from(mirrored.parent[k]).ok();
+            }
+            println!("{name}: {} members [{}]\n    anchor chain {}", members.len(), members.join(", "), chain.join(" <- "));
+        }
+    }
+
     #[test]
     #[ignore]
     fn moves_from_real_files() {

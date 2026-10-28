@@ -296,7 +296,7 @@ const OUTFIT_PROBE_PARTS: [u16; 22] = [230, 235, 224, 205, 206, 207, 208, 209, 2
 /// until there is one, the parts carry the root bone alone.
 fn install_kratos_part(ctx: &Ctx, hero: &HeroWad) -> String {
     use gowring_gow::kratos_part::{build_parts, skeleton_nodes};
-    const BUILD: u32 = 42;
+    const BUILD: u32 = 43;
     let parts = ctx.managed.join("mod").join("parts");
     let Some(gow) = ctx.gow.as_deref() else { return "Kratos's body part: no Ragnarök install".into() };
     let (Some(wad), Some(pack)) = (find_file(gow, "r_heroa00.wad", 5), find_file(gow, "root.lodpack", 5)) else {

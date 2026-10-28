@@ -891,3 +891,23 @@ came out crumpled. The two offset arrays were 0x65d0 bytes (543 entries, 3 x 181
 - tools/ragnarok_anim/er_pose_live.py mirrors it.
 - 0.1.96's test (1 run): passed, ran the full 10 minutes with no crash, all 8 own checks passed. The footage shows
   Kratos upright in his own stance (01:44-01:50, both modes), the axe still floating behind his shoulder.
+
+## 0.1.97 — anchors on his own spine (2026-10-28)
+
+The player, on 0.1.96: the walk looks weird, "his whole chest is doing the arm motions"; the idle still looks broken.
+Their log: 181 bones by the gap; idle 364 s, walk 39 s, run 43 s, sprint 10 s; mostly with the game's arms after 1:47.
+Offline (`anim_ref/angles.py`, the moves file built from the probe): in both clips Spine1, Spine2 and L_Clavicle never
+turned on their parents and the idle bent 38-40 degrees at Spine. A new ignored test `torso_anchors` prints, per
+torso bone, the joints whose skin goes to it and its anchor's chain: Spine, Spine1, Spine2 and L_Clavicle anchored on
+helpers under his chest joint 193 (1000, 362, 986, 362), the neck on one under his left shoulder (1097), R_Clavicle on
+964. His spine is 163 (pelvis, y 0.96) -> 165 (1.07) -> 175 (1.17) -> 193 (1.28) -> 219 (neck, 1.53), shoulders 220 /
+221 (1.46); Elden Ring's Spine 1.06, Spine1 1.15, Spine2 1.24, Neck 1.45.
+- Builder `retarget_clip`: a bone's anchor is, of the cleanly driven joints of its own skin and his skin-carrying
+  joints between its parent bone's anchor and the skin of the bones below it, one that carries the most of that skin
+  (never the parent bone's anchor or above), the nearest to its joint; bones with no skin of their own (the root's)
+  keep none; leaves (head, twist bones) as before. Now Spine 165, Spine1 175, Spine2 193, Neck 219, clavicles 220 /
+  221; the other 54 anchors unchanged. Idle: the turn spread along the spine (Pelvis 34, Spine 35, Spine1 37, Spine2
+  39 degrees about the vertical: his sideways stance), shoulders level and the head clear of the fur
+  (`anim_ref/upper_idle.png`, 0.1.96 left). Launcher BUILD 43.
+- Not changed: with the game's arms (F8), the clavicles and arms keep Elden Ring's pose while the chest takes his,
+  so the shoulder fur (skinned to the clavicles and upper arms) follows the game's arm swing.
