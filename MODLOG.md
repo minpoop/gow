@@ -876,3 +876,6 @@ recorded c0000005 in ntdll at 6:23 (ntdll+0x2730d, the known closing chain) and 
 - gowring.dll `livepose::locate`: scores every n from the skeleton's count to 400 by links at rest and takes the
   smallest within 5 % of the best. `moves`: locates again every 2 s while no buffer has more bones than the skeleton.
 - tools/ragnarok_anim/er_pose_live.py: `locate` mirrors it.
+- 0.1.95's test (1 run): his moves now write, but every clip shows him crumpled (bent over, head by the floor; the
+  player's screenshots). The player closed the game at 6:04; Melty's c0000005 in ntdll at 6:52 is the closing chain.
+  In 0.1.90's dumps the array before the skinning equals it exactly (40 snapshots), so locating either one is harmless.
