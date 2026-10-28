@@ -898,6 +898,49 @@ fn texture_pack(id: u16, albedo: [u8; 3]) -> Vec<u8> {
     erpart::tpf(&[(format!("kratos_{id}_a"), solid(albedo), 0), (format!("kratos_{id}_m"), solid([0, 0, 0]), 0), (format!("kratos_{id}_n"), solid([128, 128, crate::kratos_look::MATTE]), 0)])
 }
 
+/// Where his sheathed weapons hang, in Elden Ring's model space at rest (+x his left, +z behind him): (the hang spot's
+/// id in WepAbsorpPosParam, where the weapon's grip goes, the way its tip points), on his back over the cloak (0.26 m
+/// behind the spine at chest height). His body part had no dummies, so a weapon put away at the game's back spots
+/// drew nowhere (0.1.100: the axe, and the Blades of Chaos once hung there); the hip spots (2061 / 2062) come from
+/// elsewhere. 2030 / 2031 (a greataxe's, now the Blades' too) cross over his back, 2037 / 2038 (the spear's) a little
+/// further out, 2047 / 2048 (the shield's) flat in the middle.
+const BACK_SPOTS: [(i16, [f32; 3], [f32; 3]); 6] = [
+    (2030, [-0.08, 1.02, 0.30], [0.45, 0.9, 0.0]),
+    (2031, [0.08, 1.02, 0.30], [-0.45, 0.9, 0.0]),
+    (2037, [-0.10, 0.95, 0.34], [0.6, 0.8, 0.0]),
+    (2038, [0.10, 0.95, 0.34], [-0.6, 0.8, 0.0]),
+    (2047, [0.0, 1.25, 0.33], [0.0, 1.0, 0.0]),
+    (2048, [0.0, 1.25, 0.33], [0.0, 1.0, 0.0]),
+];
+
+/// The [`BACK_SPOTS`] as dummies on `nodes`' Spine2 (positions and directions in its frame at rest, following it), the
+/// node marked as owning dummies (flag 2). A weapon's model has its grip at the origin and its tip along -Y (see
+/// `weapon_part::blade_dummies`), so a spot's up direction is the tip's opposite, and its forward points away from his
+/// back. None when there is no Spine2 (the rigid fallback).
+fn back_dummies(nodes: &mut [Node]) -> Vec<erpart::Dummy> {
+    let Some(b) = nodes.iter().position(|n| n.name == "Spine2") else { return Vec::new() };
+    let w = erpart::world_matrices(nodes)[b];
+    // rest frame: columns are the axes (unit length taken out), w[3] the joint
+    let axis = |c: usize| -> [f32; 3] {
+        let v = [w[c][0], w[c][1], w[c][2]];
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+        v.map(|x| x / l)
+    };
+    let (ax, ay, az) = (axis(0), axis(1), axis(2));
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let into = |v: [f32; 3]| [dot(ax, v), dot(ay, v), dot(az, v)];
+    nodes[b].flags |= 2;
+    BACK_SPOTS
+        .iter()
+        .map(|(id, at, tip)| {
+            let l = dot(*tip, *tip).sqrt().max(1e-6);
+            let up = tip.map(|x| -x / l);
+            let rel = [at[0] - w[3][0], at[1] - w[3][1], at[2] - w[3][2]];
+            erpart::Dummy { position: into(rel), forward: into([0.0, 0.0, 1.0]), upward: into(up), reference_id: *id, parent_node: b as i16, attach_node: b as i16, color: [255; 4], flag1: false, use_upward: true }
+        })
+        .collect()
+}
+
 /// Every part file this version installs, as (file name, bytes), and a line about them. The body (`bd_*_9701`) is
 /// Kratos's whole default outfit, re-posed and skinned onto the player `skeleton` when both it and his own (`kratos`,
 /// from his `goProto`) are known; the head, arms and legs (`hd_*_9700`, `am_*_9702`, `lg_*_9703`) are empty pieces
@@ -918,8 +961,8 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     let mut file = std::fs::File::open(pack)?;
     let mut out = Vec::new();
     let mut note = String::new();
-    let mut add = |slot: &str, id: u16, nodes: &[Node], meshes: &[Mesh], mats: &[Material], tpf: Vec<u8>| -> usize {
-        let flver = erpart::flver2(nodes, mats, meshes);
+    let mut add = |slot: &str, id: u16, nodes: &[Node], meshes: &[Mesh], mats: &[Material], tpf: Vec<u8>, dummies: &[erpart::Dummy]| -> usize {
+        let flver = erpart::flver2_with(nodes, mats, meshes, dummies);
         let size = flver.len();
         for sex in ["m", "f"] {
             for low in ["", "_l"] {
@@ -982,13 +1025,16 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
     let tex = format!("kratos_{MODEL_ID}");
     let hair: &[u16] = if hair_fur { &HAIR_FUR } else { &[] };
     let (mats, textures, LookCounts { coloured, surfaced, strands }) = look_materials(&Naming { tex: &tex, material: "kratos", dir: KRATOS_TEX_DIR, hair, fur: &HAIR_FUR }, &used, looks);
-    let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures));
+    let mut nodes = nodes;
+    let backs = back_dummies(&mut nodes);
+    note.push_str(&format!("{} weapon spots on his back; ", backs.len()));
+    let size = add("bd", MODEL_ID, &nodes, &meshes, &mats, erpart::tpf(&textures), &backs);
     note.push_str(&format!("body {} meshes ({tris} triangles, {size} bytes; {} failed {failed:?}), {} materials ({coloured} with their colour map, {strands} of strands cut out, {surfaced} with their surface); ", meshes.len(), failed.len(), used.len()));
     let on_hair: Vec<u16> = hair.iter().copied().filter(|m| used.contains(m) && looks.get(m).is_some_and(|l| l.cut_out)).collect();
     note.push_str(&format!("fur on Elden Ring's hair material: {on_hair:?}; "));
     let (nodes, meshes) = empty_piece();
     for (slot, id) in [("hd", MODEL_ID - 1), ("am", MODEL_ID + 1), ("lg", MODEL_ID + 2)] {
-        add(slot, id, &nodes, &meshes, &[material(id)], texture_pack(id, [128, 128, 128]));
+        add(slot, id, &nodes, &meshes, &[material(id)], texture_pack(id, [128, 128, 128]), &[]);
     }
     note.push_str("head, arms and legs: empty pieces");
     out.push((CAPE_RIG_FILE.into(), rig.map_or_else(crate::cape::no_rig_json, |r| r.json()).into_bytes()));
@@ -998,6 +1044,30 @@ pub fn build_parts(mesh: &[u8], mg: &[u8], gpu: &[u8], pack: &Path, skeleton: Op
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_back_spots_land_where_they_are_meant_in_model_space() {
+        // a turned and raised Spine2, as the player skeleton's (its rest frame is not the model's)
+        let node = |name: &str, parent: i16, t: [f32; 3], r: [f32; 3]| Node { name: name.into(), parent, t, r, s: [1.0; 3], flags: 8 };
+        let mut nodes = vec![node("Master", -1, [0.0; 3], [0.0; 3]), node("Spine", 0, [0.0, 1.0, 0.0], [0.3, 0.0, 1.2]), node("Spine2", 1, [0.0, 0.24, 0.0], [0.0, 0.7, 0.0]), node("kratos_0", -1, [0.0; 3], [0.0; 3])];
+        let d = back_dummies(&mut nodes);
+        assert_eq!(d.len(), BACK_SPOTS.len());
+        assert_eq!(nodes[2].flags, 10);
+        let w = erpart::world_matrices(&nodes)[2];
+        let apply = |p: [f32; 3], t: f32| -> [f32; 3] { std::array::from_fn(|r| w[0][r] * p[0] + w[1][r] * p[1] + w[2][r] * p[2] + t * w[3][r]) };
+        for (dummy, (id, at, tip)) in d.iter().zip(BACK_SPOTS) {
+            assert_eq!((dummy.reference_id, dummy.parent_node, dummy.attach_node), (id, 2, 2));
+            let p = apply(dummy.position, 1.0);
+            assert!((0..3).all(|k| (p[k] - at[k]).abs() < 1e-4), "{id}: {p:?} for {at:?}");
+            let up = apply(dummy.upward, 0.0);
+            let l = (tip[0] * tip[0] + tip[1] * tip[1] + tip[2] * tip[2]).sqrt();
+            assert!((0..3).all(|k| (up[k] + tip[k] / l).abs() < 1e-4), "{id}: up {up:?}");
+            let fwd = apply(dummy.forward, 0.0);
+            assert!((fwd[2] - 1.0).abs() < 1e-4);
+        }
+        // the rigid fallback (no Spine2) has none
+        assert!(back_dummies(&mut master_only()).is_empty());
+    }
 
     #[test]
     fn cloth_takes_the_weights_of_the_body_under_it() {

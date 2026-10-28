@@ -953,3 +953,15 @@ The player chose the Blades on his back (over hiding them while sheathed).
 - gowring.dll `cape::search`: an offset array that starts inside another found one is left out (logged).
 - `moves`: without a bone count from the two buffers' gap, no buffer is located and his moves wait (searching took
   blocks 31 and 14 entries short in 0.1.94, 0.1.95 and 0.1.99).
+- 0.1.100's test, in play: the Blades of Chaos not on his back, nor the axe when he holds the Blades. His body part
+  has no dummies at all (offline, the player's part: 0 dummies), so the back hang spots (2030 / 2031) exist nowhere;
+  the hip spots 2061 / 2062 must come from elsewhere. The player chose to build back spots into his body.
+
+## 0.1.101 — weapon spots on his back (2026-10-28)
+
+- Builder `kratos_part::back_dummies`: the body part carries dummies 2030 / 2031 (the axe's, the Blades'), 2037 /
+  2038 (the spear's), 2047 / 2048 (the shield's) on Spine2 (parent and attach node, positions and directions in its
+  rest frame; the node gets flag 2). Placed over the cloak (his back with it is 0.26 m behind the spine from 1.0 to
+  1.5 m up): grips at 1.02 m, 0.30 m back, tips crossing up over his back; spear 0.34 m back; shield flat at 1.25 m.
+  A guess at the convention: the spot's up is the weapon's +Y (its tip along -Y), its forward points out of his back.
+  Test `the_back_spots_land_where_they_are_meant_in_model_space`. Launcher BUILD 44.
