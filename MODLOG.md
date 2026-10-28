@@ -965,3 +965,4 @@ The player chose the Blades on his back (over hiding them while sheathed).
   1.5 m up): grips at 1.02 m, 0.30 m back, tips crossing up over his back; spear 0.34 m back; shield flat at 1.25 m.
   A guess at the convention: the spot's up is the weapon's +Y (its tip along -Y), its forward points out of his back.
   Test `the_back_spots_land_where_they_are_meant_in_model_space`. Launcher BUILD 44.
+- 0.1.100's test (1 run): passed, the full 10 minutes, no crash, all 8 own checks.
