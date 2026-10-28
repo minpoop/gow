@@ -50,16 +50,23 @@ const PAIRED: [&str; 1] = ["blades_of_chaos"];
 
 /// Place model 1 of a paired weapon (its second blade) through the carrier's WepAbsorpPosParam row: in the other hand
 /// while the weapon is held in both hands (two-handing by default is Kratos's stance, so he holds one blade in each
-/// hand), and on the back at the other hang spot when one-handed (the left hand then holds the shield) or sheathed.
+/// hand), and on the back at the other hang spot when one-handed (the left hand then holds the shield) or sheathed;
+/// with `back`, both hang there (right, left hang spots) instead of at the type's own.
 /// The row is shared with the game's other weapons of the type (every whip, or every Backhand Blade), whose second
 /// models move with it.
-fn place_second_model(repo: &mut SoloParamRepository, weapon: &str, row: Option<u32>) -> String {
+fn place_second_model(repo: &mut SoloParamRepository, weapon: &str, row: Option<u32>, back: Option<(i16, i16)>) -> String {
     let Some(absorp) = row.and_then(|r| repo.get::<EquipParamWeapon>(r)).map(|r| r.absorp_param_id()) else { return format!("{weapon}: no carrier row for its second model") };
     if absorp < 0 {
         return format!("{weapon}: absorpParamId {absorp}, no row to place its second model with");
     }
     let Some(a) = repo.get_mut::<WepAbsorpPosParam>(absorp as u32) else { return format!("{weapon}: no WepAbsorpPosParam row {absorp}") };
     let was = [a.right_1(), a.left_1(), a.both_1(), a.left_both_1(), a.right_hang_1(), a.left_hang_1()];
+    // sheathed, both on `back` (the axe's spots) when given: one blade where a right-hand weapon hangs, the other where a
+    // left-hand one does
+    if let Some((r, l)) = back {
+        a.set_right_hang_0(r);
+        a.set_left_hang_0(l);
+    }
     let (right, left, right_hang, left_hang) = (a.right_0(), a.left_0(), a.right_hang_0(), a.left_hang_0());
     a.set_both_1(left);
     a.set_left_both_1(right);
@@ -67,7 +74,8 @@ fn place_second_model(repo: &mut SoloParamRepository, weapon: &str, row: Option<
     a.set_left_1(right_hang);
     a.set_right_hang_1(left_hang);
     a.set_left_hang_1(right_hang);
-    format!("{weapon}: second model placed by WepAbsorpPosParam {absorp}: both hands -> left hand {left}, one hand or sheathed -> the other hang spot {left_hang} (model 1 was right, left, both, leftBoth, rightHang, leftHang {was:?})")
+    let hung = back.map_or("its own hang spots".to_string(), |(r, l)| format!("the axe's back spots {r} / {l}"));
+    format!("{weapon}: sheathed on {hung}; second model placed by WepAbsorpPosParam {absorp}: both hands -> left hand {left}, one hand or sheathed -> the other hang spot {left_hang} (model 1 was right, left, both, leftBoth, rightHang, leftHang {was:?})")
 }
 
 /// The one-time weapon report reads BehaviorParam_PC once and AtkParam_Pc per attack; these caps keep it short even on
@@ -504,7 +512,10 @@ pub fn apply() -> Result<Carriers, String> {
             notes.push(format!("{weapon} now shows wp_a_{model:04} (was: {})", was.join(", ")));
         }
         if PAIRED.contains(&weapon) {
-            notes.push(place_second_model(repo, weapon, carriers.get(weapon).and_then(|r| r.first().copied())));
+            // on his back where the axe hangs (Elden Ring hung them at his hips, by his hands: 0.1.97's "stretched
+            // fingers" were the blades seen edge-on)
+            let back = rows.get("leviathan_axe").and_then(|r| repo.get::<EquipParamWeapon>(*r)).map(|r| r.absorp_param_id()).filter(|a| *a >= 0).and_then(|a| repo.get::<WepAbsorpPosParam>(a as u32)).map(|a| (a.right_hang_0(), a.left_hang_0()));
+            notes.push(place_second_model(repo, weapon, carriers.get(weapon).and_then(|r| r.first().copied()), back));
         }
     }
     // ---- testing aid: weapons that draw nothing (`debug_empty_hands`), with the unarmed row's model (what the game shows

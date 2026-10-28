@@ -69,7 +69,8 @@ pub struct Settings {
     pub hide_stowed_shield: bool,
     /// Testing aid: which of Kratos's weapons draw nothing (they keep their moves): 0 none, 1 all but the Leviathan
     /// Axe, 2 all four. To tell his hands from a weapon model at them (0.1.97: rods at his left hand in every pose
-    /// mode, his rest pose included). Applies the next time the game starts; 1 for now, while that is looked into.
+    /// mode, his rest pose included: the Blades of Chaos at his hips, edge-on; 0.1.99 hangs them on his back). Applies the
+    /// next time the game starts.
     pub debug_empty_hands: u8,
 }
 
@@ -132,13 +133,13 @@ impl Default for Settings {
             hair_fur: true,
             two_hand_by_default: true,
             hide_stowed_shield: true,
-            debug_empty_hands: 1,
+            debug_empty_hands: 0,
         }
     }
 }
 
 /// Written into the file so a settings file from an older build can be recognised and brought forward.
-const FILE_VERSION: u32 = 22;
+const FILE_VERSION: u32 = 23;
 
 /// The values of `debug_empty_hands`, in order.
 pub const EMPTY_HANDS: [&str; 3] = ["off", "except_axe", "all"];
@@ -337,7 +338,7 @@ static CURRENT: RwLock<Settings> = RwLock::new(Settings {
     hair_fur: true,
     two_hand_by_default: true,
     hide_stowed_shield: true,
-    debug_empty_hands: 1,
+    debug_empty_hands: 0,
 });
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -481,6 +482,11 @@ fn migrated_text(text: &str) -> Option<String> {
     // version 14: the cape went from off (experimental, 0.1.68-0.1.69 wrote "cape_physics": false into every file) to on
     if version < 14 {
         s.cape_physics = true;
+    }
+    // version 23: the Blades hang on his back (0.1.99), so 0.1.98's "except_axe" (its default, written into every file
+    // it brought forward) goes back to off and they show there
+    if version < 23 {
+        s.debug_empty_hands = 0;
     }
     // versions 3, 7-13 and 15 only added keys (7: the runic slots; 8: the Rage key and health stones; 9: the outfit and
     // two-handing; 10: the stowed shield; 11: the close-up camera key; 12: the pose probe key; 13: the cape; 15: the

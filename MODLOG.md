@@ -926,3 +926,18 @@ asked for an empty-hand setting.
 - gowring.dll settings v22 `debug_empty_hands`: "off", "except_axe" (the default for now), "all". `params`: the
   hidden weapons' carrier rows show the unarmed row 110000's model (what the game draws for an empty hand); they keep
   their moves and the kit stays equipped. Applies when the game starts.
+- 0.1.98's test: with "except_axe" the player said the hands "look way better": the rods were a weapon model. Their
+  earlier close-ups had something at both hips (rods and a dark blade on the left, a pale splintered piece on the
+  right): the Blades of Chaos, sheathed at the Backhand Blades' hip spots 2061 / 2062, seen edge-on. Also reported:
+  a patch of skin through the fur on his right shoulder. Offline (`anim_ref/shoulder.py`, per-mesh colours): the fur
+  covers it at rest and in the game's pose (0.1.90's dump) and pulls off it in his idle (the upper arm 44-48 degrees
+  off rest, the fur on the clavicle). Not fixed yet.
+
+## 0.1.99 — the Blades of Chaos on his back (2026-10-28)
+
+The player chose the Blades on his back (over hiding them while sheathed).
+- gowring.dll `params::place_second_model`: the Blades' WepAbsorpPosParam row (58, shared with every Backhand Blade)
+  hangs model 0 at the axe's row's right / left hang spots (row 30: 2030 / 2031, a greataxe on the back) and model 1
+  at the other, instead of 2061 / 2062 at the hips. Holding the spear, the sheathed axe and a blade share 2030.
+- Settings v23: `debug_empty_hands` defaults to "off" again, and a file from before v23 (0.1.98 wrote "except_axe"
+  into every file it brought forward) goes back to "off".
