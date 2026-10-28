@@ -966,3 +966,17 @@ The player chose the Blades on his back (over hiding them while sheathed).
   A guess at the convention: the spot's up is the weapon's +Y (its tip along -Y), its forward points out of his back.
   Test `the_back_spots_land_where_they_are_meant_in_model_space`. Launcher BUILD 44.
 - 0.1.100's test (1 run): passed, the full 10 minutes, no crash, all 8 own checks.
+- 0.1.101's test (1 run): the player saw no weapons on his back. The launcher built the 6 spots. Elden Ring draws only
+  the weapons in the hand slots in use: the axe in another right slot is not drawn anywhere, and the off hand's weapon
+  hangs on the back only while the other is two-handed (Kratos's left hand is an empty slot then). Their log: the cape
+  found 6 offset arrays (entity+0x230+0x2c8 / +0x2d0, three entity+0xb0+0x68+..., entity+0x450+0x6b8+0x438), so
+  `bone_count` gave none and his moves waited all session (as meant). Melty: closed at 4:27, c0000005 in ntdll at
+  4:31, the closing chain (reading 0x1ffffffff at ntdll+0x2730d).
+
+## 0.1.102 — the model's two buffers, the others left out (2026-10-28)
+
+- gowring.dll `cape::search`: of the offset arrays (nested ones already dropped), the two that are fields 8 bytes
+  apart in one object and three arrays of n bones apart (n from the skeleton's count to 400) are kept, the rest
+  left out (logged). In every log so far the buffers were such a pair: +0x508 / +0x510, +0x2c8 / +0x2d0 (0.1.91,
+  0.1.101), +0x88 / +0x90 (0.1.92), always 0x65d0 apart (181 bones). The others were 150-bone blocks the game did not
+  update (0.1.92's trace) or another model's.

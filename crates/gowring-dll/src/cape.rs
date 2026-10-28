@@ -293,7 +293,26 @@ fn search(model_item: usize, bones: &'static [Bone]) {
             if !dropped.is_empty() {
                 crate::glog!("cape", "offset arrays inside another, left out: {dropped:?}");
             }
-            let offsets: Vec<(String, usize)> = all.iter().filter(|f| !inside(f)).map(|f| (f.path.clone(), f.address)).collect();
+            let mut offsets: Vec<(String, usize)> = all.iter().filter(|f| !inside(f)).map(|f| (f.path.clone(), f.address)).collect();
+            // the model's two buffers when they are among them: two fields 8 bytes apart in one object, three arrays of
+            // the model's bones apart (0x508 / 0x510, 0x2c8 / 0x2d0, 0x88 / 0x90 in 0.1.89-0.1.101, always 3 x 181).
+            // The others (up to four more) were blocks the game never updated, or other characters', and the cape and
+            // his moves are kept out of them (0.1.101: six arrays, his moves waited all session)
+            let field = |p: &str| p.rsplit_once('+').and_then(|(head, off)| Some((head.to_string(), usize::from_str_radix(off.trim_start_matches("0x"), 16).ok()?)));
+            let pair = offsets.iter().enumerate().find_map(|(i, (pa, a))| {
+                offsets.iter().skip(i + 1).find_map(|(pb, b)| {
+                    let ((ha, fa), (hb, fb)) = (field(pa)?, field(pb)?);
+                    let gap = a.abs_diff(*b);
+                    let n = gap / (3 * 48);
+                    (ha == hb && fa.abs_diff(fb) == 8 && gap % (3 * 48) == 0 && (bones.len()..=400).contains(&n)).then(|| (vec![(pa.clone(), *a), (pb.clone(), *b)], n))
+                })
+            });
+            if let Some((two, n)) = pair {
+                if offsets.len() > 2 {
+                    crate::glog!("cape", "the model's two buffers ({n} bones each): {:?}; the other {} left out", two.iter().map(|(p, a)| format!("{p} at {a:#x}")).collect::<Vec<_>>(), offsets.len() - 2);
+                }
+                offsets = two;
+            }
             crate::glog!("cape", "offset arrays: {} of {} arrays found ({looked} objects, {} ms): {:?}", offsets.len(), found.len(), t0.elapsed().as_millis(), offsets.iter().map(|(p, a)| format!("{p} at {a:#x}")).collect::<Vec<_>>());
             if let Ok(mut a) = ARRAYS.lock() {
                 a.0 = offsets.into_iter().map(|(_, a)| a).collect();
