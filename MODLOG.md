@@ -911,3 +911,7 @@ helpers under his chest joint 193 (1000, 362, 986, 362), the neck on one under h
   (`anim_ref/upper_idle.png`, 0.1.96 left). Launcher BUILD 43.
 - Not changed: with the game's arms (F8), the clavicles and arms keep Elden Ring's pose while the chest takes his,
   so the shoulder fur (skinned to the clavicles and upper arms) follows the game's arm swing.
+- 0.1.97's test (1 run): passed, the full 10 minutes, no crash, all 8 own checks. The player's screenshot while
+  walking: upright, shoulders level, head clear of the fur. They report the hands still stretched; offline on their
+  part (unchanged since 0.1.88) the hands close on the grip in the game's own pose (0.1.90's dump, a few ring and
+  little finger triangles stretched) and hang open in his walk. Asked for close-ups in each F8 view.
