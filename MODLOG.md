@@ -889,3 +889,5 @@ came out crumpled. The two offset arrays were 0x65d0 bytes (543 entries, 3 x 181
 - gowring.dll `livepose::bone_count`: the gap between the two offset arrays over 3 entries; `locate` tries only that
   count when there is one (searching as before otherwise), and `moves` keeps locating every 2 s until it reads.
 - tools/ragnarok_anim/er_pose_live.py mirrors it.
+- 0.1.96's test (1 run): passed, ran the full 10 minutes with no crash, all 8 own checks passed. The footage shows
+  Kratos upright in his own stance (01:44-01:50, both modes), the axe still floating behind his shoulder.
