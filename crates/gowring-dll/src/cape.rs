@@ -285,7 +285,15 @@ fn search(model_item: usize, bones: &'static [Bone]) {
             roots.push(("model item", model_item));
             let t0 = Instant::now();
             let (found, looked) = crate::pose::find(&roots, crate::bonepose::SEARCH_READS, crate::bonepose::SEARCH_ARRAYS, crate::bonepose::SEARCH_DEPTH);
-            let offsets: Vec<(String, usize)> = found.iter().filter(|f| offsets_like(f, bones)).map(|f| (f.path.clone(), f.address)).collect();
+            let all: Vec<&crate::pose::Found> = found.iter().filter(|f| offsets_like(f, bones)).collect();
+            // not one that starts inside another: 0.1.99 found entity+0x30+0x608+0x280 33 entries into the first
+            // buffer's offsets, and the cape and his moves wrote into it, every bone onto another
+            let inside = |f: &crate::pose::Found| all.iter().any(|g| g.address < f.address && f.address < g.address + g.floats.len() * 4);
+            let dropped: Vec<String> = all.iter().filter(|f| inside(f)).map(|f| format!("{} at {:#x}", f.path, f.address)).collect();
+            if !dropped.is_empty() {
+                crate::glog!("cape", "offset arrays inside another, left out: {dropped:?}");
+            }
+            let offsets: Vec<(String, usize)> = all.iter().filter(|f| !inside(f)).map(|f| (f.path.clone(), f.address)).collect();
             crate::glog!("cape", "offset arrays: {} of {} arrays found ({looked} objects, {} ms): {:?}", offsets.len(), found.len(), t0.elapsed().as_millis(), offsets.iter().map(|(p, a)| format!("{p} at {a:#x}")).collect::<Vec<_>>());
             if let Ok(mut a) = ARRAYS.lock() {
                 a.0 = offsets.into_iter().map(|(_, a)| a).collect();

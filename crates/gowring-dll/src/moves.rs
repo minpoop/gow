@@ -303,10 +303,11 @@ pub fn step() {
     let unsure = !s.buffers.iter().any(|b| b.1.is_some_and(|b| b.bones > bones.len()));
     if s.buffers.iter().map(|b| b.0).ne(arrays.iter().copied()) || (unsure && s.t >= s.relocate_at) {
         s.relocate_at = s.t + 2.0;
+        // without the gap, none: searching took blocks 31 and 14 entries short (0.1.94, 0.1.95, 0.1.99)
         let count = bone_count(&arrays);
-        s.buffers = arrays.iter().map(|a| (*a, locate(*a, count, bones, &s.bind))).collect();
+        s.buffers = arrays.iter().map(|a| (*a, count.and_then(|n| locate(*a, Some(n), bones, &s.bind)))).collect();
         let found: Vec<String> = s.buffers.iter().map(|(a, b)| b.map_or(format!("{a:#x}: none"), |b| format!("{a:#x}: skinning at {:#x}, {} bones", b.skinning, b.bones))).collect();
-        let by = count.map_or("searched (not two buffers a whole number of entries apart)".to_string(), |n| format!("{n} bones by the buffers' gap"));
+        let by = count.map_or(format!("not two buffers a whole number of entries apart ({} arrays): his moves wait", arrays.len()), |n| format!("{n} bones by the buffers' gap"));
         crate::glog!("moves", "the game's pose by its offsets ({by}): {}", found.join("; "));
         s.wrote = false;
     }

@@ -941,3 +941,15 @@ The player chose the Blades on his back (over hiding them while sheathed).
   at the other, instead of 2061 / 2062 at the hips. Holding the spear, the sheathed axe and a blade share 2030.
 - Settings v23: `debug_empty_hands` defaults to "off" again, and a file from before v23 (0.1.98 wrote "except_axe"
   into every file it brought forward) goes back to "off".
+- 0.1.99's test (1 run): "my body broke again", "it pulses as I move"; the player ended the run (Melty: closed at
+  3:16, c0000374 in ntdll at the closing chain). Their log: the cape found 3 offset arrays, the third
+  "entity+0x30+0x608+0x280" at 0x7ff3e2820000, 0x630 bytes (33 entries) into the first buffer's offsets
+  (0x7ff3e281f9d0); with three arrays `bone_count` gave none, the search took 167 bones for both buffers and 200 for
+  the third (its skinning the first buffer's), so his moves were written only into the third, and the cape into all
+  three: every bone onto another, on every other frame. The Blades' new hang spots were not the cause.
+
+## 0.1.100 — no offset array inside another (2026-10-28)
+
+- gowring.dll `cape::search`: an offset array that starts inside another found one is left out (logged).
+- `moves`: without a bone count from the two buffers' gap, no buffer is located and his moves wait (searching took
+  blocks 31 and 14 entries short in 0.1.94, 0.1.95 and 0.1.99).
