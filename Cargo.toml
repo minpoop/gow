@@ -7,8 +7,9 @@ members = [
   "crates/gowring-launcher",
 ]
 # gowring-dll is built separately for the Windows target (see packaging/build.sh):
-# it pulls the Elden Ring bindings which only compile for x86_64-pc-windows-msvc.
-exclude = ["crates/gowring-dll"]
+# it pulls the Elden Ring bindings which only compile for x86_64-pc-windows-msvc. gowr-probe (the Ragnarök probe,
+# packaging/probe.sh) likewise.
+exclude = ["crates/gowring-dll", "crates/gowr-probe"]
 
 [workspace.package]
 version = "0.1.102"

@@ -980,3 +980,32 @@ The player chose the Blades on his back (over hiding them while sheathed).
   left out (logged). In every log so far the buffers were such a pair: +0x508 / +0x510, +0x2c8 / +0x2d0 (0.1.91,
   0.1.101), +0x88 / +0x90 (0.1.92), always 0x65d0 apart (181 bones). The others were 150-bone blocks the game did not
   update (0.1.92's trace) or another model's.
+
+## Live Kratos, stage 1 — GowRProbe 0.1.0 (2026-10-29, branch claude/kratos-live-render)
+
+New direction, on its own branch (the main line stays at 0.1.102): Ragnarök itself draws Kratos and Elden Ring paints
+him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
+- Stage 0 (the creator's PC: RTX 4070 12 GB, Ryzen 7 9800X3D, 64 GB): both games at once; Ragnarök keeps drawing
+  while Elden Ring is in front; Elden Ring holds 60 fps at 4K; GPU at 100 %; the controller drives whichever window
+  is in front.
+- Stage 1, a probe (separate download `dist/GowRProbe-0.1.0.zip`, `packaging/probe.sh`; not part of the mod's zip):
+  - `crates/gowr-probe` → gowr_probe.dll. Vtables from a throwaway device/queue/swapchain on a hidden window of its
+    own class; retour detours on Present, Present1, ExecuteCommandLists. Watches only: first-frame swapchain
+    description (size, format, buffers, swap effect, window, fullscreen, IDXGISwapChain4), the adapter (by the
+    queue's device LUID: name, dedicated memory, feature level), the queues (DIRECT or not), every 10 s fps, slowest
+    frame, frames in front / behind / minimised, Ragnarök's local and non-local video memory against its budget,
+    XInput reads, whether eldenring.exe runs; focus changes; loaded modules at start and after 30/60/180 s, input
+    and graphics ones picked out. Screenshots (max 12): at 20/60/120 s, after 3 s behind another window (3), 3 s back
+    in front (2), Ctrl+F10; copied on the last DIRECT queue the presenting thread submitted to, waited for, saved as
+    PNG (RGBA8/BGRA8/RGB10A2/RGBA16F handled; shrunk to ≤1920 wide). One change to the game: XInputGetState
+    (xinput1_4/1_3/9_1_0) returns an idle pad while Ragnarök is not in front.
+    Output: %LOCALAPPDATA%/GowRing/gowr_probe/latest (the run before in previous/).
+  - `GowRProbe.exe` (second bin of gowring-launcher): waits for GoWR.exe, waits for d3d12.dll in it (+10 s), loads
+    the DLL with CreateRemoteThread(LoadLibraryW) (nothing written into Ragnarök's folder), reports whether it
+    hooked, prints the steps, opens the folder when Ragnarök closes. Access refused → says to run as administrator.
+  - Tested under Wine 9 + lavapipe with a new stand-in `tools/fakes` GoWR.exe (FAKE_GOWR_DRAW=1 presents D3D12
+    frames, red left / blue right): hooks in, queue found, ~400 fps counted, three screenshots copied in ~3 ms each,
+    colours and orientation right. Found on the way: under Wine's software D3D12, making the probe's throwaway
+    device while the game draws hangs both (the stand-in now waits FAKE_GOWR_DELAY s before drawing). On Windows the
+    same step is what hudhook does in Elden Ring every session; still the first thing to watch in the real test.
+    Without a display Wine can't make the helper window at all (Xvfb used).

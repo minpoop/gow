@@ -1,0 +1,29 @@
+[package]
+name = "gowr-probe"
+version = "0.1.0"
+edition = "2021"
+description = "gowr_probe.dll — live-Kratos stage 1: loaded into God of War Ragnarök (GoWR.exe) by GowRProbe.exe, it logs how the game draws and saves a few screenshots. Changes nothing in the game."
+
+[lib]
+name = "gowr_probe"
+crate-type = ["cdylib"]
+
+# Not a member of the main workspace (Windows-only deps); see packaging/probe.sh.
+[workspace]
+
+[dependencies]
+retour = "0.4.0-alpha.4"
+png = "0.17"
+windows = { version = "0.58", features = [
+  "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi",
+  "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading",
+  "Win32_System_Diagnostics_ToolHelp", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_Input_XboxController", "Win32_Security", "Win32_System_SystemServices", "Win32_System_Diagnostics_Debug",
+] }
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 4
+panic = "unwind"
+debug = 1

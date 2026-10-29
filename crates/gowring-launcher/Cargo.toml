@@ -8,6 +8,11 @@ description = "GowRing.exe: --prepare / --play / --diagnose for the Kratos-in-El
 name = "GowRing"
 path = "src/main.rs"
 
+# Live-Kratos stage 1 (docs/LIVE-KRATOS-PLAN.md): loads gowr_probe.dll into a running God of War Ragnarök.
+[[bin]]
+name = "GowRProbe"
+path = "src/probe_main.rs"
+
 [dependencies]
 anyhow.workspace = true
 serde_json.workspace = true
@@ -15,4 +20,7 @@ gowring-core = { path = "../gowring-core" }
 gowring-gow = { path = "../gowring-gow" }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp"] }
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_Memory",
+  "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_Security",
+] }

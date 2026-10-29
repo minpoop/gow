@@ -3,7 +3,7 @@ name = "fakes"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Stand-ins for ModEngine2's launcher and eldenring.exe, used to test GowRing.exe under Wine. Never packaged."
+description = "Stand-ins for ModEngine2's launcher, eldenring.exe and GoWR.exe, used to test GowRing.exe under Wine. Never packaged."
 
 [workspace]
 
@@ -15,9 +15,19 @@ path = "src/bin/modengine2_launcher.rs"
 name = "eldenring"
 path = "src/bin/eldenring.rs"
 
+# stand-in for God of War Ragnarök, for GowRProbe.exe: loads d3d12.dll, then idles (FAKE_GOWR_SECS, default 40),
+# or with FAKE_GOWR_DRAW=1 draws and presents frames through D3D12 (red left half, blue right half)
+[[bin]]
+name = "GoWR"
+path = "src/bin/gowr.rs"
+
 [[bin]]
 name = "dll_probe"
 path = "src/bin/dll_probe.rs"
 
 [dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_LibraryLoader", "Win32_Security", "Win32_System_IO"] }
+windows = { version = "0.58", features = [
+  "Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common",
+  "Win32_Graphics_Gdi", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging",
+] }

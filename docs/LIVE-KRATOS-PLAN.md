@@ -81,6 +81,10 @@ Ring is in front**; Elden Ring holds a stable 60 fps at 4K; the GPU sits at 100 
 gives). The controller appears to drive whichever window has focus (to confirm). Not yet measured: Ragnarök's own
 frame rate alongside, video memory in use. The go/no-go passed; stage 1's probe will log the rest.
 
+## Stage 1 status (2026-10-29)
+Built: GowRProbe 0.1.0 (`dist/GowRProbe-0.1.0.zip`, MODLOG). Tested under Wine against a stand-in that draws with
+D3D12; waiting for the creator's run against the real Ragnarök.
+
 ## 4. Staged plan — riskiest unknowns first, each stage can stop the project cheaply
 
 Every discovery step works like the 0.1.89 pose search: I build a probe, you run it, it writes a log/dump, I read
