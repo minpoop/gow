@@ -9,3 +9,4 @@ dist/
 /er-cache/
 *.wem
 *.bnk
+__pycache__/
