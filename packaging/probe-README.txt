@@ -1,4 +1,4 @@
-GowRProbe 0.2 — Kratos in the Lands Between, live-Kratos test 2: finding Ragnarök's camera
+GowRProbe 0.3 — Kratos in the Lands Between, live-Kratos test 3: finding Ragnarök's camera
 ==========================================================================================
 
 What it is
@@ -17,11 +17,10 @@ How to run it
      (Windows may warn about an unknown program: "More info" -> "Run anyway". If it says access was refused,
      right-click GowRProbe.exe -> "Run as administrator".)
   4. In Ragnarök, press Ctrl+F9 and follow the beeps:
-       one beep        hold still
+       one beep        let go of the controller and keep completely still (15-20 seconds): it searches memory,
+                       then watches for a second which part of Ragnarök writes the camera
        two beeps       move the camera: turn it slowly all the way round, look up and down, walk a few steps
-       one long beep   let go of the controller, keep completely still
-       two beeps       move the camera again
-       three beeps     done (about 40 seconds in all). Once more somewhere else if you can.
+       three beeps     done (about 10 seconds later). Once more somewhere else if you can.
   5. Put Elden Ring in front and play it for a minute, then close Ragnarök.
   6. A folder opens. Send Claude everything in it: probe.log, camsearch_*.bin, shot_*.png. If the .bin files won't
      attach, right-click the folder -> Send to -> Compressed (zipped) folder, and send the zip.

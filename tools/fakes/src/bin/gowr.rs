@@ -2,10 +2,9 @@
 //! idles so the probe can be loaded into it, and exits. With FAKE_GOWR_DRAW=1 it instead opens a window and presents
 //! frames through D3D12 (left half red, right half blue), for the probe's frame counting and screenshots, after
 //! FAKE_GOWR_DELAY seconds (default 0: under Wine's software D3D12 a device made while another thread draws hangs).
-//! While drawing it keeps a fake camera on the heap, updated every frame for the probe's camera search: a reversed-Z
-//! projection (60 degrees, the window's shape) followed by a view matrix circling (100, 20, -300) at 5 m, and a
-//! separate copy of the camera's position. Like a player following the probe's beeps, the camera moves for 22 s
-//! and then holds still for 8, over and over.
+//! While drawing it keeps a fake camera on the heap, laid out like Ragnarök's (`fake_camera`), circling
+//! (100, 20, -300) at 5 m. Like a player following the probe's beeps, the camera moves for 22 s and then holds
+//! still for 8, over and over.
 use std::time::{Duration, Instant};
 use windows::core::{w, Interface};
 use windows::Win32::Foundation::*;
@@ -53,28 +52,39 @@ fn barrier(r: &ID3D12Resource, before: D3D12_RESOURCE_STATES, after: D3D12_RESOU
     }
 }
 
-/// proj at floats 32..48 (row layout: [sx,0,0,0; 0,sy,0,0; jx,jy,0,1; 0,0,0.1,0]), view at 48..64 (rows: the camera's
-/// right, up and forward as columns, then -axis·position).
-fn fake_camera(cam: &mut [f32; 256], pos: &mut [f32; 4], t: f32, aspect: f32, n: u64) {
-    let sy = 1.0 / (30f32.to_radians()).tan();
-    let j = if n % 2 == 0 { 0.0004 } else { -0.0004 };
-    let proj = [sy / aspect, 0.0, 0.0, 0.0, 0.0, sy, 0.0, 0.0, j, -j, 0.0, 1.0, 0.0, 0.0, 0.1, 0.0];
+/// Ragnarök's layout, as 0.2.0 found it: a per-view block of floats with the view matrix at 0x80, the camera-to-world
+/// matrix at 0xc0 (both 3x4, rows 16 bytes apart, translation in the fourth column) and the transposed reversed-Z
+/// projection at 0x100; filled every frame by `publish` from the camera's own position, kept as doubles.
+fn fake_camera(cam: &mut [f32; 256], src: &mut [f64; 4], t: f32, aspect: f32, n: u64) {
     let moving = (t / 30.0).floor() * 22.0 + (t % 30.0).min(22.0);
     let yaw = moving * 0.5;
-    let p = [100.0 + 5.0 * yaw.sin(), 20.0, -300.0 - 5.0 * yaw.cos()];
+    let p = [100.0 + 5.0 * yaw.sin() as f64, 20.0, -300.0 - 5.0 * yaw.cos() as f64];
+    for k in 0..3 {
+        unsafe { std::ptr::write_volatile(&mut src[k], p[k]) };
+    }
+    publish(cam, src, yaw, aspect, n);
+}
+
+#[inline(never)]
+fn publish(cam: &mut [f32; 256], src: &[f64; 4], yaw: f32, aspect: f32, n: u64) {
+    let p = [src[0] as f32, src[1] as f32, src[2] as f32];
+    let sy = 1.0 / (30f32.to_radians()).tan();
+    let j = if n % 2 == 0 { 0.0004 } else { -0.0004 };
+    let proj = [sy / aspect, 0.0, j, 0.0, 0.0, sy, -j, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, -1.0, 0.0];
     let f = [-yaw.sin(), 0.0, yaw.cos()];
     let u = [0.0, 1.0, 0.0];
     let r = [u[1] * f[2] - u[2] * f[1], u[2] * f[0] - u[0] * f[2], u[0] * f[1] - u[1] * f[0]];
     let d = |a: [f32; 3]| -(a[0] * p[0] + a[1] * p[1] + a[2] * p[2]);
-    let view = [r[0], u[0], f[0], 0.0, r[1], u[1], f[1], 0.0, r[2], u[2], f[2], 0.0, d(r), d(u), d(f), 1.0];
-    for k in 0..16 {
+    let view = [r[0], r[1], r[2], d(r), u[0], u[1], u[2], d(u), f[0], f[1], f[2], d(f)];
+    let to_world = [r[0], u[0], f[0], p[0], r[1], u[1], f[1], p[1], r[2], u[2], f[2], p[2]];
+    for k in 0..12 {
         unsafe {
-            std::ptr::write_volatile(&mut cam[32 + k], proj[k]);
-            std::ptr::write_volatile(&mut cam[48 + k], view[k]);
+            std::ptr::write_volatile(&mut cam[32 + k], view[k]);
+            std::ptr::write_volatile(&mut cam[48 + k], to_world[k]);
         }
     }
-    for k in 0..3 {
-        unsafe { std::ptr::write_volatile(&mut pos[k], p[k]) };
+    for k in 0..16 {
+        unsafe { std::ptr::write_volatile(&mut cam[64 + k], proj[k]) };
     }
 }
 
@@ -107,8 +117,8 @@ unsafe fn draw(run: Duration) -> windows::core::Result<u64> {
     let fence: ID3D12Fence = dev.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
     let ev = CreateEventW(None, false, false, None)?;
     let mut cam = Box::new([0f32; 256]);
-    let mut cam_pos = Box::new([0f32; 4]);
-    println!("fake GoWR: camera block at {:p}, position copy at {:p}", cam.as_ptr(), cam_pos.as_ptr());
+    let mut cam_pos = Box::new([0f64; 4]);
+    println!("fake GoWR: per-view block at {:p} (projection at +0x100), camera position (doubles) at {:p}, publish at {:p}", cam.as_ptr(), cam_pos.as_ptr(), publish as *const ());
     let t0 = Instant::now();
     let mut n = 0u64;
     while t0.elapsed() < run {

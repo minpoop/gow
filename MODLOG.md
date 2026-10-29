@@ -1064,3 +1064,26 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
   places moves smoothly: every one jumps to unrelated values between frames. So all found so far are per-frame
   copies; the camera itself (the source they are copied from) is not yet found. Possibly stored as doubles, as a
   quaternion, or relative to Kratos; 0.2.0 searched only floats.
+
+## Live Kratos, stage 2a — GowRProbe 0.3.0: the camera kept as doubles, and who writes it (2026-10-29)
+
+- `camsearch` rewritten around 0.2.0's finding. One beep, hold still: projections found as before; per-view blocks =
+  transposed projections whose proj-0x40 is a rotation (camera-to-world 3x4); the camera = the position most
+  blocks agree on (fourth column). Memory searched for it kept three ways within 1 cm: floats in a row, doubles in a
+  row (8-aligned), floats 16 bytes apart (a matrix column); finds inside a block are marked.
+- `watch` (new): DR0-DR3 on every thread but the probe's (CONTEXT_DEBUG_REGISTERS, write, 4 bytes) for 1 s, a
+  vectored handler for EXCEPTION_SINGLE_STEP with our DR6 bits: per address and code site (2 kept), rip
+  (module+offset), the 16 registers, 64 code bytes before / 32 after, 64 bytes around each register that points to
+  readable memory; all into fixed static buffers (nothing allocated in the handler). Targets: two blocks' camera x,
+  then up to two finds outside blocks (doubles first, then columns, then floats). Then two beeps: 10 s recording of
+  512 bytes around the finds (doubles and columns first).
+- Found on the way, under Wine: the probe hung while setting the debug registers, because it allocated a CONTEXT
+  for each thread while that thread was suspended (a suspended thread can hold the heap's lock). One CONTEXT is
+  now allocated before any thread is suspended. This would have hung the real game too.
+- Stand-in GoWR.exe: the fake camera now has Ragnarök's layout (view at 0x80, camera-to-world at 0xc0, transposed
+  reversed-Z projection at 0x100, right-handed) filled each frame by `publish` from a position kept as doubles.
+  Under Wine: block found, camera (95, 20, -300.022), the doubles found at their address and the block's column;
+  the watch: 310 writes each in 1 s, writers `GoWR.exe+0x3715` (the block, with rdi = the doubles' address) and
+  `GoWR.exe+0x1be3` (the doubles); the stand-in kept running.
+- `camsearch.py`: position windows read as floats, doubles and columns; "smooth" = moves, within 100 m, no step over
+  3 m between snapshots, not a rotation's entries.

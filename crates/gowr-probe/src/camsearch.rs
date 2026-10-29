@@ -1,20 +1,22 @@
 //! Stage 2a of live Kratos: where does Ragnarök keep its camera? Started with Ctrl+F9 while Ragnarök is in front,
-//! guided by beeps (the probe cannot draw on screen):
+//! guided by beeps (the probe cannot draw on screen). 0.3.0, after 0.2.0's run found the per-frame camera blocks:
 //!
 //! 1. one beep: hold still. Ragnarök's writable memory is searched for projection matrices with the screen's shape
-//!    (`[sx,0,0,0; 0,sy,0,0; jx,jy,A,±1; 0,0,B,0]` or its transpose, sy/sx = width/height, jitter small): the lens.
-//!    The camera's own matrices usually sit right beside it.
-//! 2. two beeps: turn the camera around, look up and down, walk a little (20 s). 4 KB around each projection found
-//!    is recorded 5 times a second (`camsearch_<n>_proj.bin`).
-//! 3. one long beep: let go of everything (5 s). Near the projections, rotation matrices that turned during step 2
-//!    give candidate camera positions; the whole memory is searched for those positions (`camsearch` log lines).
-//! 4. two beeps: move the camera again (10 s). 512 bytes around each place the position was found are recorded
+//!    (`[sx,0,0,0; 0,sy,0,0; jx,jy,A,±1; 0,0,B,0]` or its transpose). In Ragnarök's per-view blocks the transposed
+//!    projection follows the camera-to-world matrix (proj-0x40: 3x4, rows 16 bytes apart, the position in the
+//!    fourth column) and the view matrix (proj-0x80); the camera's position is read from there.
+//! 2. still holding still: the memory is searched for that position kept three ways: three floats in a row, three
+//!    doubles in a row, and three floats 16 bytes apart (a matrix's fourth column), within 1 cm.
+//! 3. still holding still: "who writes here" (`watch`) on the block's position for a second, with a second block's
+//!    and up to two of step 2's finds that are not in a block: the code that writes them, its registers and the
+//!    memory they point at, in the log.
+//! 4. two beeps: move the camera (10 s). 512 bytes around each find of step 2 are recorded 5 times a second
 //!    (`camsearch_<n>_pos.bin`).
 //! 5. three beeps: done.
 //!
-//! Files (little-endian): "GWCS", u32 version 1, u32 kind (1 projection windows, 2 position windows), u32 count,
-//! u32 window bytes, u32 swap width, u32 swap height, u64 window starts[count]; then records of u32 ms since the
-//! search began, u64 frame, u8 readable[count], window bytes x count. Read offline (tools/live_kratos/camsearch.py).
+//! Files (little-endian): "GWCS", u32 version 1, u32 kind (2 position windows), u32 count, u32 window bytes, u32
+//! swap width, u32 swap height, u64 window starts[count]; then records of u32 ms since the search began, u64 frame,
+//! u8 readable[count], window bytes x count. Read offline (tools/live_kratos/camsearch.py).
 
 use crate::d3d::{FRAMES, SWAP_H, SWAP_W};
 use crate::plog;
@@ -34,9 +36,7 @@ pub static RUNNING: AtomicBool = AtomicBool::new(false);
 static RUNS: AtomicU32 = AtomicU32::new(0);
 pub const MAX_RUNS: u32 = 3;
 
-const PROJ_WINDOW: usize = 4096;
 const POS_WINDOW: usize = 512;
-const MAX_PROJ: usize = 24;
 const MAX_POS: usize = 64;
 const CHUNK: usize = 1 << 20;
 
@@ -121,7 +121,7 @@ fn place(addr: usize) -> String {
     "heap".into()
 }
 
-// ---- step 1: projections -------------------------------------------------------------------------------------------
+// ---- projections -------------------------------------------------------------------------------------------
 
 struct Proj {
     addr: usize,
@@ -253,7 +253,72 @@ impl Recorder {
     }
 }
 
-// ---- step 3: rotations that turned, and the positions they give ----------------------------------------------------
+// ---- per-view blocks and the position kept three ways --------------------------------------------------------------
+
+/// A per-view block: its transposed projection at `proj`, camera-to-world at proj-0x40.
+struct Block {
+    proj: usize,
+    fov: f32,
+    pos: [f32; 3],
+}
+
+fn blocks(projs: &[Proj]) -> Vec<Block> {
+    let mut out = Vec::new();
+    let mut b = [0u8; 0x40];
+    for p in projs.iter().filter(|p| p.transposed) {
+        if !read(p.addr - 0x40, &mut b) || rot_at(&b, 0, 16).is_none() {
+            continue;
+        }
+        let pos = [f32_at(&b, 12), f32_at(&b, 28), f32_at(&b, 44)];
+        if pos.iter().all(|v| v.is_finite()) && pos.iter().any(|v| v.abs() > 0.5) {
+            out.push(Block { proj: p.addr, fov: 2.0 * (1.0 / p.sy).atan().to_degrees(), pos });
+        }
+    }
+    out
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Kind {
+    Floats,
+    Doubles,
+    Column,
+}
+
+fn f64_at(b: &[u8], i: usize) -> f64 {
+    f64::from_le_bytes(b[i..i + 8].try_into().unwrap())
+}
+
+/// Every place holding `p` as three floats in a row, three doubles in a row, or three floats 16 bytes apart.
+fn find_kept(regions: &[Region], p: [f32; 3], own: &[(usize, usize)]) -> Vec<(usize, Kind)> {
+    const EPS: f64 = 0.01;
+    let (x, y, z) = (p[0] as f64, p[1] as f64, p[2] as f64);
+    let close = |a: f64, b: f64| (a - b).abs() < EPS;
+    let mut out = Vec::new();
+    scan(regions, own, |base, b, own| {
+        let end = b.len().saturating_sub(48).min(CHUNK);
+        let mut i = 0;
+        while i < end {
+            if out.len() >= 8192 {
+                return;
+            }
+            let at = base + i;
+            if close(f32_at(b, i) as f64, x) && !mine(own, at) {
+                if close(f32_at(b, i + 4) as f64, y) && close(f32_at(b, i + 8) as f64, z) {
+                    out.push((at, Kind::Floats));
+                } else if close(f32_at(b, i + 16) as f64, y) && close(f32_at(b, i + 32) as f64, z) {
+                    out.push((at, Kind::Column));
+                }
+            }
+            if i % 8 == 0 && close(f64_at(b, i), x) && close(f64_at(b, i + 8), y) && close(f64_at(b, i + 16), z) && !mine(own, at) {
+                out.push((at, Kind::Doubles));
+            }
+            i += 4;
+        }
+    });
+    out
+}
+
+// ---- the search ----------------------------------------------------------------------------------------------------
 
 fn rot_at(b: &[u8], o: usize, stride: usize) -> Option<[[f32; 3]; 3]> {
     if o + stride * 2 + 12 > b.len() {
@@ -271,103 +336,6 @@ fn rot_at(b: &[u8], o: usize, stride: usize) -> Option<[[f32; 3]; 3]> {
     }
     Some(r)
 }
-
-fn angle_deg(a: &[[f32; 3]; 3], b: &[[f32; 3]; 3]) -> f32 {
-    let mut tr = 0.0;
-    for i in 0..3 {
-        for k in 0..3 {
-            tr += a[i][k] * b[i][k];
-        }
-    }
-    ((tr - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees()
-}
-
-struct Turned {
-    window: usize,
-    offset: usize,
-    stride: usize,
-    degrees: f32,
-}
-
-/// Rotation blocks (rows 16 or 12 bytes apart) in the windows that are rotations both at the start and the end of
-/// the recording and turned more than 15 degrees in between.
-fn turned(rec: &Recorder) -> Vec<Turned> {
-    let mut out = Vec::new();
-    for (w, (a, b)) in rec.first.iter().zip(&rec.last).enumerate() {
-        if a.is_empty() || b.is_empty() {
-            continue;
-        }
-        for stride in [16usize, 12] {
-            let mut o = 0;
-            while o + stride * 2 + 12 <= a.len() {
-                if let (Some(ra), Some(rb)) = (rot_at(a, o, stride), rot_at(b, o, stride)) {
-                    let d = angle_deg(&ra, &rb);
-                    if d > 15.0 {
-                        out.push(Turned { window: w, offset: o, stride, degrees: d });
-                    }
-                }
-                o += 4;
-            }
-        }
-    }
-    out
-}
-
-/// Candidate camera positions from a turned block read now: its translation (as stored after the rows, or in each
-/// row's fourth float) and that translation taken back through the rotation both ways (a view matrix stores
-/// -R·position).
-fn positions(b: &[u8], t: &Turned, out: &mut Vec<[f32; 3]>) {
-    let Some(r) = rot_at(b, t.offset, t.stride) else { return };
-    let mut ts = Vec::new();
-    if t.stride == 16 {
-        if t.offset + 60 <= b.len() {
-            ts.push([0, 1, 2].map(|c| f32_at(b, t.offset + 48 + c * 4)));
-        }
-        ts.push([0, 1, 2].map(|k| f32_at(b, t.offset + k * 16 + 12)));
-    } else if t.offset + 48 <= b.len() {
-        ts.push([0, 1, 2].map(|c| f32_at(b, t.offset + 36 + c * 4)));
-    }
-    for tr in ts {
-        let rt = [0, 1, 2].map(|i| -(r[0][i] * tr[0] + r[1][i] * tr[1] + r[2][i] * tr[2]));
-        let r_ = [0, 1, 2].map(|i| -(r[i][0] * tr[0] + r[i][1] * tr[1] + r[i][2] * tr[2]));
-        for p in [tr, rt, r_] {
-            let mag = p.iter().map(|v| v.abs()).fold(0.0, f32::max);
-            if p.iter().all(|v| v.is_finite()) && mag > 0.5 && mag < 1e6 && !out.iter().any(|q| (0..3).all(|i| (q[i] - p[i]).abs() < 1e-3)) {
-                out.push(p);
-            }
-        }
-    }
-}
-
-/// Every place in memory holding one of the positions as three floats in a row (within 1 cm).
-fn find_positions(regions: &[Region], cands: &[[f32; 3]], own: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    let lo = cands.iter().map(|p| p[0]).fold(f32::MAX, f32::min) - 0.01;
-    let hi = cands.iter().map(|p| p[0]).fold(f32::MIN, f32::max) + 0.01;
-    let mut out = Vec::new();
-    let mut own = own.to_vec();
-    own.push((cands.as_ptr() as usize, std::mem::size_of_val(cands)));
-    scan(regions, &own, |base, b, own| {
-        let end = b.len().saturating_sub(12).min(CHUNK);
-        let mut i = 0;
-        while i < end {
-            let x = f32_at(b, i);
-            if x >= lo && x <= hi {
-                for (k, p) in cands.iter().enumerate() {
-                    if (x - p[0]).abs() < 0.01 && (f32_at(b, i + 4) - p[1]).abs() < 0.01 && (f32_at(b, i + 8) - p[2]).abs() < 0.01 {
-                        if out.len() < 4096 && !mine(own, base + i) {
-                            out.push((base + i, k));
-                        }
-                        break;
-                    }
-                }
-            }
-            i += 4;
-        }
-    });
-    out
-}
-
-// ---- the search ----------------------------------------------------------------------------------------------------
 
 fn beep(n: u32, ms: u32) {
     for _ in 0..n {
@@ -400,116 +368,79 @@ pub fn start() {
 fn run(n: u32) {
     let t0 = Instant::now();
     let (w, h) = (SWAP_W.load(Relaxed).max(1), SWAP_H.load(Relaxed).max(1));
-    let aspect = w as f32 / h as f32;
     beep(1, 250);
     plog!("camsearch", "#{n} started (screen {w}x{h}); hold still");
     let (regs, total) = regions();
     plog!("camsearch", "#{n} {} regions, {} MB of read-write memory", regs.len(), total >> 20);
 
-    let projs = find_projections(&regs, aspect);
-    plog!("camsearch", "#{n} {} projections with the screen's shape ({:.1} s)", projs.len(), t0.elapsed().as_secs_f64());
-    let mut groups: Vec<(f32, f32, f32, f32, bool, usize)> = Vec::new();
-    for p in &projs {
-        let key = (p.sx, p.sy, p.a, p.b, p.transposed);
-        match groups.iter_mut().find(|g| (g.0, g.1, g.2, g.3, g.4) == key) {
-            Some(g) => g.5 += 1,
-            None => groups.push((p.sx, p.sy, p.a, p.b, p.transposed, 1)),
-        }
-    }
-    for g in groups.iter().take(16) {
-        let fov = 2.0 * (1.0 / g.1).atan().to_degrees();
-        plog!("camsearch", "#{n}   x{}: fov {fov:.2} deg, sx {:.5} sy {:.5}, A {:.6} B {:.6}, {}", g.5, g.0, g.1, g.2, g.3, if g.4 { "transposed" } else { "row" });
-    }
-    for p in projs.iter().take(40) {
+    let projs = find_projections(&regs, w as f32 / h as f32);
+    let blocks = blocks(&projs);
+    plog!("camsearch", "#{n} {} projections, {} per-view blocks with a camera ({:.1} s)", projs.len(), blocks.len(), t0.elapsed().as_secs_f64());
+    for p in projs.iter().take(8) {
         plog!(
             "camsearch",
-            "#{n}   {:#x} ({}) {} sx {:.5} sy {:.5} A {:.6} B {:.6} w {:+} jitter ({:.6}, {:.6})",
-            p.addr, place(p.addr), if p.transposed { "T" } else { "R" }, p.sx, p.sy, p.a, p.b, p.w, p.jx, p.jy
+            "#{n}   projection {:#x} {} sx {:.5} sy {:.5} A {:.6} B {:.6} w {:+} jitter ({:.6}, {:.6})",
+            p.addr, if p.transposed { "T" } else { "R" }, p.sx, p.sy, p.a, p.b, p.w, p.jx, p.jy
         );
     }
-    if projs.is_empty() {
-        plog!("camsearch", "#{n} nothing found; stopped");
+    for b in blocks.iter().take(24) {
+        plog!("camsearch", "#{n}   block: projection {:#x} ({}), fov {:.2}, camera at ({:.3}, {:.3}, {:.3})", b.proj, place(b.proj), b.fov, b.pos[0], b.pos[1], b.pos[2]);
+    }
+    // the gameplay camera: the position most blocks agree on
+    let Some(cam) = blocks
+        .iter()
+        .max_by_key(|b| blocks.iter().filter(|o| (0..3).all(|i| (o.pos[i] - b.pos[i]).abs() < 0.01)).count())
+        .map(|b| b.pos)
+    else {
+        plog!("camsearch", "#{n} no per-view block with a camera; stopped");
         beep(3, 600);
         return;
-    }
+    };
+    plog!("camsearch", "#{n} camera at ({:.3}, {:.3}, {:.3})", cam[0], cam[1], cam[2]);
 
-    // windows around the projections, merged where they overlap
+    let ts = Instant::now();
+    let kept = find_kept(&regs, cam, &[]);
+    let near_block = |a: usize| blocks.iter().any(|b| a + 0x100 >= b.proj && a < b.proj + 0x100);
+    for kind in [Kind::Doubles, Kind::Column, Kind::Floats] {
+        let of: Vec<&(usize, Kind)> = kept.iter().filter(|k| k.1 == kind).collect();
+        let list: Vec<String> = of.iter().take(16).map(|k| format!("{:#x} ({}{})", k.0, place(k.0), if near_block(k.0) { ", block" } else { "" })).collect();
+        plog!("camsearch", "#{n} kept as {kind:?}: {} places{}{}", of.len(), if of.is_empty() { "" } else { ": " }, list.join(", "));
+    }
+    plog!("camsearch", "#{n} position search took {:.1} s", ts.elapsed().as_secs_f64());
+
+    // who writes them: the gameplay block's position, another block's, and up to two finds outside the blocks
+    let mut targets: Vec<(String, usize)> = Vec::new();
+    let agree: Vec<&Block> = blocks.iter().filter(|b| (0..3).all(|i| (b.pos[i] - cam[i]).abs() < 0.01)).collect();
+    for b in agree.iter().take(2) {
+        targets.push((format!("block camera x (fov {:.1})", b.fov), b.proj - 0x40 + 12));
+    }
+    for kind in [Kind::Doubles, Kind::Column, Kind::Floats] {
+        for k in kept.iter().filter(|k| k.1 == kind && !near_block(k.0)) {
+            if targets.len() >= 4 || targets.iter().filter(|t| !t.0.starts_with("block")).count() >= 2 {
+                break;
+            }
+            targets.push((format!("{kind:?} x"), k.0));
+        }
+    }
+    crate::watch::watch(n, &targets, 1000, place);
+
     let mut starts: Vec<usize> = Vec::new();
-    for p in &projs {
-        let s = (p.addr.saturating_sub(PROJ_WINDOW / 2)) & !0xf;
-        if !starts.iter().any(|x| s < x + PROJ_WINDOW && *x < s + PROJ_WINDOW) {
+    let mut order: Vec<&(usize, Kind)> = kept.iter().filter(|k| k.1 != Kind::Floats).collect();
+    order.extend(kept.iter().filter(|k| k.1 == Kind::Floats));
+    for (a, _) in order {
+        let s = a.saturating_sub(POS_WINDOW / 2) & !0xf;
+        if !starts.iter().any(|x| s < x + POS_WINDOW && *x < s + POS_WINDOW) {
             starts.push(s);
         }
-        if starts.len() >= MAX_PROJ {
+        if starts.len() >= MAX_POS {
             break;
         }
     }
-    let mut rec = match Recorder::new(&format!("camsearch_{n}_proj.bin"), 1, starts, PROJ_WINDOW, t0) {
-        Ok(r) => r,
-        Err(e) => return plog!("camsearch", "#{n} cannot write the recording: {e}"),
-    };
-    beep(2, 200);
-    plog!("camsearch", "#{n} recording {} windows; move the camera now", rec.starts.len());
-    let snaps = rec.record(20);
-    plog!("camsearch", "#{n} {snaps} snapshots recorded");
-
-    beep(1, 900);
-    plog!("camsearch", "#{n} hold still");
-    std::thread::sleep(Duration::from_millis(1500));
-    let turns = turned(&rec);
-    plog!("camsearch", "#{n} {} rotation blocks turned during the recording", turns.len());
-    let mut cands = Vec::new();
-    let mut buf = vec![0u8; PROJ_WINDOW];
-    for t in &turns {
-        let at = rec.starts[t.window] + t.offset;
-        if read(rec.starts[t.window], &mut buf) {
-            let before = cands.len();
-            positions(&buf, t, &mut cands);
-            plog!(
-                "camsearch",
-                "#{n}   rotation at {at:#x} (rows {} bytes apart) turned {:.0} deg; positions: {}",
-                t.stride,
-                t.degrees,
-                cands[before..].iter().map(|p| format!("({:.3}, {:.3}, {:.3})", p[0], p[1], p[2])).collect::<Vec<_>>().join(" ")
-            );
-        }
-        if cands.len() >= 24 {
-            break;
-        }
-    }
-    if cands.is_empty() {
-        plog!("camsearch", "#{n} no turning rotation near the projections; the recording still says a lot. Done");
-        beep(3, 250);
-        return;
-    }
-    let ts = Instant::now();
-    let mut own: Vec<(usize, usize)> = vec![(buf.as_ptr() as usize, buf.len()), (rec.buf.as_ptr() as usize, rec.buf.len())];
-    for v in rec.first.iter().chain(&rec.last) {
-        own.push((v.as_ptr() as usize, v.len()));
-    }
-    let hits = find_positions(&regs, &cands, &own);
-    plog!("camsearch", "#{n} {} places hold one of the {} positions ({:.1} s)", hits.len(), cands.len(), ts.elapsed().as_secs_f64());
-    for (k, p) in cands.iter().enumerate() {
-        let at: Vec<String> = hits.iter().filter(|h| h.1 == k).take(12).map(|h| format!("{:#x} ({})", h.0, place(h.0))).collect();
-        let count = hits.iter().filter(|h| h.1 == k).count();
-        plog!("camsearch", "#{n}   ({:.3}, {:.3}, {:.3}): {count} places{}{}", p[0], p[1], p[2], if count > 0 { ": " } else { "" }, at.join(", "));
-    }
-
-    let mut pos_starts: Vec<usize> = Vec::new();
-    for (a, _) in &hits {
-        let s = a.saturating_sub(POS_WINDOW / 2) & !0xf;
-        if !pos_starts.iter().any(|x| s < x + POS_WINDOW && *x < s + POS_WINDOW) {
-            pos_starts.push(s);
-        }
-        if pos_starts.len() >= MAX_POS {
-            break;
-        }
-    }
-    if !pos_starts.is_empty() {
-        if let Ok(mut rec2) = Recorder::new(&format!("camsearch_{n}_pos.bin"), 2, pos_starts, POS_WINDOW, t0) {
+    if !starts.is_empty() {
+        if let Ok(mut rec) = Recorder::new(&format!("camsearch_{n}_pos.bin"), 2, starts, POS_WINDOW, t0) {
             beep(2, 200);
-            plog!("camsearch", "#{n} recording {} windows around the positions; move the camera again", rec2.starts.len());
-            let snaps = rec2.record(10);
+            plog!("camsearch", "#{n} recording {} windows around the finds; move the camera now", rec.starts.len());
+            let snaps = rec.record(10);
             plog!("camsearch", "#{n} {snaps} snapshots recorded");
         }
     }

@@ -6,7 +6,8 @@
 //! its video memory, which input libraries it loaded, and a few screenshots of its back buffer. One thing it changes:
 //! while Ragnarök's window is not in front, XInput controller reads come back idle, so Kratos there stays still, and
 //! it is held to 30 frames a second (it ran at 100+ behind Elden Ring and slowed Elden Ring's loading). 0.2.0 adds the
-//! camera search on Ctrl+F9 (`camsearch`, live-Kratos stage 2a).
+//! camera search on Ctrl+F9 (`camsearch`, live-Kratos stage 2a); 0.3.0 reads the camera from Ragnarök's per-view
+//! blocks, looks for it kept as doubles and matrix columns too, and watches who writes it (`watch`).
 //! Everything goes to `%LOCALAPPDATA%/GowRing/gowr_probe/latest/`.
 
 mod camsearch;
@@ -15,6 +16,7 @@ mod input;
 mod log;
 mod monitor;
 mod shot;
+mod watch;
 
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::DisableThreadLibraryCalls;

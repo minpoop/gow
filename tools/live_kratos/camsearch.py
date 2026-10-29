@@ -7,7 +7,8 @@ Per window (memory around a projection or a found position), over all snapshots:
     reuses these buffers between frames) that turned, how far, and the translation next to them read several ways
     (stored row / fourth column, each also taken back through the rotation), over those snapshots; only readings
     that stay within 100 m and move are printed;
-  * positions (pos files): which 3-float groups move, how far in total, and the box they stay in.
+  * positions (pos files): which positions (three floats in a row, three doubles in a row, or three floats 16
+    bytes apart: a matrix column) move smoothly (no jump over 3 m between snapshots), how far, and their box.
 A camera block shows as one rotation that turns with the camera and a translation that traces the same path as a
 position found elsewhere."""
 import os, struct, sys
@@ -114,15 +115,28 @@ def report_window(d, k):
                 print(l)
     if d['kind'] == 2:
         arr = np.array(fs, dtype=np.float64)
+        raw = [s[3][k] for s in snaps]
+        dbl = [np.frombuffer(r[:len(r) // 8 * 8], dtype='<f8') for r in raw]
+        found = []
         for i in range(0, arr.shape[1] - 2):
-            path = arr[:, i:i + 3]
+            found.append(('floats', i * 4, arr[:, i:i + 3]))
+            if i + 8 < arr.shape[1]:
+                found.append(('column', i * 4, arr[:, [i, i + 4, i + 8]]))
+        for i in range(0, len(dbl[0]) - 2):
+            found.append(('doubles', i * 8, np.array([x[i:i + 3] for x in dbl])))
+        for kind, off, path in found:
             if not np.all(np.isfinite(path)) or np.abs(path).max() > 1e6:
                 continue
-            length = np.linalg.norm(np.diff(path, axis=0), axis=1).sum()
+            steps = np.linalg.norm(np.diff(path, axis=0), axis=1)
+            length = steps.sum()
             span = path.max(0) - path.min(0)
-            if length > 0.5 and span.max() < 100 and np.abs(path[0]).max() > 0.5:
-                print(f'    moving triple at +{i * 4:#x} ({start + i * 4:#x}): first ({path[0][0]:.2f}, {path[0][1]:.2f}, '
-                      f'{path[0][2]:.2f}), path {length:.2f}, box {span[0]:.2f} x {span[1]:.2f} x {span[2]:.2f}')
+            # smooth: moves, stays within 100 m, never jumps more than 3 m between snapshots (0.2 s)
+            # and at least two parts larger than 0.5 with one above 2 (not a rotation's entries)
+            big = np.abs(path[0])
+            if length > 0.5 and span.max() < 100 and steps.max() < 3 and big.max() > 2 and (big > 0.5).sum() >= 2:
+                print(f'    smooth {kind:7} at +{off:#x} ({start + off:#x}): first ({path[0][0]:.3f}, {path[0][1]:.3f}, '
+                      f'{path[0][2]:.3f}), path {length:.2f}, box {span[0]:.2f} x {span[1]:.2f} x {span[2]:.2f}, '
+                      f'biggest step {steps.max():.2f}')
 
 
 def main():

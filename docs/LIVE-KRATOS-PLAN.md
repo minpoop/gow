@@ -91,7 +91,9 @@ Details in MODLOG.
 
 ## Stage 2a status (2026-10-29)
 Built: GowRProbe 0.2.0 — a camera search guided by beeps (Ctrl+F9), tested under Wine against a fake camera;
-read offline with `tools/live_kratos/camsearch.py`. Waiting for the creator's run in gameplay.
+read offline with `tools/live_kratos/camsearch.py`. First real run: the per-frame camera blocks found (view,
+camera-to-world, projection; y up, metres); the source they are copied from not yet. GowRProbe 0.3.0 looks for the
+position kept as doubles or matrix columns and watches which code writes the copies (debug registers).
 
 ## 4. Staged plan — riskiest unknowns first, each stage can stop the project cheaply
 
