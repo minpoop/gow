@@ -1139,3 +1139,29 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
   1,763, C 1,083, no jumps; screenshots red / orange x3 / red. Found on the way: B's jump guard fired when the
   stand-in wrote a position one float at a time (half-written); the game writes rows whole (movups), and so does
   the stand-in now. One Wine run froze during A and three later runs of the same build did not; not reproduced.
+- The creator's 0.5.0 run (gameplay): the copy writes the view translation (`GoWR.exe+0x3cb11e`) and position
+  (`+0x3cb18e`) from rdx (stack), then `GoWR.exe+0x498b38` / `+0x498b56` write them again (rows 0x00-0x70 from
+  rbp-locals, then xmm9/8/7/6 to +0xc0..+0xf0; rbx = the camera). A: 462 raises, 231 put back, the picture did not
+  move (second time). B: stopped after 2 raises by the jump guard, a false alarm: the second writer rewrites the
+  raised camera it reads back. C: the copy's function guessed at GoWR.exe+0x3cb0e0 (a leaf: a general 256-byte copy,
+  movups pairs [rdx+o] -> [rcx+o]); 4,698 calls in 3 s, all set aside (reasons not logged). The screenshots show
+  the same view throughout.
+
+## Live Kratos, stage 2b — GowRProbe 0.6.0: B and C fixed, the writers' callers and code (2026-10-29)
+
+- B: a write that already holds the raised camera (within 1 cm of the last real + 2 m) is left alone instead of
+  read as a jump; the code writing the position / view translation is counted by address. C: why calls are set
+  aside (not into the camera, record unreadable, axes not a rotation, too far) and the first three records copied
+  into the camera are logged. A dropped.
+- `watch`: each recorded write now carries its callers (RtlVirtualUnwind from the trap's registers; a leaf: return
+  address from the stack); `steer::dump_code` saves the code of the writers' functions and their callers in GoWR.exe
+  (up to 8 functions, 16 KB each) as `code_<rva>.bin`; `tools/live_kratos/disasm.py` disassembles them (capstone).
+- **A crash fixed (would have hit the real game):** a thread still handling a trap while the probe cleared its debug
+  registers resumed with the registers saved at the trap, switching the watch back on; with the handler removed, the
+  next write was an unhandled single-step. Under Wine one run in two crashed this way in the copy. Now the handler
+  is added once and kept; every trap's return sets the thread's debug registers to what they should be now
+  (`DESIRED`); a late trap on an address the probe ever armed is cleared and the thread carries on (`LATE`, logged).
+  The real 0.5.0 run had set traps in 96 threads and cleared 95. Four Wine runs since: no crash, no late trap.
+- Stand-in: a second writer (`finish_camera`, reads the camera back and rewrites its rows, as +0x498b56). Under
+  Wine: B 1,432-1,600 raises and 717-801 rewrites of the raised camera left alone, no jump; C 1,053-1,143 raises;
+  callers unwound to the thread start; 8 functions' code saved.

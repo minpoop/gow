@@ -88,6 +88,21 @@ fn fake_camera(src: &mut [f64; 4], t: f32) {
     unsafe {
         let g = std::ptr::addr_of_mut!(GAME_CAM.0) as *mut f32;
         copy_camera(g.add(CAM), record.as_ptr());
+        finish_camera(g.add(CAM));
+    }
+}
+
+/// A second writer, as GoWR.exe+0x498b56: reads the camera back and writes its rows again (whole 16-byte rows).
+#[inline(never)]
+fn finish_camera(cam: *mut f32) {
+    use std::arch::x86_64::{_mm_loadu_ps, _mm_storeu_ps};
+    let mut rows = [unsafe { _mm_loadu_ps(cam) }; 4];
+    for k in 0..4 {
+        rows[k] = unsafe { _mm_loadu_ps(cam.add(0xc0 / 4 + k * 4)) };
+    }
+    std::hint::black_box(&mut rows);
+    for k in 0..4 {
+        unsafe { _mm_storeu_ps(cam.add(0xc0 / 4 + k * 4), rows[k]) };
     }
 }
 

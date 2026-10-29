@@ -1,9 +1,9 @@
-GowRProbe 0.5 — Kratos in the Lands Between, live-Kratos test 5: moving Ragnarök's camera
+GowRProbe 0.6 — Kratos in the Lands Between, live-Kratos test 6: moving Ragnarök's camera
 =====================================================================================
 
 What it is
   A test for the "Ragnarök draws Kratos inside Elden Ring" idea. It loads a probe into God of War Ragnarök that
-  watches how the game draws (frame rate, video memory, screenshots) and, when you press Ctrl+F9, tries three
+  watches how the game draws (frame rate, video memory, screenshots) and, when you press Ctrl+F9, tries two
   ways of raising Ragnarök's camera by 2 metres, 3 seconds each, guided by beeps, to learn which one Ragnarök
   really draws from. While Ragnarök is not the window in front,
   it keeps Ragnarök from reading an Xbox-style controller (so its Kratos stays still) and holds it to 30 frames a
@@ -18,12 +18,12 @@ How to run it
      (Windows may warn about an unknown program: "More info" -> "Run anyway". If it says access was refused,
      right-click GowRProbe.exe -> "Run as administrator".)
   4. In Ragnarök, press Ctrl+F9 and follow the beeps:
-       one beep        let go of the controller and keep completely still, about 20 seconds. Three times, for
+       one beep        let go of the controller and keep completely still, about 15 seconds. Twice, for
                        3 seconds each, the view may jump up by 2 metres and come back: note which times it did
-                       (the first, second, third, or none)
+                       (the first, the second, both, or none)
        three beeps     done. Once more somewhere else if you can.
   5. Put Elden Ring in front and play it for a minute, then close Ragnarök.
-  6. A folder opens. Send Claude everything in it: probe.log, camsearch_*.bin, shot_*.png. If the .bin files won't
+  6. A folder opens. Send Claude everything in it: probe.log, code_*.bin, shot_*.png. If the .bin files won't
      attach, right-click the folder -> Send to -> Compressed (zipped) folder, and send the zip.
      (The folder is %LOCALAPPDATA%\GowRing\gowr_probe\latest; the run before is kept in "previous".)
 

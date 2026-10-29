@@ -6,21 +6,26 @@
 //! copies a whole camera record into it (rcx = the camera there, rdx = the record) and `GoWR.exe+0x498b56` writes
 //! its rows.
 //!
-//! 0.5.0, Ctrl+F9 with Ragnarök in front; one beep, hold still (about 20 s); three beeps, done:
+//! 0.5.0's run: A (at the builder, as 0.4.0) again moved nothing; B stopped itself after 2 raises (the second writer
+//! rewrites the camera from what it reads there, so the raised value came back and looked like a jump); C was set
+//! aside every time (the copy function is a general 256-byte copy, 1,566 calls a second).
+//!
+//! 0.6.0, Ctrl+F9 with Ragnarök in front; one beep, hold still (about 15 s); three beeps, done:
 //! * the camera there and 1 KB around it logged; copies of the position and the view translation in it found;
-//!   "who writes here" for a second on the position and the view translation;
-//! * three ways of raising the camera 2 m, 3 s each, a screenshot in each and one before and after, so the pictures
-//!   say which one Ragnarök draws from:
-//!   A. before each run of the block builder (as 0.4.0; put back at every Present);
-//!   B. right after each write the game makes to the camera there (it stays raised until the game's next write);
+//!   "who writes here" for a second on the position and the view translation, now with each writer's callers, and
+//!   the code of those functions saved (`code_<rva>.bin`, read with tools/live_kratos/disasm.py);
+//! * two ways of raising the camera 2 m, 3 s each, a screenshot in each and one before and after:
+//!   B. right after each write the game makes to the camera there (it stays raised until the game's next write; a
+//!      write of the already raised camera is left alone);
 //!   C. at the start of the copy function, in the record it is about to copy (only when it copies a camera into
-//!      that place: the record's axes are a rotation and its position within 5 m of the camera's).
+//!      that place: the record's axes are a rotation and its position within 5 m of the camera's), with why the
+//!      others were set aside and the first records seen.
 //!   A jump of the real camera over 1.5 m stops an experiment (the game would be reading the raised camera back).
 //! Another build of Ragnarök (other time stamp) or an unexpected layout: 0.3.0's search runs instead.
 
 use crate::camsearch::{beep, place};
 use crate::plog;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, RtlLookupFunctionEntry, CONTEXT};
 use windows::Win32::System::Threading::GetCurrentProcess;
@@ -62,6 +67,11 @@ static SKIPPED: AtomicU32 = AtomicU32::new(0);
 static RESTORED: AtomicU32 = AtomicU32::new(0);
 static JUMPS: AtomicU32 = AtomicU32::new(0);
 static IGNORED: AtomicU32 = AtomicU32::new(0);
+/// C: calls set aside because the destination was not the camera, the record was unreadable, its axes were not a
+/// rotation, its position was not near the camera's; and the first records copied into the camera.
+static C_WHY: [AtomicU32; 4] = [const { AtomicU32::new(0) }; 4];
+static C_SAMPLES_N: AtomicU32 = AtomicU32::new(0);
+static C_SAMPLES: Shared<[(usize, [f32; 9]); 3]> = Shared(std::cell::UnsafeCell::new([(0, [0.0; 9]); 3]));
 
 unsafe fn rd(a: usize) -> f32 {
     std::ptr::read_volatile(a as *const f32)
@@ -117,14 +127,36 @@ fn jumped(p: [f32; 3]) -> bool {
     false
 }
 
-/// B: the game just wrote the camera there (slot 0: its position; slot 1: its view translation). Raise it again.
-fn on_write(slot: u32, _ctx: &mut CONTEXT) {
+/// Which code wrote the camera during B, and how often (rip, count).
+static WRITERS: [(AtomicU64, AtomicU32); 8] = [const { (AtomicU64::new(0), AtomicU32::new(0)) }; 8];
+
+fn note_writer(rip: u64) {
+    for (r, c) in &WRITERS {
+        if r.load(Relaxed) == rip || r.compare_exchange(0, rip, Relaxed, Relaxed).is_ok() {
+            c.fetch_add(1, Relaxed);
+            return;
+        }
+    }
+}
+
+/// B: the game just wrote the camera there (slot 0: its position; slot 1: its view translation). Raise it again,
+/// unless what it wrote is already the raised camera (a writer that read it back during the frame).
+fn on_write(slot: u32, ctx: &mut CONTEXT) {
     let g = GLOBAL.load(Relaxed);
     if g == 0 || !ACTIVE.load(Relaxed) {
         return;
     }
+    note_writer(ctx.Rip | ((slot as u64) << 63));
     unsafe {
         let (r, p) = camera(g);
+        if slot == 0 && HAVE_REAL.load(Relaxed) {
+            let last = [0, 1, 2].map(|i| f32::from_bits(LAST_REAL[i].load(Relaxed)));
+            let raised = [last[0], last[1] + RAISE_M, last[2]];
+            if (0..3).all(|i| (p[i] - raised[i]).abs() < 0.01) {
+                SKIPPED.fetch_add(1, Relaxed);
+                return;
+            }
+        }
         let real = if slot == 0 {
             if jumped(p) {
                 return;
@@ -158,7 +190,13 @@ fn on_copy(_slot: u32, ctx: &mut CONTEXT) {
     }
     let (dst, src) = (ctx.Rcx as usize, ctx.Rdx as usize);
     let mut b = [0u8; 0x40];
-    if dst != g || src < 0x10000 || !read_bytes(src + 0xc0, &mut b) {
+    if dst != g {
+        C_WHY[0].fetch_add(1, Relaxed);
+        IGNORED.fetch_add(1, Relaxed);
+        return;
+    }
+    if src < 0x10000 || !read_bytes(src + 0xc0, &mut b) {
+        C_WHY[1].fetch_add(1, Relaxed);
         IGNORED.fetch_add(1, Relaxed);
         return;
     }
@@ -169,7 +207,13 @@ fn on_copy(_slot: u32, ctx: &mut CONTEXT) {
     let rot = (0..3).all(|i| (dot(r[i], r[i]) - 1.0).abs() < 2e-3) && dot(r[0], r[1]).abs() < 2e-3 && dot(r[1], r[2]).abs() < 2e-3;
     let (_, here) = unsafe { camera(g) };
     let near = (0..3).all(|i| (p[i] - here[i]).abs() < 5.0);
+    let k = C_SAMPLES_N.fetch_add(1, Relaxed) as usize;
+    if k < 3 {
+        let samples = unsafe { &mut *C_SAMPLES.0.get() };
+        samples[k] = (src, [r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2], p[0], p[1], p[2]]);
+    }
     if !rot || !near {
+        C_WHY[if rot { 3 } else { 2 }].fetch_add(1, Relaxed);
         IGNORED.fetch_add(1, Relaxed);
         return;
     }
@@ -178,52 +222,6 @@ fn on_copy(_slot: u32, ctx: &mut CONTEXT) {
     }
     unsafe { raise_record(src, &r, [p[0], p[1] + RAISE_M, p[2]]) };
     APPLIED.fetch_add(1, Relaxed);
-}
-
-/// A: the builder is about to run: raise the camera (unless it is still raised from this frame).
-fn on_builder(_slot: u32, _ctx: &mut CONTEXT) {
-    let g = GLOBAL.load(Relaxed);
-    if g == 0 || !ACTIVE.load(Relaxed) {
-        return;
-    }
-    unsafe {
-        let (r, p) = camera(g);
-        let bits = p.map(f32::to_bits);
-        if HAVE_WRITTEN.load(Relaxed) && (0..3).all(|i| WRITTEN[i].load(Relaxed) == bits[i]) {
-            SKIPPED.fetch_add(1, Relaxed);
-            return;
-        }
-        if HAVE_REAL.load(Relaxed) {
-            let last = [0, 1, 2].map(|i| f32::from_bits(LAST_REAL[i].load(Relaxed)));
-            let d = ((p[0] - last[0]).powi(2) + (p[1] - last[1]).powi(2) + (p[2] - last[2]).powi(2)).sqrt();
-            if d > 1.5 {
-                JUMPS.fetch_add(1, Relaxed);
-                ACTIVE.store(false, Relaxed);
-                return;
-            }
-        }
-        for i in 0..3 {
-            LAST_REAL[i].store(bits[i], Relaxed);
-        }
-        HAVE_REAL.store(true, Relaxed);
-        let raised = [p[0], p[1] + RAISE_M, p[2]];
-        let n = N_MATCHES.load(Relaxed);
-        let ms = &*MATCHES.0.get();
-        let real = &mut *REAL.0.get();
-        for (k, m) in ms[..n].iter().enumerate() {
-            let a = (g as isize + m.off) as usize;
-            real[k] = [rd(a), rd(a + m.stride), rd(a + 2 * m.stride)];
-            let v = value(m.what, &r, raised);
-            for c in 0..3 {
-                wr(a + c * m.stride, v[c]);
-            }
-        }
-        for i in 0..3 {
-            WRITTEN[i].store(raised[i].to_bits(), Relaxed);
-        }
-        HAVE_WRITTEN.store(true, Relaxed);
-        APPLIED.fetch_add(1, Relaxed);
-    }
 }
 
 /// From the Present hook: put the real camera back if it is still the raised one.
@@ -302,6 +300,41 @@ fn function_start(pc: usize) -> Option<(usize, usize)> {
 
 fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect::<Vec<_>>().join("")
+}
+
+/// The machine code of the functions that wrote the camera in the last watch, and of their callers in GoWR.exe
+/// (up to 8 functions, 16 KB each), saved as `code_<rva>.bin` for disassembly offline.
+fn dump_code(n: u32, base: usize) {
+    let size = unsafe {
+        let pe = *((base + 0x3c) as *const u32) as usize;
+        *((base + pe + 0x50) as *const u32) as usize
+    };
+    let mut funcs: Vec<(usize, usize)> = Vec::new();
+    for (_, rip, callers) in crate::watch::sites() {
+        for a in std::iter::once(rip).chain(callers).map(|a| a as usize) {
+            if a < base || a >= base + size || funcs.len() >= 8 {
+                continue;
+            }
+            if let Some((start, end)) = function_start(a) {
+                let end = if end == a { a + 0x80 } else { end };
+                if !funcs.iter().any(|f| f.0 == start) {
+                    funcs.push((start, end));
+                }
+            }
+        }
+    }
+    for (start, end) in funcs {
+        let len = (end - start).min(0x4000);
+        let mut code = vec![0u8; len];
+        if !read_bytes(start, &mut code) {
+            continue;
+        }
+        let name = format!("code_{:x}.bin", start - base);
+        match std::fs::write(crate::log::dir().join(&name), &code) {
+            Ok(()) => plog!("steer", "#{n} code of GoWR.exe+{:#x}..+{:#x} saved as {name} ({len} bytes)", start - base, end - base),
+            Err(e) => plog!("steer", "#{n} {name} not saved: {e}"),
+        }
+    }
 }
 
 static RUNS: AtomicU32 = AtomicU32::new(0);
@@ -408,6 +441,7 @@ fn run(n: u32) {
         watched.push(("camera view translation x".to_string(), v));
     }
     crate::watch::watch(n, &watched, 1000, place);
+    dump_code(n, base);
 
     GLOBAL.store(g, Relaxed);
     crate::monitor::want_shot("base");
@@ -421,9 +455,6 @@ fn run(n: u32) {
     };
     plog!("steer", "#{n} builder function {}; copy function {}", show(builder, base + builder_rva), show(copy, base + copy_rva));
     let mut experiments: Vec<(&str, Vec<(usize, bool)>, fn(u32, &mut CONTEXT))> = Vec::new();
-    if let Some((a, _)) = builder {
-        experiments.push(("A-builder", vec![(a, true)], on_builder));
-    }
     let mut w = vec![(g + 0xf0, false)];
     if let Some(v) = view_t {
         w.push((v & !3, false));
@@ -459,6 +490,27 @@ fn run(n: u32) {
             RESTORED.load(Relaxed),
             JUMPS.load(Relaxed)
         );
+        if name.starts_with('B') {
+            for (r, c) in &WRITERS {
+                let rip = r.load(Relaxed);
+                if rip != 0 {
+                    let what = if rip >> 63 == 1 { "view translation" } else { "position" };
+                    plog!("steer", "#{n}   {what} written by {} {} times", place((rip & !(1 << 63)) as usize), c.load(Relaxed));
+                }
+            }
+        }
+        if name.starts_with('C') {
+            let w = [0, 1, 2, 3].map(|i| C_WHY[i].load(Relaxed));
+            plog!("steer", "#{n}   set aside: not into the camera {}, record unreadable {}, axes not a rotation {}, too far {}", w[0], w[1], w[2], w[3]);
+            let samples = unsafe { &*C_SAMPLES.0.get() };
+            for (src, v) in samples.iter().take((C_SAMPLES_N.load(Relaxed) as usize).min(3)) {
+                plog!(
+                    "steer",
+                    "#{n}   record {src:#x}: axis x ({:.4}, {:.4}, {:.4}), axis y ({:.4}, {:.4}, {:.4}), position ({:.3}, {:.3}, {:.3})",
+                    v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]
+                );
+            }
+        }
         std::thread::sleep(Duration::from_millis(900));
     }
     GLOBAL.store(0, Relaxed);
