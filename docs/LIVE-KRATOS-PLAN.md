@@ -89,6 +89,10 @@ Elden Ring (at 720p, full world, Elden Ring at 4K) and its memory budget halves 
 time, not memory, is the constraint to plan for (render Kratos at a lower resolution, keep frame generation off).
 Details in MODLOG.
 
+## Stage 2a status (2026-10-29)
+Built: GowRProbe 0.2.0 — a camera search guided by beeps (Ctrl+F9), tested under Wine against a fake camera;
+read offline with `tools/live_kratos/camsearch.py`. Waiting for the creator's run in gameplay.
+
 ## 4. Staged plan — riskiest unknowns first, each stage can stop the project cheaply
 
 Every discovery step works like the 0.1.89 pose search: I build a probe, you run it, it writes a log/dump, I read

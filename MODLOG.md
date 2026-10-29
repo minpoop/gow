@@ -1021,3 +1021,29 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
   57 over 2.5 min, then ~40; Ragnarök's own video memory 2.6-3.7 GB; its budget 11,242 MB, halved to ~5.9 GB while
   Elden Ring is in front (Windows favours the front window). One 2.95 s stall on switching back to Ragnarök (161 s).
   XInput read ~100-170 times a second; idled while behind (18,414 muted reads), not while in front.
+- Screenshots of that run (the creator's, 1280x720): main menu, Valhalla's start, a loading screen, the options menu:
+  clean copies, right colours (HDR off, confirmed: the 10-bit buffer is SDR). Kratos was never in game in that run,
+  so its frame rates are menus'. The creator: no crash; Elden Ring's world was slow to load with Ragnarök running;
+  in game Elden Ring held 60 fps; Xbox controller (the XInput idling covers it).
+
+## Live Kratos, stage 2a — GowRProbe 0.2.0: finding Ragnarök's camera (2026-10-29)
+
+- `gowr_probe` 0.2.0: while Ragnarök is behind another window its presents are held to 30 fps (`BEHIND_FPS_CAP`;
+  sleep before Present), for Elden Ring's loading. The swapchain size is kept for the search.
+- `camsearch` (Ctrl+F9 with Ragnarök in front; up to 3 per session; beeps guide the player): (1) all committed
+  read-write private/image memory (not write-combined) is scanned for projection matrices with the screen's shape
+  (row `[sx,0,0,0; 0,sy,0,0; jx,jy,A,±1; 0,0,B,0]` or its transpose, sy/sx within 3 % of the swapchain's
+  aspect, jitter < 0.05); logged with fov, A, B, jitter and module/heap; (2) 4 KB around up to 24 of them recorded at
+  5 Hz for 20 s while the player turns the camera (`camsearch_<n>_proj.bin`); (3) while the player holds still,
+  rotation blocks (rows 16 or 12 bytes apart) that turned > 15 degrees give candidate positions (translation as
+  stored, -Rᵀt, -Rt), and memory is searched for each as three floats within 1 cm; (4) 512 bytes around up to 64 finds
+  recorded at 5 Hz for 10 s (`camsearch_<n>_pos.bin`). Finds inside the probe's own buffers are dropped by address.
+  `GOWR_PROBE_AUTOSEARCH=<s>` starts one by itself (testing).
+- `tools/live_kratos/camsearch.py` reads the recordings: projections and whether they change, rotations that turned
+  with the translation read every way (its path and box), and moving 3-float groups in the position windows.
+- Stand-in GoWR.exe: a fake camera on the heap (reversed-Z 60-degree projection, a view matrix circling
+  (100, 20, -300) at 5 m, a separate position copy), moving 22 s then still 8 s like a player following the beeps.
+  Under Wine: the projection, the view matrix (turned 111 degrees) and the position (95, 20, -300.02) found, the
+  position copy found at its address, and the reader shows the view's -Rt path as the 10 m circle. Two faults found
+  on the way: finds in the probe's own copies (dropped by address now; skipping whole 1 MB chunks lost the game's
+  own values beside them) and the stand-in moving during "hold still".

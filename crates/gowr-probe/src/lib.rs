@@ -1,12 +1,15 @@
-//! gowr_probe.dll — stage 1 of live Kratos (docs/LIVE-KRATOS-PLAN.md): get inside God of War Ragnarök and see
+//! gowr_probe.dll — stages 1 and 2a of live Kratos (docs/LIVE-KRATOS-PLAN.md): get inside God of War Ragnarök and see
 //! what it draws.
 //!
 //! Loaded into GoWR.exe by GowRProbe.exe (CreateRemoteThread + LoadLibraryW). It hooks Ragnarök's D3D12 Present and
 //! command queue and only *watches*: the swapchain and adapter, frames per second in the foreground and background,
 //! its video memory, which input libraries it loaded, and a few screenshots of its back buffer. One thing it changes:
-//! while Ragnarök's window is not in front, XInput controller reads come back idle, so Kratos there stays still.
+//! while Ragnarök's window is not in front, XInput controller reads come back idle, so Kratos there stays still, and
+//! it is held to 30 frames a second (it ran at 100+ behind Elden Ring and slowed Elden Ring's loading). 0.2.0 adds the
+//! camera search on Ctrl+F9 (`camsearch`, live-Kratos stage 2a).
 //! Everything goes to `%LOCALAPPDATA%/GowRing/gowr_probe/latest/`.
 
+mod camsearch;
 mod d3d;
 mod input;
 mod log;

@@ -1,7 +1,8 @@
 //! The probe's own thread: every 10 s a line of figures (frames per second, slowest frame, how many frames were drawn
 //! in front / behind / minimised, Ragnarök's video memory, controller reads, whether Elden Ring is running), focus
 //! changes as they happen, and when to take a screenshot: at 20 s, 60 s and 120 s after the first frame, after 3 s
-//! behind another window (up to 3), 3 s after coming back in front (up to 2), and on Ctrl+F10.
+//! behind another window (up to 3), 3 s after coming back in front (up to 2), and on Ctrl+F10. Ctrl+F9 (Ragnarök in
+//! front) starts a camera search (`camsearch`).
 
 use crate::d3d::{self, ADAPTER, FIRST_PRESENT, HWND_MAIN, SHOTS_TAKEN, SHOT_LABEL, SHOT_WANTED};
 use crate::{input, plog};
@@ -13,7 +14,7 @@ use windows::Win32::Graphics::Dxgi::{DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_MEMOR
 use windows::Win32::System::Diagnostics::ToolHelp::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentProcessId;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_F10};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_F10, VK_F9};
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, IsIconic};
 
 /// The game's executable: name, size and link time (which build of Ragnarök this is).
@@ -127,6 +128,9 @@ pub fn run() {
     let mut was_behind = false;
     let mut shot_this_spell = false;
     let mut key_down = false;
+    let mut search_key = false;
+    // testing aid (tools/fakes): GOWR_PROBE_AUTOSEARCH=<s> starts a camera search that long after the first frame
+    let mut auto_search = std::env::var("GOWR_PROBE_AUTOSEARCH").ok().and_then(|v| v.parse::<u64>().ok());
     let mut late_checks = [(30u64, false), (60, false), (180, false)];
     let mut counting = false;
     loop {
@@ -201,6 +205,17 @@ pub fn run() {
             want_shot("ctrl-f10");
         }
         key_down = down;
+        let f9 = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 && GetAsyncKeyState(VK_F9.0 as i32) < 0 };
+        if f9 && !search_key && focus == Focus::Front {
+            crate::camsearch::start();
+        }
+        search_key = f9;
+        if let (Some(secs), Some(t0)) = (auto_search, FIRST_PRESENT.get()) {
+            if t0.elapsed() >= Duration::from_secs(secs) {
+                auto_search = None;
+                crate::camsearch::start();
+            }
+        }
 
         if last_stats.elapsed() >= Duration::from_secs(10) {
             let secs = last_stats.elapsed().as_secs_f64();

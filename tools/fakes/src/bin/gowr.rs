@@ -2,6 +2,10 @@
 //! idles so the probe can be loaded into it, and exits. With FAKE_GOWR_DRAW=1 it instead opens a window and presents
 //! frames through D3D12 (left half red, right half blue), for the probe's frame counting and screenshots, after
 //! FAKE_GOWR_DELAY seconds (default 0: under Wine's software D3D12 a device made while another thread draws hangs).
+//! While drawing it keeps a fake camera on the heap, updated every frame for the probe's camera search: a reversed-Z
+//! projection (60 degrees, the window's shape) followed by a view matrix circling (100, 20, -300) at 5 m, and a
+//! separate copy of the camera's position. Like a player following the probe's beeps, the camera moves for 22 s
+//! and then holds still for 8, over and over.
 use std::time::{Duration, Instant};
 use windows::core::{w, Interface};
 use windows::Win32::Foundation::*;
@@ -49,6 +53,31 @@ fn barrier(r: &ID3D12Resource, before: D3D12_RESOURCE_STATES, after: D3D12_RESOU
     }
 }
 
+/// proj at floats 32..48 (row layout: [sx,0,0,0; 0,sy,0,0; jx,jy,0,1; 0,0,0.1,0]), view at 48..64 (rows: the camera's
+/// right, up and forward as columns, then -axis·position).
+fn fake_camera(cam: &mut [f32; 256], pos: &mut [f32; 4], t: f32, aspect: f32, n: u64) {
+    let sy = 1.0 / (30f32.to_radians()).tan();
+    let j = if n % 2 == 0 { 0.0004 } else { -0.0004 };
+    let proj = [sy / aspect, 0.0, 0.0, 0.0, 0.0, sy, 0.0, 0.0, j, -j, 0.0, 1.0, 0.0, 0.0, 0.1, 0.0];
+    let moving = (t / 30.0).floor() * 22.0 + (t % 30.0).min(22.0);
+    let yaw = moving * 0.5;
+    let p = [100.0 + 5.0 * yaw.sin(), 20.0, -300.0 - 5.0 * yaw.cos()];
+    let f = [-yaw.sin(), 0.0, yaw.cos()];
+    let u = [0.0, 1.0, 0.0];
+    let r = [u[1] * f[2] - u[2] * f[1], u[2] * f[0] - u[0] * f[2], u[0] * f[1] - u[1] * f[0]];
+    let d = |a: [f32; 3]| -(a[0] * p[0] + a[1] * p[1] + a[2] * p[2]);
+    let view = [r[0], u[0], f[0], 0.0, r[1], u[1], f[1], 0.0, r[2], u[2], f[2], 0.0, d(r), d(u), d(f), 1.0];
+    for k in 0..16 {
+        unsafe {
+            std::ptr::write_volatile(&mut cam[32 + k], proj[k]);
+            std::ptr::write_volatile(&mut cam[48 + k], view[k]);
+        }
+    }
+    for k in 0..3 {
+        unsafe { std::ptr::write_volatile(&mut pos[k], p[k]) };
+    }
+}
+
 unsafe fn draw(run: Duration) -> windows::core::Result<u64> {
     let (w, h) = (640u32, 360u32);
     let inst: HINSTANCE = GetModuleHandleW(None)?.into();
@@ -77,6 +106,9 @@ unsafe fn draw(run: Duration) -> windows::core::Result<u64> {
     list.Close()?;
     let fence: ID3D12Fence = dev.CreateFence(0, D3D12_FENCE_FLAG_NONE)?;
     let ev = CreateEventW(None, false, false, None)?;
+    let mut cam = Box::new([0f32; 256]);
+    let mut cam_pos = Box::new([0f32; 4]);
+    println!("fake GoWR: camera block at {:p}, position copy at {:p}", cam.as_ptr(), cam_pos.as_ptr());
     let t0 = Instant::now();
     let mut n = 0u64;
     while t0.elapsed() < run {
@@ -85,6 +117,7 @@ unsafe fn draw(run: Duration) -> windows::core::Result<u64> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        fake_camera(&mut cam, &mut cam_pos, t0.elapsed().as_secs_f32(), w as f32 / h as f32, n);
         let i = sc.GetCurrentBackBufferIndex() as usize;
         let rtv = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: base.ptr + i * step };
         alloc.Reset()?;

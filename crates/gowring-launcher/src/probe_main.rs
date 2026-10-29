@@ -133,10 +133,11 @@ mod windows_main {
     }
 
     pub fn run() {
-        println!("GowRProbe — live Kratos, stage 1 (built with GowRing {})\n", env!("CARGO_PKG_VERSION"));
-        println!("This loads a small probe into God of War Ragnarök. It only watches how the game draws (and saves a");
-        println!("few screenshots); while Ragnarök is not the window in front, it keeps Ragnarök from reading your");
-        println!("Xbox-style controller. It changes nothing in Ragnarök's files or saves.\n");
+        println!("GowRProbe 0.2 — live Kratos, stage 2: finding Ragnarök's camera (built with GowRing {})\n", env!("CARGO_PKG_VERSION"));
+        println!("This loads a small probe into God of War Ragnarök. It watches how the game draws, saves a few");
+        println!("screenshots and, when you press Ctrl+F9, searches Ragnarök's memory for its camera. While Ragnarök is");
+        println!("not the window in front, it keeps Ragnarök from reading your Xbox-style controller and holds it to");
+        println!("30 frames a second. It changes nothing in Ragnarök's files or saves.\n");
         let dll = match std::env::current_exe() {
             Ok(p) => p.with_file_name(DLL),
             Err(e) => return println!("Could not find where GowRProbe.exe is: {e}"),
@@ -206,12 +207,16 @@ mod windows_main {
             println!("No word from the probe after 20 s; carry on, the log will say what happened.");
         }
 
-        println!("\nWhat to do now:");
-        println!("  1. Play Ragnarök normally for about a minute (it takes screenshots by itself at 20 s, 60 s and 2 min).");
-        println!("  2. Start or click on Elden Ring so it is in front, and play it for at least 30 seconds.");
-        println!("  3. Click back on Ragnarök for a few seconds, then back on Elden Ring once more.");
-        println!("  4. Optional: press Ctrl+F10 while in Ragnarök for an extra screenshot.");
-        println!("  5. Close Ragnarök. This window then opens the folder with what to send.");
+        println!("\nWhat to do now (this probe's job is to find Ragnarök's camera):");
+        println!("  1. Get into the game itself, not a menu: Kratos standing somewhere calm with no enemies.");
+        println!("  2. With Ragnarök in front, press Ctrl+F9. ONE beep: hold still.");
+        println!("  3. TWO beeps: move the camera. Turn it slowly all the way round, look up and down, walk a few steps.");
+        println!("     Keep going until the next beep (about 20 seconds).");
+        println!("  4. ONE LONG beep: let go of the controller and keep completely still.");
+        println!("  5. TWO beeps: move the camera again, until...");
+        println!("  6. THREE beeps: done. If you can, walk somewhere else and do it once more (Ctrl+F9 again).");
+        println!("  7. Then put Elden Ring in front and play it for a minute, and close Ragnarök.");
+        println!("  Ragnarök runs at 30 fps at most while it is behind Elden Ring, so Elden Ring has more room.");
         println!("\nThe log is being written to {}", log.display());
         wait_and_open(pid);
     }
@@ -221,7 +226,9 @@ mod windows_main {
             std::thread::sleep(Duration::from_secs(2));
         }
         let dir = log_dir();
-        println!("\nRagnarök has closed. Please send Claude probe.log and the shot_*.png pictures from:\n  {}", dir.display());
+        println!("\nRagnarök has closed. Please send Claude everything in this folder (probe.log, the camsearch_*.bin");
+        println!("recordings and the shot_*.png pictures). If the .bin files won't attach, right-click the folder ->");
+        println!("Send to -> Compressed (zipped) folder, and send the zip.\n  {}", dir.display());
         let _ = std::process::Command::new("explorer.exe").arg(&dir).spawn();
     }
 }

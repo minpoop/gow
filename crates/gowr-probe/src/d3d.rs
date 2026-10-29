@@ -56,6 +56,12 @@ pub static SHOT_LABEL: Mutex<String> = Mutex::new(String::new());
 pub static SHOTS_TAKEN: AtomicU32 = AtomicU32::new(0);
 pub const MAX_SHOTS: u32 = 12;
 pub static FIRST_PRESENT: OnceLock<Instant> = OnceLock::new();
+/// The swapchain's size (the camera search wants the screen's shape).
+pub static SWAP_W: AtomicU32 = AtomicU32::new(0);
+pub static SWAP_H: AtomicU32 = AtomicU32::new(0);
+/// While Ragnarök is behind another window it is held to this many frames a second (it ran at 100+ behind Elden
+/// Ring and slowed Elden Ring's loading); 0 = no cap.
+pub const BEHIND_FPS_CAP: u64 = 30;
 
 /// The adapter Ragnarök draws on, for its video memory figures.
 pub struct Adapter(pub IDXGIAdapter3);
@@ -153,18 +159,27 @@ unsafe fn present_inner(raw: *mut c_void, sync: u32, flags: u32, api: &str) {
         return;
     }
 
-    let now = Instant::now();
+    let h = HWND(hwnd as *mut c_void);
+    let behind = GetForegroundWindow() != h;
+    let mut now = Instant::now();
     if let Ok(mut last) = LAST_AT.lock() {
+        if let (true, Some(t), true) = (behind, *last, BEHIND_FPS_CAP > 0) {
+            let min = std::time::Duration::from_micros(1_000_000 / BEHIND_FPS_CAP);
+            let gap = now.duration_since(t);
+            if gap < min {
+                std::thread::sleep(min - gap);
+                now = Instant::now();
+            }
+        }
         if let Some(t) = *last {
             WORST_US.fetch_max(now.duration_since(t).as_micros() as u64, Relaxed);
         }
         *last = Some(now);
     }
     FRAMES.fetch_add(1, Relaxed);
-    let h = HWND(hwnd as *mut c_void);
     if IsIconic(h).as_bool() {
         MIN_FRAMES.fetch_add(1, Relaxed);
-    } else if GetForegroundWindow() == h {
+    } else if !behind {
         FG_FRAMES.fetch_add(1, Relaxed);
     } else {
         BG_FRAMES.fetch_add(1, Relaxed);
@@ -202,6 +217,8 @@ unsafe fn present_inner(raw: *mut c_void, sync: u32, flags: u32, api: &str) {
 /// The first frame: what Ragnarök presents and how.
 unsafe fn describe(sc: &IDXGISwapChain1, hwnd: isize, sync: u32, flags: u32, api: &str) {
     if let Ok(d) = sc.GetDesc1() {
+        SWAP_W.store(d.Width, Relaxed);
+        SWAP_H.store(d.Height, Relaxed);
         plog!(
             "present",
             "first frame via {api}: {}x{} format {} ({}), {} buffers, swap effect {}, scaling {}, alpha {}, flags {:#x}; sync interval {sync}, present flags {flags:#x}",
