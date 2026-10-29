@@ -3,8 +3,10 @@ camera. Usage: python3 -I camsearch.py camsearch_1_proj.bin [camsearch_1_pos.bin
 
 Per window (memory around a projection or a found position), over all snapshots:
   * projections: the 16-float blocks with the screen's shape (as the probe tests them), and whether they change;
-  * rotations: 3x3 blocks (rows 16 or 12 bytes apart) orthonormal in every snapshot that turned, how far, and the
-    translation next to them read four ways (stored row / fourth column, each also taken back through the rotation);
+  * rotations: 3x3 blocks (rows 16 or 12 bytes apart) orthonormal in at least 70 % of the snapshots (Ragnarök
+    reuses these buffers between frames) that turned, how far, and the translation next to them read several ways
+    (stored row / fourth column, each also taken back through the rotation), over those snapshots; only readings
+    that stay within 100 m and move are printed;
   * positions (pos files): which 3-float groups move, how far in total, and the box they stay in.
 A camera block shows as one rotation that turns with the camera and a translation that traces the same path as a
 position found elsewhere."""
@@ -81,21 +83,21 @@ def report_window(d, k):
                   f'B {p[14] if abs(abs(p[11]) - 1) < 1e-6 else p[11]:.6f}, changes up to {moved:.6f}')
     for stride in (16, 12):
         for i in range(0, len(fs[0]) - 12):
-            rs = [rot(f, i, stride) for f in fs]
-            if any(r is None for r in rs):
+            pairs = [(r, f) for r, f in ((rot(f, i, stride), f) for f in fs) if r is not None]
+            if len(pairs) < 0.7 * len(fs):
                 continue
+            rs = [r for r, _ in pairs]
             turn = max(angle(rs[0], r) for r in rs)
             if turn < 15:
                 continue
-            s = stride // 4
             reads = {}
             if stride == 16 and i + 15 < len(fs[0]):
-                reads['row after'] = [f[i + 12:i + 15] for f in fs]
+                reads['row after'] = [f[i + 12:i + 15] for _, f in pairs]
             if stride == 16:
-                reads['4th column'] = [np.array([f[i + 3], f[i + 7], f[i + 11]]) for f in fs]
+                reads['4th column'] = [np.array([f[i + 3], f[i + 7], f[i + 11]]) for _, f in pairs]
             if stride == 12 and i + 12 < len(fs[0]):
-                reads['row after'] = [f[i + 9:i + 12] for f in fs]
-            print(f'    rotation at +{i * 4:#x} ({start + i * 4:#x}), rows {stride} bytes apart: turned up to {turn:.0f} deg')
+                reads['row after'] = [f[i + 9:i + 12] for _, f in pairs]
+            lines = []
             for name, ts in reads.items():
                 for how, conv in (('as stored', lambda r, t: t), ('-R^T t', lambda r, t: -(r.T @ t)), ('-R t', lambda r, t: -(r @ t))):
                     path = np.array([conv(r, np.asarray(t, dtype=np.float64)) for r, t in zip(rs, ts)])
@@ -103,8 +105,13 @@ def report_window(d, k):
                         continue
                     span = path.max(0) - path.min(0)
                     length = np.linalg.norm(np.diff(path, axis=0), axis=1).sum()
-                    print(f'      {name:10} {how:9}: first ({path[0][0]:.2f}, {path[0][1]:.2f}, {path[0][2]:.2f}), '
-                          f'box {span[0]:.2f} x {span[1]:.2f} x {span[2]:.2f}, path {length:.2f}')
+                    if 0.05 < span.max() < 100:
+                        lines.append(f'      {name:10} {how:9}: first ({path[0][0]:.2f}, {path[0][1]:.2f}, {path[0][2]:.2f}), '
+                                     f'box {span[0]:.2f} x {span[1]:.2f} x {span[2]:.2f}, path {length:.2f}')
+            print(f'    rotation at +{i * 4:#x} ({start + i * 4:#x}), rows {stride} bytes apart, in {len(rs)} snapshots: '
+                  f'turned up to {turn:.0f} deg' + ('' if lines else '; no moving position beside it'))
+            for l in lines:
+                print(l)
     if d['kind'] == 2:
         arr = np.array(fs, dtype=np.float64)
         for i in range(0, arr.shape[1] - 2):

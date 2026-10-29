@@ -1047,3 +1047,20 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
   position copy found at its address, and the reader shows the view's -Rt path as the 10 m circle. Two faults found
   on the way: finds in the probe's own copies (dropped by address now; skipping whole 1 MB chunks lost the game's
   own values beside them) and the stand-in moving during "hold still".
+- First real camera search (the creator's run, 0.2.0, in gameplay: Kratos over the shoulder in a cave mouth; 126-180
+  fps in front at 720p; held at 29.8 fps behind Elden Ring, as meant). 5,862 MB of read-write memory in 7,776
+  regions, scanned in 3 s. 75 projections: reversed-Z, A 0.000025, B 0.100003 (near 0.1 m, infinite far), w -1
+  (right-handed, looking down -z), TAA jitter on some (±0.000586, ±0.000347); fov groups 49.41 (gameplay), 54.15,
+  74.96, 32.27 (static). Stored both ways ("R" in buffers at 0x2539a96xxxx / 0x2539cb6xxxx, reused between frames:
+  they change by up to 1e13; "T" in per-view blocks at 0x2539ec0xxxx / 0x2539f0xxxxx).
+- `camsearch.py` now takes a rotation valid in >= 70 % of snapshots (these buffers hold other data part of the
+  time) and prints only readings that move within 100 m. It finds, in each per-view block, the **view matrix at
+  proj-0x80 and the camera-to-world matrix at proj-0x40** (3x4, rows 16 bytes apart, translation in the fourth
+  column), then the projection (transposed) at +0x00. The camera's position from them: (-1147.75, 33.61, -10.71) at
+  the start, a box of 8.5 x 1.8 x 7.0 m over the 20 s (path 35 m): y is up, metres. Valid in 71 of 100 snapshots.
+- The hold-still search: 22 candidates, (-1143.787, 33.368, -12.861) at 422 places (most in 0xc7d0000000-0xc7da000000
+  blocks 4 MB apart: per-frame memory), the others few (cube-map faces: six rotations 0x200 apart turned by 90/180
+  degrees from each other at 0x2539cb67300-68100, a probe around the camera). In the position recording none of the
+  places moves smoothly: every one jumps to unrelated values between frames. So all found so far are per-frame
+  copies; the camera itself (the source they are copied from) is not yet found. Possibly stored as doubles, as a
+  quaternion, or relative to Kratos; 0.2.0 searched only floats.
