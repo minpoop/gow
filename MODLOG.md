@@ -1165,3 +1165,10 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
 - Stand-in: a second writer (`finish_camera`, reads the camera back and rewrites its rows, as +0x498b56). Under
   Wine: B 1,432-1,600 raises and 717-801 rewrites of the raised camera left alone, no jump; C 1,053-1,143 raises;
   callers unwound to the thread start; 8 functions' code saved.
+- The creator's 0.6.0 runs (two places: the cave mouth and a beach): the screenshots show the same view
+  throughout (only Kratos's idle sway), so neither B nor C moved the picture. probe.log not received yet; 5 code files
+  received: `0x3cb0e0` (the 256+-byte copy, movups pairs rdx -> rcx), `0x16fe364` (the C runtime's start-up, calls
+  0x35be80), `0x35be80` (the game's main: calls 0x35f340), `0x35f340` (start-up allocations, then the main loop's
+  steps), `0x36af00` (frame pacing: a timer wait loop). So the camera is written on the main thread from inside the
+  main loop. The function of the second writer (+0x498b56) and the callers between it and the main loop were not
+  among the files received.
