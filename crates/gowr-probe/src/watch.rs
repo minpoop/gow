@@ -4,8 +4,10 @@
 //! around every register that points into readable memory. Nothing is changed: the write has already happened and
 //! the thread carries on.
 //!
-//! `on_entry` (0.4.0) uses one register as an execution trap instead: each time any thread is about to run the
-//! instruction at an address, the probe's callback runs first (`steer`), then the thread carries on (resume flag).
+//! `with_callback` (0.5.0) runs the probe's own callback in the trapping thread instead of recording: on writes (just
+//! after the write) or on execution (just before the instruction runs; the resume flag is set so it then runs). The
+//! callback gets the thread's registers. Writes the callback makes to a watched address trap again; those nested
+//! traps are passed over (`IN_CALLBACK`).
 
 use crate::plog;
 use std::ffi::c_void;
@@ -60,9 +62,13 @@ static HITS: Hits = Hits(std::cell::UnsafeCell::new([EMPTY; MAX_HITS]));
 static CLAIMED: AtomicUsize = AtomicUsize::new(0);
 static TRAPS: [AtomicU32; 4] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
 static MASK: AtomicU32 = AtomicU32::new(0);
-/// Slots that are execution traps, and the callback they run (a `fn()` as usize).
+/// Slots handled by the callback (a `fn(u32, &mut CONTEXT)` as usize), and which of them are execution traps.
+static CB_MASK: AtomicU32 = AtomicU32::new(0);
 static EXEC_MASK: AtomicU32 = AtomicU32::new(0);
-static ON_EXEC: AtomicUsize = AtomicUsize::new(0);
+static CALLBACK: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static IN_CALLBACK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 const REG_NAMES: [&str; 16] = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
 
@@ -87,13 +93,16 @@ unsafe extern "system" fn handler(info: *mut EXCEPTION_POINTERS) -> i32 {
     ctx.Dr6 = 0;
     let slot = ours.trailing_zeros();
     TRAPS[slot as usize].fetch_add(1, Relaxed);
-    if ours & EXEC_MASK.load(Relaxed) != 0 {
-        let f = ON_EXEC.load(Relaxed);
-        if f != 0 {
-            let f: fn() = std::mem::transmute(f);
-            f();
+    if ours & CB_MASK.load(Relaxed) != 0 {
+        let f = CALLBACK.load(Relaxed);
+        if f != 0 && !IN_CALLBACK.with(|c| c.replace(true)) {
+            let f: fn(u32, &mut CONTEXT) = std::mem::transmute(f);
+            f(slot, ctx);
+            IN_CALLBACK.with(|c| c.set(false));
         }
-        ctx.EFlags |= 0x10000; // resume flag: run the instruction without trapping again
+        if ours & EXEC_MASK.load(Relaxed) != 0 {
+            ctx.EFlags |= 0x10000; // resume flag: run the instruction without trapping again
+        }
         return EXCEPTION_CONTINUE_EXECUTION;
     }
     let rip = ctx.Rip;
@@ -231,30 +240,38 @@ pub fn watch(n: u32, targets: &[(String, usize)], ms: u64, place: impl Fn(usize)
     }
 }
 
-/// Run `f` every time any thread is about to execute the instruction at `addr`, for `ms`. Returns how many times it
-/// ran. Nothing else is watched meanwhile.
-pub fn on_entry(n: u32, addr: usize, ms: u64, f: fn()) -> u32 {
-    TRAPS[0].store(0, Relaxed);
-    ON_EXEC.store(f as usize, Relaxed);
-    EXEC_MASK.store(1, Relaxed);
-    MASK.store(1, Relaxed);
+/// For `ms`, run `f(slot, registers)` in whichever thread hits a trap: `traps` are (address, execution?) pairs, up to
+/// 4 (execution traps on an instruction's first byte, write traps on 4 aligned bytes). Returns the traps per slot.
+pub fn with_callback(n: u32, traps: &[(usize, bool)], ms: u64, f: fn(u32, &mut CONTEXT)) -> [u32; 4] {
+    let traps = &traps[..traps.len().min(4)];
+    for t in &TRAPS {
+        t.store(0, Relaxed);
+    }
+    let exec: u32 = traps.iter().enumerate().filter(|(_, t)| t.1).map(|(i, _)| 1 << i).sum();
+    let all = (1u32 << traps.len()) - 1;
+    CALLBACK.store(f as usize, Relaxed);
+    EXEC_MASK.store(exec, Relaxed);
+    CB_MASK.store(all, Relaxed);
+    MASK.store(all, Relaxed);
     let veh = unsafe { AddVectoredExceptionHandler(1, Some(handler)) };
     if veh.is_null() {
-        plog!("watch", "#{n} could not add the exception handler; no entry trap");
-        return 0;
+        plog!("watch", "#{n} could not add the exception handler; no traps");
+        return [0; 4];
     }
-    let (ok, failed) = set_all(&[addr], 1);
-    plog!("watch", "#{n} entry trap at {addr:#x} in {ok} threads ({failed} could not be set) for {ms} ms");
+    let addrs: Vec<usize> = traps.iter().map(|t| t.0).collect();
+    let (ok, failed) = set_all(&addrs, exec);
+    plog!("watch", "#{n} {} traps set in {ok} threads ({failed} could not be set) for {ms} ms", traps.len());
     std::thread::sleep(Duration::from_millis(ms));
     let (cleared, _) = set_all(&[], 0);
     std::thread::sleep(Duration::from_millis(50));
     MASK.store(0, Relaxed);
+    CB_MASK.store(0, Relaxed);
     EXEC_MASK.store(0, Relaxed);
     unsafe {
         RemoveVectoredExceptionHandler(veh);
     }
-    ON_EXEC.store(0, Relaxed);
-    let runs = TRAPS[0].load(Relaxed);
-    plog!("watch", "#{n} entry trap cleared in {cleared} threads; it ran {runs} times");
-    runs
+    CALLBACK.store(0, Relaxed);
+    let counts = [0, 1, 2, 3].map(|i| TRAPS[i].load(Relaxed));
+    plog!("watch", "#{n} traps cleared in {cleared} threads; per trap: {:?}", &counts[..traps.len()]);
+    counts
 }

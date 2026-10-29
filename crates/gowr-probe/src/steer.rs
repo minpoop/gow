@@ -1,29 +1,35 @@
 //! Stage 2b of live Kratos: move Ragnarök's camera. 0.3.0's run (MODLOG) found what the per-view camera blocks are
-//! built from: a camera kept in GoWR.exe's own data at +0x39c7110 (this build, PE time stamp 0x6859ad47), rows of
-//! 16 bytes from +0xc0: the camera's x, y and z axes, then its position at +0xf0. The builder that reads it runs
-//! at +0x4e7516 (inside a function whose start Windows' unwind table gives).
+//! built from: a camera kept in GoWR.exe's own data at +0x39c7110 (this build, PE time stamp 0x6859ad47): its view
+//! matrix (rows from +0x30, translation at +0x70) and, rows of 16 bytes from +0xc0, its x, y and z axes, then its
+//! position at +0xf0. 0.4.0 raised it at the start of the block builder (+0x4e7516's function) and the picture did
+//! not move; its run showed two writers of the camera there, both on the game's camera thread: `GoWR.exe+0x3cb18e`
+//! copies a whole camera record into it (rcx = the camera there, rdx = the record) and `GoWR.exe+0x498b56` writes
+//! its rows.
 //!
-//! Ctrl+F9 with Ragnarök in front, guided by beeps:
-//! 1. one beep, hold still: the camera kept there is logged (and 1 KB around it, in hex), with every copy of its
-//!    position or of the view translation (-axis·position, both orders) in that KB; for a second "who writes here"
-//!    on its position (`watch`); then for 6 s an execution trap at the builder function's start raises the camera
-//!    2 m (position and every matching view translation) each time the builder is about to run. The real values go
-//!    back at every Present (`restore`), so the game's own camera logic never sees the raised one; if the real
-//!    camera jumps more than 1.5 m between two runs, the test stops. Screenshots at 2 s and 4 s, and 1 s after.
-//! 2. two beeps: move the camera (10 s); the KB is recorded 5 times a second (`camsearch_<n>_global.bin`).
-//! 3. three beeps: done.
+//! 0.5.0, Ctrl+F9 with Ragnarök in front; one beep, hold still (about 20 s); three beeps, done:
+//! * the camera there and 1 KB around it logged; copies of the position and the view translation in it found;
+//!   "who writes here" for a second on the position and the view translation;
+//! * three ways of raising the camera 2 m, 3 s each, a screenshot in each and one before and after, so the pictures
+//!   say which one Ragnarök draws from:
+//!   A. before each run of the block builder (as 0.4.0; put back at every Present);
+//!   B. right after each write the game makes to the camera there (it stays raised until the game's next write);
+//!   C. at the start of the copy function, in the record it is about to copy (only when it copies a camera into
+//!      that place: the record's axes are a rotation and its position within 5 m of the camera's).
+//!   A jump of the real camera over 1.5 m stops an experiment (the game would be reading the raised camera back).
 //! Another build of Ragnarök (other time stamp) or an unexpected layout: 0.3.0's search runs instead.
 
-use crate::camsearch::{beep, place, Recorder};
+use crate::camsearch::{beep, place};
 use crate::plog;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering::Relaxed};
 use std::time::{Duration, Instant};
-use windows::Win32::System::Diagnostics::Debug::RtlLookupFunctionEntry;
+use windows::Win32::System::Diagnostics::Debug::{ReadProcessMemory, RtlLookupFunctionEntry, CONTEXT};
+use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
 const STAMP: u32 = 0x6859ad47;
 const GLOBAL_RVA: usize = 0x39c7110;
 const BUILDER_RVA: usize = 0x4e7516;
+const COPY_RVA: usize = 0x3cb18e;
 const WIN_BEFORE: usize = 0x110;
 const WIN_LEN: usize = 0x400;
 const RAISE_M: f32 = 2.0;
@@ -55,6 +61,7 @@ static APPLIED: AtomicU32 = AtomicU32::new(0);
 static SKIPPED: AtomicU32 = AtomicU32::new(0);
 static RESTORED: AtomicU32 = AtomicU32::new(0);
 static JUMPS: AtomicU32 = AtomicU32::new(0);
+static IGNORED: AtomicU32 = AtomicU32::new(0);
 
 unsafe fn rd(a: usize) -> f32 {
     std::ptr::read_volatile(a as *const f32)
@@ -79,8 +86,102 @@ fn value(what: u8, r: &[[f32; 3]; 3], p: [f32; 3]) -> [f32; 3] {
     }
 }
 
-/// The builder is about to run: raise the camera (unless it is still raised from this frame).
-fn on_builder() {
+/// Write `v(match)` for every match in the camera record at `base`.
+unsafe fn raise_record(base: usize, r: &[[f32; 3]; 3], raised: [f32; 3]) {
+    let n = N_MATCHES.load(Relaxed);
+    let ms = &*MATCHES.0.get();
+    for m in &ms[..n] {
+        let a = (base as isize + m.off) as usize;
+        let v = value(m.what, r, raised);
+        for c in 0..3 {
+            wr(a + c * m.stride, v[c]);
+        }
+    }
+}
+
+/// True (and the experiment stopped) when the real camera moved more than 1.5 m since the last raise.
+fn jumped(p: [f32; 3]) -> bool {
+    if HAVE_REAL.load(Relaxed) {
+        let last = [0, 1, 2].map(|i| f32::from_bits(LAST_REAL[i].load(Relaxed)));
+        let d = ((p[0] - last[0]).powi(2) + (p[1] - last[1]).powi(2) + (p[2] - last[2]).powi(2)).sqrt();
+        if d > 1.5 {
+            JUMPS.fetch_add(1, Relaxed);
+            ACTIVE.store(false, Relaxed);
+            return true;
+        }
+    }
+    for i in 0..3 {
+        LAST_REAL[i].store(p[i].to_bits(), Relaxed);
+    }
+    HAVE_REAL.store(true, Relaxed);
+    false
+}
+
+/// B: the game just wrote the camera there (slot 0: its position; slot 1: its view translation). Raise it again.
+fn on_write(slot: u32, _ctx: &mut CONTEXT) {
+    let g = GLOBAL.load(Relaxed);
+    if g == 0 || !ACTIVE.load(Relaxed) {
+        return;
+    }
+    unsafe {
+        let (r, p) = camera(g);
+        let real = if slot == 0 {
+            if jumped(p) {
+                return;
+            }
+            p
+        } else if HAVE_REAL.load(Relaxed) {
+            [0, 1, 2].map(|i| f32::from_bits(LAST_REAL[i].load(Relaxed)))
+        } else {
+            SKIPPED.fetch_add(1, Relaxed);
+            return;
+        };
+        raise_record(g, &r, [real[0], real[1] + RAISE_M, real[2]]);
+        APPLIED.fetch_add(1, Relaxed);
+    }
+}
+
+fn read_bytes(addr: usize, out: &mut [u8]) -> bool {
+    let mut got = 0usize;
+    unsafe {
+        ReadProcessMemory(GetCurrentProcess(), addr as *const std::ffi::c_void, out.as_mut_ptr() as *mut _, out.len(), Some(&mut got)).is_ok()
+            && got == out.len()
+    }
+}
+
+/// C: the copy function is about to run (rcx = where to, rdx = the record). Raise the record if it is a camera
+/// going into the camera's place.
+fn on_copy(_slot: u32, ctx: &mut CONTEXT) {
+    let g = GLOBAL.load(Relaxed);
+    if g == 0 || !ACTIVE.load(Relaxed) {
+        return;
+    }
+    let (dst, src) = (ctx.Rcx as usize, ctx.Rdx as usize);
+    let mut b = [0u8; 0x40];
+    if dst != g || src < 0x10000 || !read_bytes(src + 0xc0, &mut b) {
+        IGNORED.fetch_add(1, Relaxed);
+        return;
+    }
+    let f = |o: usize| f32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let r = [[f(0), f(4), f(8)], [f(16), f(20), f(24)], [f(32), f(36), f(40)]];
+    let p = [f(48), f(52), f(56)];
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let rot = (0..3).all(|i| (dot(r[i], r[i]) - 1.0).abs() < 2e-3) && dot(r[0], r[1]).abs() < 2e-3 && dot(r[1], r[2]).abs() < 2e-3;
+    let (_, here) = unsafe { camera(g) };
+    let near = (0..3).all(|i| (p[i] - here[i]).abs() < 5.0);
+    if !rot || !near {
+        IGNORED.fetch_add(1, Relaxed);
+        return;
+    }
+    if jumped(p) {
+        return;
+    }
+    unsafe { raise_record(src, &r, [p[0], p[1] + RAISE_M, p[2]]) };
+    APPLIED.fetch_add(1, Relaxed);
+}
+
+/// A: the builder is about to run: raise the camera (unless it is still raised from this frame).
+fn on_builder(_slot: u32, _ctx: &mut CONTEXT) {
     let g = GLOBAL.load(Relaxed);
     if g == 0 || !ACTIVE.load(Relaxed) {
         return;
@@ -157,13 +258,32 @@ fn pe_stamp(base: usize) -> u32 {
     }
 }
 
-/// The start of the function holding `pc`, from the unwind table (following chained entries).
+/// A leaf function (no unwind entry): its start guessed as the first byte after the int3 padding (0xcc) or the
+/// return (0xc3, then 16-aligned) that ends the function before it, at most 4 KB back.
+fn leaf_start(pc: usize) -> Option<(usize, usize)> {
+    // up to and including `pc` itself, which may be the start
+    let mut b = vec![0u8; 0x1001];
+    let from = pc - 0x1000;
+    if !read_bytes(from, &mut b) {
+        return None;
+    }
+    for i in (1..b.len()).rev() {
+        let at = from + i;
+        if b[i - 1] == 0xcc && b[i] != 0xcc || b[i - 1] == 0xc3 && at % 16 == 0 {
+            return Some((at, pc));
+        }
+    }
+    None
+}
+
+/// The start of the function holding `pc`, from the unwind table (following chained entries); for a leaf function
+/// (none there) `leaf_start`'s guess, marked by an end equal to `pc`.
 fn function_start(pc: usize) -> Option<(usize, usize)> {
     unsafe {
         let mut image = 0u64;
         let f = RtlLookupFunctionEntry(pc as u64, &mut image, None);
         if f.is_null() {
-            return None;
+            return leaf_start(pc);
         }
         let mut e = std::ptr::read_unaligned(f as *const [u32; 3]);
         for _ in 0..16 {
@@ -211,14 +331,14 @@ fn run(n: u32) {
     let t0 = Instant::now();
     let base = unsafe { GetModuleHandleW(None) }.map(|m| m.0 as usize).unwrap_or(0);
     let stamp = if base != 0 { pe_stamp(base) } else { 0 };
-    // testing aid (tools/fakes): GOWR_PROBE_STEER=<stamp>,<camera rva>,<builder rva> in hex, for the stand-in
-    let (want_stamp, global_rva, builder_rva) = std::env::var("GOWR_PROBE_STEER")
+    // testing aid (tools/fakes): GOWR_PROBE_STEER=<stamp>,<camera rva>,<builder rva>,<copy rva> in hex, for the stand-in
+    let (want_stamp, global_rva, builder_rva, copy_rva) = std::env::var("GOWR_PROBE_STEER")
         .ok()
         .and_then(|v| {
             let x: Vec<usize> = v.split(',').filter_map(|t| usize::from_str_radix(t.trim().trim_start_matches("0x"), 16).ok()).collect();
-            (x.len() == 3).then(|| (x[0] as u32, x[1], x[2]))
+            (x.len() == 4).then(|| (x[0] as u32, x[1], x[2], x[3]))
         })
-        .unwrap_or((STAMP, GLOBAL_RVA, BUILDER_RVA));
+        .unwrap_or((STAMP, GLOBAL_RVA, BUILDER_RVA, COPY_RVA));
     let g = base + global_rva;
     let usable = stamp == want_stamp && unsafe {
         let (r, p) = camera(g);
@@ -269,7 +389,7 @@ fn run(n: u32) {
         let name = ["position", "view translation (-axis·p)", "view translation (other order)"][m.what as usize];
         plog!("steer", "#{n}   {name} at camera{:+#x}, floats {} bytes apart", m.off, m.stride);
     }
-    if !found.iter().any(|m| m.what == 0 && m.off == 0xf0) {
+    if !found.iter().any(|m| m.what == 0 && m.off == 0xf0 && m.stride == 4) {
         plog!("steer", "#{n} the position is not where expected; stopped");
         beep(3, 600);
         return;
@@ -282,56 +402,68 @@ fn run(n: u32) {
     }
     N_MATCHES.store(found.len(), Relaxed);
 
-    crate::watch::watch(n, &[("camera position x".into(), g + 0xf0), ("camera position y".into(), g + 0xf4)], 1000, place);
+    let view_t = found.iter().find(|m| m.what != 0).map(|m| g.wrapping_add_signed(m.off));
+    let mut watched = vec![("camera position x".to_string(), g + 0xf0)];
+    if let Some(v) = view_t {
+        watched.push(("camera view translation x".to_string(), v));
+    }
+    crate::watch::watch(n, &watched, 1000, place);
 
-    match function_start(base + builder_rva) {
-        None => plog!("steer", "#{n} no unwind entry for the builder at +{builder_rva:#x}; not raising the camera"),
-        Some((fstart, fend)) => {
-            plog!(
-                "steer",
-                "#{n} builder function GoWR.exe+{:#x}..+{:#x}; raising the camera {RAISE_M} m for 6 s",
-                fstart - base,
-                fend - base
-            );
-            for c in [&APPLIED, &SKIPPED, &RESTORED, &JUMPS] {
-                c.store(0, Relaxed);
-            }
-            HAVE_REAL.store(false, Relaxed);
-            HAVE_WRITTEN.store(false, Relaxed);
-            GLOBAL.store(g, Relaxed);
-            ACTIVE.store(true, Relaxed);
-            let shots = std::thread::spawn(|| {
-                std::thread::sleep(Duration::from_secs(2));
-                crate::monitor::want_shot("raised-2m-a");
-                std::thread::sleep(Duration::from_secs(2));
-                crate::monitor::want_shot("raised-2m-b");
-            });
-            let runs = crate::watch::on_entry(n, fstart, 6000, on_builder);
-            ACTIVE.store(false, Relaxed);
-            let _ = shots.join();
-            std::thread::sleep(Duration::from_millis(100));
-            restore();
-            GLOBAL.store(0, Relaxed);
-            plog!(
-                "steer",
-                "#{n} builder ran {runs} times: camera raised {}, already raised {}, put back {} times, stopped by a jump {} times",
-                APPLIED.load(Relaxed),
-                SKIPPED.load(Relaxed),
-                RESTORED.load(Relaxed),
-                JUMPS.load(Relaxed)
-            );
-            std::thread::sleep(Duration::from_secs(1));
-            crate::monitor::want_shot("after-raise");
-            std::thread::sleep(Duration::from_millis(500));
+    GLOBAL.store(g, Relaxed);
+    crate::monitor::want_shot("base");
+    std::thread::sleep(Duration::from_millis(800));
+    let builder = function_start(base + builder_rva);
+    let copy = function_start(base + copy_rva);
+    let show = |f: Option<(usize, usize)>, pc: usize| match f {
+        Some((a, e)) if e == pc => format!("GoWR.exe+{:#x} (a leaf: start guessed from the padding before it)", a - base),
+        Some((a, e)) => format!("GoWR.exe+{:#x}..+{:#x}", a - base, e - base),
+        None => "not found".into(),
+    };
+    plog!("steer", "#{n} builder function {}; copy function {}", show(builder, base + builder_rva), show(copy, base + copy_rva));
+    let mut experiments: Vec<(&str, Vec<(usize, bool)>, fn(u32, &mut CONTEXT))> = Vec::new();
+    if let Some((a, _)) = builder {
+        experiments.push(("A-builder", vec![(a, true)], on_builder));
+    }
+    let mut w = vec![(g + 0xf0, false)];
+    if let Some(v) = view_t {
+        w.push((v & !3, false));
+    }
+    experiments.push(("B-write-through", w, on_write));
+    if let Some((a, _)) = copy {
+        experiments.push(("C-copy-record", vec![(a, true)], on_copy));
+    }
+    for (name, traps, f) in experiments {
+        for c in [&APPLIED, &SKIPPED, &RESTORED, &JUMPS, &IGNORED] {
+            c.store(0, Relaxed);
         }
+        HAVE_REAL.store(false, Relaxed);
+        HAVE_WRITTEN.store(false, Relaxed);
+        ACTIVE.store(true, Relaxed);
+        let label = name.to_string();
+        let shots = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1500));
+            crate::monitor::want_shot(&format!("raised-{label}"));
+        });
+        let counts = crate::watch::with_callback(n, &traps, 3000, f);
+        ACTIVE.store(false, Relaxed);
+        let _ = shots.join();
+        std::thread::sleep(Duration::from_millis(100));
+        restore();
+        plog!(
+            "steer",
+            "#{n} {name}: traps {:?}, raised {}, already raised {}, ignored {}, put back {}, stopped by a jump {}",
+            &counts[..traps.len()],
+            APPLIED.load(Relaxed),
+            SKIPPED.load(Relaxed),
+            IGNORED.load(Relaxed),
+            RESTORED.load(Relaxed),
+            JUMPS.load(Relaxed)
+        );
+        std::thread::sleep(Duration::from_millis(900));
     }
-
-    if let Ok(mut rec) = Recorder::new(&format!("camsearch_{n}_global.bin"), 2, vec![start], WIN_LEN, t0) {
-        beep(2, 200);
-        plog!("steer", "#{n} recording the camera's KB; move the camera now");
-        let snaps = rec.record(10);
-        plog!("steer", "#{n} {snaps} snapshots recorded");
-    }
+    GLOBAL.store(0, Relaxed);
+    crate::monitor::want_shot("after");
+    std::thread::sleep(Duration::from_millis(500));
     plog!("steer", "#{n} done in {:.0} s", t0.elapsed().as_secs_f64());
     beep(3, 250);
 }

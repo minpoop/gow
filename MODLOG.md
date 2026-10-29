@@ -1114,3 +1114,28 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
   Under Wine: camera found at GoWR.exe+0x262b0, position and view translation (+0x8c, 16 bytes apart) matched,
   writers caught, builder GoWR.exe+0x3f70..+0x42d2; it ran 2,401 times in 6 s, raised and put back 2,401 times,
   no jump; the screenshot while raised is orange (camera at 22 m: drawn from the raised camera), after it red.
+- The creator's 0.4.0 run (gameplay, Elden Ring running too): camera at GoWR.exe+0x39c7110 confirmed (axes
+  orthonormal, position (-1147.859, 33.607, -10.753)); in its KB the view matrix's translation (-axis·p) at
+  camera+0x70 (rows of the view from +0x40 on: x axis column at +0x30.. per the dump), the axes at +0xc0, position
+  +0xf0. Its position is written ~106 times a second (twice a frame) by `GoWR.exe+0x3cb18e` (a record copy: movups
+  pairs [rdx+o] -> [rcx+o], rcx = the camera, rdx = a record on the camera thread's stack) and `GoWR.exe+0x498b56`
+  (rows from registers, rbx = the camera), both on one thread. The builder's function: GoWR.exe+0x4e6df0..+0x4e8237;
+  its start ran 18,972 times in 6 s (many per frame); raised 1,223, already raised 17,749, put back 612, no jump,
+  no crash. **The picture did not move**: the screenshots while raised and after show the same view. So what the main
+  view is drawn with is not (only) built from this camera at that function, or not then.
+
+## Live Kratos, stage 2b — GowRProbe 0.5.0: three places to raise the camera (2026-10-29)
+
+- `steer` now runs three experiments of 3 s, a screenshot in each (plus `base` before, `after` after): A at the
+  builder function's start (as 0.4.0), B write-through (write traps on the camera's position x and view
+  translation x: after each game write the camera there is raised again, stays raised until the next), C at the
+  copy function's start (`GoWR.exe+0x3cb18e`'s function): the record in rdx raised when rcx is the camera, the
+  record's axes a rotation and its position within 5 m of the camera's. A jump over 1.5 m stops one.
+- `watch::with_callback`: traps (write or execution) that run a callback with the thread's registers; nested traps
+  from the callback's own writes are passed over. A leaf function (no unwind entry) is found from the int3 padding
+  or return before it (`leaf_start`). The 1 s watch now also covers the view translation.
+- Stand-in: a record built each frame and copied in 16-byte rows by `copy_camera` (rcx, rdx) into its camera; the
+  view at Ragnarök's place. GOWR_PROBE_STEER takes the copy function's RVA too. Under Wine: A 1,129 raises, B
+  1,763, C 1,083, no jumps; screenshots red / orange x3 / red. Found on the way: B's jump guard fired when the
+  stand-in wrote a position one float at a time (half-written); the game writes rows whole (movups), and so does
+  the stand-in now. One Wine run froze during A and three later runs of the same build did not; not reproduced.

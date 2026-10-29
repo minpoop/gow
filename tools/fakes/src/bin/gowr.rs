@@ -52,11 +52,11 @@ fn barrier(r: &ID3D12Resource, before: D3D12_RESOURCE_STATES, after: D3D12_RESOU
     }
 }
 
-/// Ragnarök's camera as 0.3.0 found it: kept in the program's own data (`GAME_CAM`, the camera 0x110 bytes in), rows
-/// of 16 bytes from +0xc0: the camera's x, y and z axes (right, up, back), then its position at +0xf0; a view matrix
-/// (3x4, translation -axis·position in the fourth column) at +0x80. The game writes it every frame (`fake_camera`,
-/// from a position kept as doubles), then `builder` turns it into the per-view block of floats: view at 0x80,
-/// camera-to-world at 0xc0, transposed reversed-Z projection at 0x100.
+/// Ragnarök's camera as 0.3.0 and 0.4.0 found it: kept in the program's own data (`GAME_CAM`, the camera 0x110 bytes
+/// in): its view matrix (rows from +0x30, translation -axis·position at +0x70) and, rows of 16 bytes from +0xc0, its
+/// x, y and z axes (right, up, back), then its position at +0xf0. Every frame the game builds a record and
+/// `copy_camera` copies it there (`fake_camera`), then `builder` turns it into the per-view block of floats: view at
+/// 0x80, camera-to-world at 0xc0, transposed reversed-Z projection at 0x100.
 #[repr(C, align(16))]
 struct Kb([f32; 256]);
 static mut GAME_CAM: Kb = Kb([0.0; 256]);
@@ -75,20 +75,29 @@ fn fake_camera(src: &mut [f64; 4], t: f32) {
     let r = [u[1] * f[2] - u[2] * f[1], u[2] * f[0] - u[0] * f[2], u[0] * f[1] - u[1] * f[0]];
     let b = [-f[0], -f[1], -f[2]];
     let d = |a: [f32; 3]| -(a[0] * p[0] + a[1] * p[1] + a[2] * p[2]);
+    // the record, as Ragnarök's: view matrix rows from +0x30 (translation at +0x70), axes from +0xc0, position +0xf0
+    let mut record = [0f32; 64];
+    let view = [[r[0], u[0], b[0], 0.0], [r[1], u[1], b[1], 0.0], [r[2], u[2], b[2], 0.0], [d(r), d(u), d(b), 1.0]];
     let rows = [[r[0], r[1], r[2], 0.0], [u[0], u[1], u[2], 0.0], [b[0], b[1], b[2], 0.0], [p[0], p[1], p[2], 1.0]];
-    let view = [[r[0], r[1], r[2], d(r)], [u[0], u[1], u[2], d(u)], [b[0], b[1], b[2], d(b)]];
+    for k in 0..4 {
+        for c in 0..4 {
+            record[0x30 / 4 + k * 4 + c] = view[k][c];
+            record[0xc0 / 4 + k * 4 + c] = rows[k][c];
+        }
+    }
     unsafe {
         let g = std::ptr::addr_of_mut!(GAME_CAM.0) as *mut f32;
-        for (k, row) in rows.iter().enumerate() {
-            for c in 0..4 {
-                std::ptr::write_volatile(g.add(CAM + 0xc0 / 4 + k * 4 + c), row[c]);
-            }
-        }
-        for (k, row) in view.iter().enumerate() {
-            for c in 0..4 {
-                std::ptr::write_volatile(g.add(CAM + 0x80 / 4 + k * 4 + c), row[c]);
-            }
-        }
+        copy_camera(g.add(CAM), record.as_ptr());
+    }
+}
+
+/// Copies a camera record into the camera's place (rcx = where to, rdx = the record) 16 bytes at a time, as
+/// GoWR.exe+0x3cb18e does (movups).
+#[inline(never)]
+extern "system" fn copy_camera(dst: *mut f32, src: *const f32) {
+    use std::arch::x86_64::{_mm_loadu_ps, _mm_storeu_ps};
+    for k in 0..16 {
+        unsafe { _mm_storeu_ps(dst.add(k * 4), _mm_loadu_ps(src.add(k * 4))) };
     }
 }
 
@@ -102,7 +111,7 @@ fn builder(cam: &mut [f32; 256], aspect: f32, n: u64) -> f32 {
     let sy = 1.0 / (30f32.to_radians()).tan();
     let j = if n % 2 == 0 { 0.0004 } else { -0.0004 };
     let proj = [sy / aspect, 0.0, j, 0.0, 0.0, sy, -j, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, -1.0, 0.0];
-    let view = [at(0x80), at(0x84), at(0x88), at(0x8c), at(0x90), at(0x94), at(0x98), at(0x9c), at(0xa0), at(0xa4), at(0xa8), at(0xac)];
+    let view = [at(0x30), at(0x40), at(0x50), at(0x70), at(0x34), at(0x44), at(0x54), at(0x74), at(0x38), at(0x48), at(0x58), at(0x78)];
     let to_world = [r[0], u[0], b[0], p[0], r[1], u[1], b[1], p[1], r[2], u[2], b[2], p[2]];
     for k in 0..12 {
         unsafe {
@@ -123,7 +132,7 @@ fn steer_env() -> String {
         let pe = *((base + 0x3c) as *const u32) as usize;
         let stamp = *((base + pe + 8) as *const u32);
         let cam = std::ptr::addr_of!(GAME_CAM.0) as usize + 0x110 - base;
-        format!("{stamp:x},{cam:x},{:x}", builder as *const () as usize - base)
+        format!("{stamp:x},{cam:x},{:x},{:x}", builder as *const () as usize - base, copy_camera as *const () as usize - base)
     }
 }
 
