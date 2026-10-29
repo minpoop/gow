@@ -83,7 +83,11 @@ frame rate alongside, video memory in use. The go/no-go passed; stage 1's probe 
 
 ## Stage 1 status (2026-10-29)
 Built: GowRProbe 0.1.0 (`dist/GowRProbe-0.1.0.zip`, MODLOG). Tested under Wine against a stand-in that draws with
-D3D12; waiting for the creator's run against the real Ragnarök.
+D3D12. **Run on the creator's PC (2026-10-29): passed.** Loaded into the real GoWR.exe without a freeze, hooks in,
+one DIRECT queue, 8 back-buffer copies (5-15 ms each), nothing blocked injection. Ragnarök drew 40-106 fps behind
+Elden Ring (at 720p, full world, Elden Ring at 4K) and its memory budget halves while Elden Ring is in front: GPU
+time, not memory, is the constraint to plan for (render Kratos at a lower resolution, keep frame generation off).
+Details in MODLOG.
 
 ## 4. Staged plan — riskiest unknowns first, each stage can stop the project cheaply
 

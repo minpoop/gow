@@ -1009,3 +1009,15 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
     device while the game draws hangs both (the stand-in now waits FAKE_GOWR_DELAY s before drawing). On Windows the
     same step is what hudhook does in Elden Ring every session; still the first thing to watch in the real test.
     Without a display Wine can't make the helper window at all (Xvfb used).
+- First real run (the creator's probe.log, 412 s; screenshots not yet received): loaded into
+  `I:\SteamLibrary\...\God of War Ragnarok\GoWR.exe` (46,685,144 bytes, PE time stamp 0x6859ad47 = 2025-06-23), no
+  freeze at the helper device (the Wine hang did not happen), all three hooks in, Present (not Present1) used.
+  Swapchain 1280x720 (windowed, as asked), RGB10A2 (format 24; HDR10 or 10-bit SDR: the pictures will say),
+  3 buffers, flip-discard, scaling NONE, alpha IGNORE, flags 0x840 (allow tearing + waitable latency object);
+  RTX 4070, feature level 12_2. One DIRECT queue (+1 other): the copy queue choice is unambiguous. 8 screenshots
+  copied in 5-15 ms each. Loaded: sl.interposer (Streamline), DLSS + DLSS-G, FSR, XeSS, libScePad + HID + dinput8
+  (DualSense path) and XINPUT1_4; Overwolf's graphics hook arrived at 30 s.
+  Figures: alone, in front 110-230 fps at 720p; with Elden Ring running and in front, behind 106 fps falling to
+  57 over 2.5 min, then ~40; Ragnarök's own video memory 2.6-3.7 GB; its budget 11,242 MB, halved to ~5.9 GB while
+  Elden Ring is in front (Windows favours the front window). One 2.95 s stall on switching back to Ragnarök (161 s).
+  XInput read ~100-170 times a second; idled while behind (18,414 muted reads), not while in front.
