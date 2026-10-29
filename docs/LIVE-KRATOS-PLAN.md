@@ -75,6 +75,12 @@ Known costs of this design, even if every step works:
 * Thrown axe, Spartan Rage effects, the cloak's motion: the cloak simulates in Ragnarök, but if Kratos stands still
   there it will not trail when he runs in Elden Ring (we could slide him along a flat floor in Ragnarök to fix that).
 
+## Stage 0 result (2026-10-29, the creator's PC)
+RTX 4070 12 GB, Ryzen 7 9800X3D, 64 GB RAM. With both games running: **Ragnarök keeps drawing frames while Elden
+Ring is in front**; Elden Ring holds a stable 60 fps at 4K; the GPU sits at 100 % (expected: both games take all it
+gives). The controller appears to drive whichever window has focus (to confirm). Not yet measured: Ragnarök's own
+frame rate alongside, video memory in use. The go/no-go passed; stage 1's probe will log the rest.
+
 ## 4. Staged plan — riskiest unknowns first, each stage can stop the project cheaply
 
 Every discovery step works like the 0.1.89 pose search: I build a probe, you run it, it writes a log/dump, I read
