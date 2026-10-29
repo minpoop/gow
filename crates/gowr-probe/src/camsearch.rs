@@ -1,5 +1,6 @@
 //! Stage 2a of live Kratos: where does Ragnarök keep its camera? Started with Ctrl+F9 while Ragnarök is in front,
-//! guided by beeps (the probe cannot draw on screen). 0.3.0, after 0.2.0's run found the per-frame camera blocks:
+//! guided by beeps (the probe cannot draw on screen). 0.3.0, after 0.2.0's run found the per-frame camera blocks
+//! (from 0.4.0 run by `steer` only when Ragnarök is another build than the one it knows):
 //!
 //! 1. one beep: hold still. Ragnarök's writable memory is searched for projection matrices with the screen's shape
 //!    (`[sx,0,0,0; 0,sy,0,0; jx,jy,A,±1; 0,0,B,0]` or its transpose). In Ragnarök's per-view blocks the transposed
@@ -22,7 +23,7 @@ use crate::d3d::{FRAMES, SWAP_H, SWAP_W};
 use crate::plog;
 use std::ffi::c_void;
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::Diagnostics::Debug::{Beep, ReadProcessMemory};
@@ -33,7 +34,6 @@ use windows::Win32::System::Memory::{VirtualQuery, MEMORY_BASIC_INFORMATION, MEM
 use windows::Win32::System::Threading::GetCurrentProcess;
 
 pub static RUNNING: AtomicBool = AtomicBool::new(false);
-static RUNS: AtomicU32 = AtomicU32::new(0);
 pub const MAX_RUNS: u32 = 3;
 
 const POS_WINDOW: usize = 512;
@@ -106,7 +106,7 @@ fn f32_at(b: &[u8], i: usize) -> f32 {
 }
 
 /// "GoWR.exe+0x1234" for module memory, "heap" otherwise.
-fn place(addr: usize) -> String {
+pub(crate) fn place(addr: usize) -> String {
     unsafe {
         let mut m = HMODULE::default();
         let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
@@ -192,7 +192,7 @@ fn find_projections(regions: &[Region], aspect: f32) -> Vec<Proj> {
 
 // ---- recording -----------------------------------------------------------------------------------------------------
 
-struct Recorder {
+pub(crate) struct Recorder {
     file: std::io::BufWriter<std::fs::File>,
     starts: Vec<usize>,
     window: usize,
@@ -203,7 +203,7 @@ struct Recorder {
 }
 
 impl Recorder {
-    fn new(name: &str, kind: u32, starts: Vec<usize>, window: usize, t0: Instant) -> std::io::Result<Self> {
+    pub(crate) fn new(name: &str, kind: u32, starts: Vec<usize>, window: usize, t0: Instant) -> std::io::Result<Self> {
         let f = std::fs::File::create(crate::log::dir().join(name))?;
         let mut file = std::io::BufWriter::new(f);
         file.write_all(b"GWCS")?;
@@ -239,7 +239,7 @@ impl Recorder {
         self.file.write_all(&data)
     }
 
-    fn record(&mut self, secs: u64) -> usize {
+    pub(crate) fn record(&mut self, secs: u64) -> usize {
         let end = Instant::now() + Duration::from_secs(secs);
         let mut n = 0;
         while Instant::now() < end {
@@ -337,7 +337,7 @@ fn rot_at(b: &[u8], o: usize, stride: usize) -> Option<[[f32; 3]; 3]> {
     Some(r)
 }
 
-fn beep(n: u32, ms: u32) {
+pub(crate) fn beep(n: u32, ms: u32) {
     for _ in 0..n {
         unsafe {
             let _ = Beep(880, ms);
@@ -346,26 +346,7 @@ fn beep(n: u32, ms: u32) {
     }
 }
 
-/// Ctrl+F9: one search, on a thread of its own.
-pub fn start() {
-    if RUNNING.swap(true, Relaxed) {
-        return;
-    }
-    let n = RUNS.fetch_add(1, Relaxed) + 1;
-    if n > MAX_RUNS {
-        plog!("camsearch", "already searched {MAX_RUNS} times this session; restart Ragnarök for more");
-        return;
-    }
-    std::thread::spawn(move || {
-        if std::panic::catch_unwind(|| run(n)).is_err() {
-            plog!("camsearch", "#{n} PANIC; stopped");
-            beep(3, 600);
-        }
-        RUNNING.store(false, Relaxed);
-    });
-}
-
-fn run(n: u32) {
+pub(crate) fn run(n: u32) {
     let t0 = Instant::now();
     let (w, h) = (SWAP_W.load(Relaxed).max(1), SWAP_H.load(Relaxed).max(1));
     beep(1, 250);

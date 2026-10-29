@@ -133,9 +133,9 @@ mod windows_main {
     }
 
     pub fn run() {
-        println!("GowRProbe 0.3 — live Kratos, stage 2: finding Ragnarök's camera (built with GowRing {})\n", env!("CARGO_PKG_VERSION"));
+        println!("GowRProbe 0.4 — live Kratos, stage 2: moving Ragnarök's camera (built with GowRing {})\n", env!("CARGO_PKG_VERSION"));
         println!("This loads a small probe into God of War Ragnarök. It watches how the game draws, saves a few");
-        println!("screenshots and, when you press Ctrl+F9, searches Ragnarök's memory for its camera. While Ragnarök is");
+        println!("screenshots and, when you press Ctrl+F9, raises Ragnarök's camera 2 m for 6 seconds. While Ragnarök is");
         println!("not the window in front, it keeps Ragnarök from reading your Xbox-style controller and holds it to");
         println!("30 frames a second. It changes nothing in Ragnarök's files or saves.\n");
         let dll = match std::env::current_exe() {
@@ -207,10 +207,10 @@ mod windows_main {
             println!("No word from the probe after 20 s; carry on, the log will say what happened.");
         }
 
-        println!("\nWhat to do now (this probe's job is to find Ragnarök's camera):");
+        println!("\nWhat to do now (this probe's job is to move Ragnarök's camera for a moment):");
         println!("  1. Get into the game itself, not a menu: Kratos standing somewhere calm with no enemies.");
         println!("  2. With Ragnarök in front, press Ctrl+F9. ONE beep: let go of the controller and keep completely");
-        println!("     still (about 15-20 seconds: it searches, then watches the camera for a second).");
+        println!("     still (about 10 seconds). For 6 of those seconds the view should jump up by 2 metres and back.");
         println!("  3. TWO beeps: move the camera. Turn it slowly all the way round, look up and down, walk a few steps.");
         println!("  4. THREE beeps (about 10 seconds later): done. If you can, walk somewhere else and do it once more.");
         println!("  5. Then put Elden Ring in front and play it for a minute, and close Ragnarök.");

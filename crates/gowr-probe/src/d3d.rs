@@ -54,7 +54,7 @@ pub static HWND_MAIN: AtomicIsize = AtomicIsize::new(0);
 pub static SHOT_WANTED: AtomicU32 = AtomicU32::new(0);
 pub static SHOT_LABEL: Mutex<String> = Mutex::new(String::new());
 pub static SHOTS_TAKEN: AtomicU32 = AtomicU32::new(0);
-pub const MAX_SHOTS: u32 = 12;
+pub const MAX_SHOTS: u32 = 20;
 pub static FIRST_PRESENT: OnceLock<Instant> = OnceLock::new();
 /// The swapchain's size (the camera search wants the screen's shape).
 pub static SWAP_W: AtomicU32 = AtomicU32::new(0);
@@ -177,6 +177,7 @@ unsafe fn present_inner(raw: *mut c_void, sync: u32, flags: u32, api: &str) {
         *last = Some(now);
     }
     FRAMES.fetch_add(1, Relaxed);
+    crate::steer::restore();
     if IsIconic(h).as_bool() {
         MIN_FRAMES.fetch_add(1, Relaxed);
     } else if !behind {

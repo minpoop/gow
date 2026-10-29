@@ -1,6 +1,6 @@
 [package]
 name = "gowr-probe"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "gowr_probe.dll — live-Kratos stages 1 and 2a: loaded into God of War Ragnarök (GoWR.exe) by GowRProbe.exe, it logs how the game draws, saves a few screenshots and, on Ctrl+F9, searches for the camera. Changes nothing in the game's files."
 

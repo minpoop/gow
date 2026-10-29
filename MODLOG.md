@@ -1087,3 +1087,30 @@ him in, after Minecraft-Ring. Study and staged plan: docs/LIVE-KRATOS-PLAN.md.
   `GoWR.exe+0x1be3` (the doubles); the stand-in kept running.
 - `camsearch.py`: position windows read as floats, doubles and columns; "smooth" = moves, within 100 m, no step over
   3 m between snapshots, not a rotation's entries.
+- The creator's 0.3.0 run (gameplay, 1264x681 window): 14 per-view blocks, all at the camera (-1147.810, 33.597,
+  -10.727); none kept as doubles; 505 column and 695 float finds, all per-frame scratch (none smooth in the
+  recording). The watch ran in 92 threads for 1 s without trouble: the blocks' camera x written 57 times, by
+  `GoWR.exe+0x4e7516` (thread 26304; a copy follows via memcpy, VCRUNTIME140+0x1c531) and `GoWR.exe+0x3e7a24`
+  (a non-temporal memset clearing 0x1f5ed8 bytes: the per-frame area is cleared before the blocks are rebuilt).
+  Disassembly of +0x4e7516: it reads rows of 16 bytes from **rsi = GoWR.exe+0x39c7110** at +0xc0, +0xd0, +0xe0 and
+  the scalar at +0xf0 (then +0xf4 ...), transposing them into the block's camera-to-world rows: the camera kept in
+  GoWR.exe's own data, axes as rows from +0xc0, **position at +0xf0/+0xf4/+0xf8**; the projection's sx/sy just
+  before. Same place every session (module data), for this build.
+
+## Live Kratos, stage 2b — GowRProbe 0.4.0: moving Ragnarök's camera (2026-10-29)
+
+- `steer` (Ctrl+F9; `camsearch` now only when GoWR.exe is another build): with time stamp 0x6859ad47, the camera at
+  GoWR.exe+0x39c7110 checked (axes orthonormal); 1 KB around it logged in hex; copies of the position and of the
+  view translation (-axis·p, both orders; floats in a row or 16 bytes apart) found in that KB; 1 s watch on the
+  position's x and y; the builder's function from Windows' unwind table (RtlLookupFunctionEntry, chained entries
+  followed); for 6 s an execution trap (DR0, RW 00) at its start: before each run the position and every match
+  are raised 2 m (unless already raised this frame), and the real values put back at every Present; a jump of the
+  real camera over 1.5 m between runs stops it. Screenshots at 2 s, 4 s and 1 s after. Then the KB recorded for
+  10 s while the camera moves (`camsearch_<n>_global.bin`).
+- `watch::on_entry`: execution traps with a callback (resume flag set so the instruction runs).
+  `GOWR_PROBE_STEER=<stamp>,<camera rva>,<builder rva>` points it at the stand-in (testing). Max screenshots 20.
+- Stand-in GoWR.exe: the camera kept in its own data (`GAME_CAM`) like Ragnarök's, written each frame, and a
+  `builder` that fills the block from it; the left half's green = (block camera height - 20) / 4.
+  Under Wine: camera found at GoWR.exe+0x262b0, position and view translation (+0x8c, 16 bytes apart) matched,
+  writers caught, builder GoWR.exe+0x3f70..+0x42d2; it ran 2,401 times in 6 s, raised and put back 2,401 times,
+  no jump; the screenshot while raised is orange (camera at 22 m: drawn from the raised camera), after it red.

@@ -93,7 +93,10 @@ Details in MODLOG.
 Built: GowRProbe 0.2.0 — a camera search guided by beeps (Ctrl+F9), tested under Wine against a fake camera;
 read offline with `tools/live_kratos/camsearch.py`. First real run: the per-frame camera blocks found (view,
 camera-to-world, projection; y up, metres); the source they are copied from not yet. GowRProbe 0.3.0 looks for the
-position kept as doubles or matrix columns and watches which code writes the copies (debug registers).
+position kept as doubles or matrix columns and watches which code writes the copies (debug registers). Its run
+found the source: the camera kept in GoWR.exe's own data at +0x39c7110 (position at +0xf0), read by the block
+builder at +0x4e7516. GowRProbe 0.4.0 (stage 2b) raises it 2 m for 6 s at the builder's start: proven on the
+stand-in under Wine, waiting for the creator's run.
 
 ## 4. Staged plan — riskiest unknowns first, each stage can stop the project cheaply
 

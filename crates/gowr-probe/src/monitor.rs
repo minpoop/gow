@@ -2,7 +2,7 @@
 //! in front / behind / minimised, Ragnarök's video memory, controller reads, whether Elden Ring is running), focus
 //! changes as they happen, and when to take a screenshot: at 20 s, 60 s and 120 s after the first frame, after 3 s
 //! behind another window (up to 3), 3 s after coming back in front (up to 2), and on Ctrl+F10. Ctrl+F9 (Ragnarök in
-//! front) starts a camera search (`camsearch`).
+//! front) starts the camera test (`steer`).
 
 use crate::d3d::{self, ADAPTER, FIRST_PRESENT, HWND_MAIN, SHOTS_TAKEN, SHOT_LABEL, SHOT_WANTED};
 use crate::{input, plog};
@@ -105,7 +105,7 @@ enum Focus {
     Minimised,
 }
 
-fn want_shot(label: &str) {
+pub(crate) fn want_shot(label: &str) {
     if SHOTS_TAKEN.load(Relaxed) >= d3d::MAX_SHOTS || SHOT_WANTED.load(Relaxed) != 0 {
         return;
     }
@@ -207,13 +207,13 @@ pub fn run() {
         key_down = down;
         let f9 = unsafe { GetAsyncKeyState(VK_CONTROL.0 as i32) < 0 && GetAsyncKeyState(VK_F9.0 as i32) < 0 };
         if f9 && !search_key && focus == Focus::Front {
-            crate::camsearch::start();
+            crate::steer::start();
         }
         search_key = f9;
         if let (Some(secs), Some(t0)) = (auto_search, FIRST_PRESENT.get()) {
             if t0.elapsed() >= Duration::from_secs(secs) {
                 auto_search = None;
-                crate::camsearch::start();
+                crate::steer::start();
             }
         }
 

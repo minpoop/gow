@@ -2,8 +2,8 @@
 //! idles so the probe can be loaded into it, and exits. With FAKE_GOWR_DRAW=1 it instead opens a window and presents
 //! frames through D3D12 (left half red, right half blue), for the probe's frame counting and screenshots, after
 //! FAKE_GOWR_DELAY seconds (default 0: under Wine's software D3D12 a device made while another thread draws hangs).
-//! While drawing it keeps a fake camera on the heap, laid out like Ragnarök's (`fake_camera`), circling
-//! (100, 20, -300) at 5 m. Like a player following the probe's beeps, the camera moves for 22 s and then holds
+//! While drawing it keeps a fake camera laid out like Ragnarök's (`fake_camera`, `builder`), circling
+//! (100, 20, -300) at 5 m; the left half turns yellow if the camera it was drawn with is higher than 20 m. Like a player following the probe's beeps, the camera moves for 22 s and then holds
 //! still for 8, over and over.
 use std::time::{Duration, Instant};
 use windows::core::{w, Interface};
@@ -52,31 +52,58 @@ fn barrier(r: &ID3D12Resource, before: D3D12_RESOURCE_STATES, after: D3D12_RESOU
     }
 }
 
-/// Ragnarök's layout, as 0.2.0 found it: a per-view block of floats with the view matrix at 0x80, the camera-to-world
-/// matrix at 0xc0 (both 3x4, rows 16 bytes apart, translation in the fourth column) and the transposed reversed-Z
-/// projection at 0x100; filled every frame by `publish` from the camera's own position, kept as doubles.
-fn fake_camera(cam: &mut [f32; 256], src: &mut [f64; 4], t: f32, aspect: f32, n: u64) {
+/// Ragnarök's camera as 0.3.0 found it: kept in the program's own data (`GAME_CAM`, the camera 0x110 bytes in), rows
+/// of 16 bytes from +0xc0: the camera's x, y and z axes (right, up, back), then its position at +0xf0; a view matrix
+/// (3x4, translation -axis·position in the fourth column) at +0x80. The game writes it every frame (`fake_camera`,
+/// from a position kept as doubles), then `builder` turns it into the per-view block of floats: view at 0x80,
+/// camera-to-world at 0xc0, transposed reversed-Z projection at 0x100.
+#[repr(C, align(16))]
+struct Kb([f32; 256]);
+static mut GAME_CAM: Kb = Kb([0.0; 256]);
+const CAM: usize = 0x110 / 4;
+
+fn fake_camera(src: &mut [f64; 4], t: f32) {
     let moving = (t / 30.0).floor() * 22.0 + (t % 30.0).min(22.0);
     let yaw = moving * 0.5;
     let p = [100.0 + 5.0 * yaw.sin() as f64, 20.0, -300.0 - 5.0 * yaw.cos() as f64];
     for k in 0..3 {
         unsafe { std::ptr::write_volatile(&mut src[k], p[k]) };
     }
-    publish(cam, src, yaw, aspect, n);
-}
-
-#[inline(never)]
-fn publish(cam: &mut [f32; 256], src: &[f64; 4], yaw: f32, aspect: f32, n: u64) {
-    let p = [src[0] as f32, src[1] as f32, src[2] as f32];
-    let sy = 1.0 / (30f32.to_radians()).tan();
-    let j = if n % 2 == 0 { 0.0004 } else { -0.0004 };
-    let proj = [sy / aspect, 0.0, j, 0.0, 0.0, sy, -j, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, -1.0, 0.0];
+    let p = [p[0] as f32, p[1] as f32, p[2] as f32];
     let f = [-yaw.sin(), 0.0, yaw.cos()];
     let u = [0.0, 1.0, 0.0];
     let r = [u[1] * f[2] - u[2] * f[1], u[2] * f[0] - u[0] * f[2], u[0] * f[1] - u[1] * f[0]];
+    let b = [-f[0], -f[1], -f[2]];
     let d = |a: [f32; 3]| -(a[0] * p[0] + a[1] * p[1] + a[2] * p[2]);
-    let view = [r[0], r[1], r[2], d(r), u[0], u[1], u[2], d(u), f[0], f[1], f[2], d(f)];
-    let to_world = [r[0], u[0], f[0], p[0], r[1], u[1], f[1], p[1], r[2], u[2], f[2], p[2]];
+    let rows = [[r[0], r[1], r[2], 0.0], [u[0], u[1], u[2], 0.0], [b[0], b[1], b[2], 0.0], [p[0], p[1], p[2], 1.0]];
+    let view = [[r[0], r[1], r[2], d(r)], [u[0], u[1], u[2], d(u)], [b[0], b[1], b[2], d(b)]];
+    unsafe {
+        let g = std::ptr::addr_of_mut!(GAME_CAM.0) as *mut f32;
+        for (k, row) in rows.iter().enumerate() {
+            for c in 0..4 {
+                std::ptr::write_volatile(g.add(CAM + 0xc0 / 4 + k * 4 + c), row[c]);
+            }
+        }
+        for (k, row) in view.iter().enumerate() {
+            for c in 0..4 {
+                std::ptr::write_volatile(g.add(CAM + 0x80 / 4 + k * 4 + c), row[c]);
+            }
+        }
+    }
+}
+
+/// Fills the per-view block from the game's camera; returns the camera's height as the block has it.
+#[inline(never)]
+fn builder(cam: &mut [f32; 256], aspect: f32, n: u64) -> f32 {
+    let g = unsafe { std::ptr::addr_of!(GAME_CAM.0) as *const f32 };
+    let at = |i: usize| unsafe { std::ptr::read_volatile(g.add(CAM + i / 4)) };
+    let axis = |o: usize| [at(o), at(o + 4), at(o + 8)];
+    let (r, u, b, p) = (axis(0xc0), axis(0xd0), axis(0xe0), axis(0xf0));
+    let sy = 1.0 / (30f32.to_radians()).tan();
+    let j = if n % 2 == 0 { 0.0004 } else { -0.0004 };
+    let proj = [sy / aspect, 0.0, j, 0.0, 0.0, sy, -j, 0.0, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, -1.0, 0.0];
+    let view = [at(0x80), at(0x84), at(0x88), at(0x8c), at(0x90), at(0x94), at(0x98), at(0x9c), at(0xa0), at(0xa4), at(0xa8), at(0xac)];
+    let to_world = [r[0], u[0], b[0], p[0], r[1], u[1], b[1], p[1], r[2], u[2], b[2], p[2]];
     for k in 0..12 {
         unsafe {
             std::ptr::write_volatile(&mut cam[32 + k], view[k]);
@@ -85,6 +112,18 @@ fn publish(cam: &mut [f32; 256], src: &[f64; 4], yaw: f32, aspect: f32, n: u64) 
     }
     for k in 0..16 {
         unsafe { std::ptr::write_volatile(&mut cam[64 + k], proj[k]) };
+    }
+    p[1]
+}
+
+/// What the probe's GOWR_PROBE_STEER needs for this stand-in: its time stamp, the camera's and the builder's RVAs.
+fn steer_env() -> String {
+    unsafe {
+        let base = GetModuleHandleW(None).map(|m| m.0 as usize).unwrap_or(0);
+        let pe = *((base + 0x3c) as *const u32) as usize;
+        let stamp = *((base + pe + 8) as *const u32);
+        let cam = std::ptr::addr_of!(GAME_CAM.0) as usize + 0x110 - base;
+        format!("{stamp:x},{cam:x},{:x}", builder as *const () as usize - base)
     }
 }
 
@@ -118,7 +157,7 @@ unsafe fn draw(run: Duration) -> windows::core::Result<u64> {
     let ev = CreateEventW(None, false, false, None)?;
     let mut cam = Box::new([0f32; 256]);
     let mut cam_pos = Box::new([0f64; 4]);
-    println!("fake GoWR: per-view block at {:p} (projection at +0x100), camera position (doubles) at {:p}, publish at {:p}", cam.as_ptr(), cam_pos.as_ptr(), publish as *const ());
+    println!("fake GoWR: per-view block at {:p} (projection at +0x100); GOWR_PROBE_STEER={}", cam.as_ptr(), steer_env());
     let t0 = Instant::now();
     let mut n = 0u64;
     while t0.elapsed() < run {
@@ -127,7 +166,8 @@ unsafe fn draw(run: Duration) -> windows::core::Result<u64> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        fake_camera(&mut cam, &mut cam_pos, t0.elapsed().as_secs_f32(), w as f32 / h as f32, n);
+        fake_camera(&mut cam_pos, t0.elapsed().as_secs_f32());
+        let height = builder(&mut cam, w as f32 / h as f32, n);
         let i = sc.GetCurrentBackBufferIndex() as usize;
         let rtv = D3D12_CPU_DESCRIPTOR_HANDLE { ptr: base.ptr + i * step };
         alloc.Reset()?;
@@ -135,7 +175,9 @@ unsafe fn draw(run: Duration) -> windows::core::Result<u64> {
         list.ResourceBarrier(&[barrier(&bufs[i], D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET)]);
         let left = RECT { left: 0, top: 0, right: w as i32 / 2, bottom: h as i32 };
         let right = RECT { left: w as i32 / 2, top: 0, right: w as i32, bottom: h as i32 };
-        list.ClearRenderTargetView(rtv, &[1.0, 0.0, 0.0, 1.0], Some(&[left]));
+        // the left half turns from red to yellow as the camera the block was built with rises above 20 m
+        let green = ((height - 20.0) / 4.0).clamp(0.0, 1.0);
+        list.ClearRenderTargetView(rtv, &[1.0, green, 0.0, 1.0], Some(&[left]));
         list.ClearRenderTargetView(rtv, &[0.0, 0.0, 1.0, 1.0], Some(&[right]));
         list.ResourceBarrier(&[barrier(&bufs[i], D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT)]);
         list.Close()?;
